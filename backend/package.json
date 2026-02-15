@@ -1,0 +1,41 @@
+{
+  "name": "agent-backend",
+  "version": "1.0.0",
+  "description": "AI Agent Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "adm-zip": "^0.5.16",
+    "axios": "^1.13.5",
+    "bcryptjs": "^3.0.3",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "exceljs": "^4.4.0",
+    "express": "^4.22.1",
+    "form-data": "^4.0.5",
+    "fs-extra": "^11.3.3",
+    "jsonwebtoken": "^9.0.3",
+    "mammoth": "^1.11.0",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^3.3.2",
+    "officeparser": "^4.2.0",
+    "pdf-extract": "^1.0.11",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.4",
+    "pdfjs-dist": "^4.0.189",
+    "pptxgenjs": "^4.0.1",
+    "puppeteer-core": "^24.37.2",
+    "word-extractor": "^1.0.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

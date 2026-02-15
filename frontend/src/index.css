@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased text-gray-900;
+  }
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom Scrollbar for Chat Messages */
+#chat-messages-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+#chat-messages-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#chat-messages-container::-webkit-scrollbar-thumb {
+  background: rgba(236, 72, 153, 0.3); /* Pink-500 with transparency */
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+}
+
+#chat-messages-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(236, 72, 153, 0.5);
+}

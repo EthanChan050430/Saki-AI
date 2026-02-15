@@ -1,0 +1,22 @@
+{
+  "name": "ai-copilot-agent-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npm run dev",
+    "install-all": "cd backend && npm install && cd ../frontend && npm install",
+    "start-backend": "cd backend && npm start",
+    "start-frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "framer-motion": "^12.34.0",
+    "i18next": "^25.8.4",
+    "i18next-browser-languagedetector": "^8.2.0",
+    "react-i18next": "^16.5.4"
+  }
+}
