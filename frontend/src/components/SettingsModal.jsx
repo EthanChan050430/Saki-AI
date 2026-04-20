@@ -1,0 +1,1246 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { X, Cpu, Server, Terminal, Shield, ExternalLink, RefreshCw, CheckCircle2, Image, ChevronDown, UserCircle, Palette, Plus, Globe, Bot, Search, Volume2, Mic, Music2, Trash2, Brain } from 'lucide-react';
+import { motion } from 'framer-motion';
+import ImageCropperModal from './ImageCropperModal';
+import botAvatar from '../head.png';
+import { BACKEND_URL } from '../utils/backendUrl';
+import {
+  CHAT_PROVIDER_OPTIONS,
+  getApiProviderMeta,
+  getChatProviderLabel,
+  getProviderApiKey,
+  getProviderBaseUrl,
+  isApiProviderEnabled,
+} from '../utils/chatProviderConfig';
+import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
+
+export default function SettingsModal({ config, setConfig, onClose, models, windowed = false }) {
+  const { t, i18n } = useTranslation();
+  const getLocalText = (zhText, enText) => (
+    String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh') ? zhText : enText
+  );
+  const activeApiProvider = getApiProviderMeta(config.provider);
+  const activeProviderApiKey = activeApiProvider ? getProviderApiKey(config, activeApiProvider.id) : '';
+  const activeProviderBaseUrl = activeApiProvider ? getProviderBaseUrl(config, activeApiProvider.id) : '';
+  const configuredApiCount = CHAT_PROVIDER_OPTIONS.filter(provider => isApiProviderEnabled(config, provider.id)).length;
+  const getProviderSubText = (provider) => provider.subKey ? t(provider.subKey) : provider.sub;
+  const updateActiveProviderApiKey = (value) => {
+    if (!activeApiProvider) return;
+    setConfig({
+      ...config,
+      [activeApiProvider.apiKeyField]: value,
+    });
+  };
+  const updateActiveProviderBaseUrl = (value) => {
+    if (!activeApiProvider?.baseUrlField) return;
+    setConfig({
+      ...config,
+      [activeApiProvider.baseUrlField]: value,
+    });
+  };
+  const [mcpConfigText, setMcpConfigText] = useState(config.mcpConfig ? JSON.stringify(config.mcpConfig, null, 2) : '{\n  "mcpServers": {}\n}');
+  const [deviceFlow, setDeviceFlow] = useState(null); // { user_code, device_code, verification_uri, interval }
+  const [isPolling, setIsPolling] = useState(false);
+  const pollTimerRef = useRef(null);
+  const [sovitsModels, setSovitsModels] = useState({ gpt: [], sovits: [] });
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [cacheCleanupMessage, setCacheCleanupMessage] = useState('');
+  const [cacheCleanupError, setCacheCleanupError] = useState(false);
+  const sovitsAudioInputRef = useRef(null);
+  const offlineReflectionModels = Array.isArray(models)
+    ? models.filter((model) => ['ollama', 'lmstudio'].includes(model?.provider))
+    : [];
+  const hasConfiguredOfflineReflectionModel = offlineReflectionModels.some(
+    (model) => model.provider === config.offlineReflectionProvider && model.name === config.offlineReflectionModel
+  );
+  const offlineReflectionOptions = hasConfiguredOfflineReflectionModel || !config.offlineReflectionModel
+    ? offlineReflectionModels
+    : [
+        ...offlineReflectionModels,
+        {
+          provider: config.offlineReflectionProvider || 'ollama',
+          name: config.offlineReflectionModel,
+          label: `${config.offlineReflectionModel} (${getLocalText('当前配置', 'current')})`,
+        },
+      ];
+
+  const formatOfflineReflectionProvider = (provider) => {
+    if (provider === 'lmstudio') return 'LMStudio';
+    return 'Ollama';
+  };
+
+  const refreshSovitsModels = async () => {
+    setIsRefreshingModels(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sovits/models`);
+      const data = await res.json();
+      setSovitsModels(data);
+    } catch (err) {
+      console.error('Failed to fetch SoVITS models:', err);
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  };
+
+  const handleSovitsAudioUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (data.path) {
+        setConfig({ ...config, sovitsRefAudio: data.path });
+      }
+    } catch (err) {
+      console.error('Failed to upload reference audio:', err);
+    }
+  };
+
+  const clearQQBotCache = async () => {
+    const confirmed = window.confirm(
+      getLocalText(
+        '\u8fd9\u4f1a\u6e05\u7a7a QQ \u673a\u5668\u4eba\u6536\u5230\u7684\u56fe\u7247\u3001\u6587\u4ef6\u3001\u8bed\u97f3\u7f13\u5b58\uff0c\u4ee5\u53ca\u751f\u6210\u7684 PDF \u548c\u56fe\u7247\u62a5\u544a\u3002\u5386\u53f2\u6d88\u606f\u91cc\u7684\u76f8\u5173\u4e0b\u8f7d\u94fe\u63a5\u4f1a\u5931\u6548\uff0c\u4f46\u4e0d\u4f1a\u5220\u9664\u4f1a\u8bdd\u548c\u914d\u7f6e\u3002\u786e\u5b9a\u7ee7\u7eed\u5417\uff1f',
+        'This will clear QQ bot image/file/voice caches and generated PDF or image reports. Related download links in past messages will stop working, but sessions and settings will stay intact. Continue?'
+      )
+    );
+    if (!confirmed) return;
+
+    setIsClearingCache(true);
+    setCacheCleanupError(false);
+    setCacheCleanupMessage('');
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/cache/qqbot/clear`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || getLocalText('\u6e05\u7406\u7f13\u5b58\u5931\u8d25', 'Failed to clear cache'));
+      }
+
+      const removedFiles = Number(data?.summary?.removedFiles || 0);
+      const freedSize = data?.summary?.freedSizeLabel || '0 B';
+
+      setCacheCleanupMessage(
+        removedFiles > 0
+          ? getLocalText(`\u5df2\u6e05\u7406 ${removedFiles} \u4e2a\u6587\u4ef6\uff0c\u91ca\u653e\u7ea6 ${freedSize}\u3002`, `Cleared ${removedFiles} files and freed about ${freedSize}.`)
+          : getLocalText('\u6ca1\u6709\u53d1\u73b0\u53ef\u6e05\u7406\u7684\u7f13\u5b58\u6587\u4ef6\u3002', 'No cache files were found to clear.')
+      );
+    } catch (err) {
+      console.error('Failed to clear QQ bot cache:', err);
+      setCacheCleanupError(true);
+      setCacheCleanupMessage(
+        getLocalText(
+          `\u6e05\u7406\u7f13\u5b58\u5931\u8d25\uff1a${err?.message || '\u672a\u77e5\u9519\u8bef'}`,
+          `Failed to clear cache: ${err?.message || 'Unknown error'}`
+        )
+      );
+    } finally {
+      setIsClearingCache(false);
+    }
+  };
+
+  useEffect(() => {
+    if (config.ttsProvider === 'gpt-sovits' && sovitsModels.gpt.length === 0) {
+      refreshSovitsModels();
+    }
+  }, [config.ttsProvider]);
+
+  // States for Image Cropper
+  const [cropperData, setCropperData] = useState({
+    isOpen: false,
+    image: null,
+    target: null, // 'user' or 'ai'
+  });
+
+  const handleCropComplete = async (croppedImageUrl) => {
+    try {
+      // 1. Convert blob URL to File object
+      const response = await fetch(croppedImageUrl);
+      const blob = await response.blob();
+      const file = new File([blob], "avatar.jpg", { type: "image/jpeg" });
+
+      // 2. Upload to server
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const res = await fetch(`${BACKEND_URL}/api/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      
+      if (data.filename) {
+        const imageUrl = `${BACKEND_URL}/uploads/${data.filename}`;
+        if (cropperData.target === 'user') {
+          setConfig({ ...config, userAvatar: imageUrl });
+        } else {
+          setConfig({ ...config, aiAvatar: imageUrl });
+        }
+      }
+      setCropperData({ ...cropperData, isOpen: false });
+    } catch (err) {
+      console.error('Failed to upload cropped image:', err);
+      alert(t('upload_avatar_fail'));
+    }
+  };
+
+  const startGitHubLogin = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/github/login/device`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (data.user_code) {
+        setDeviceFlow(data);
+        setIsPolling(true);
+      } else {
+        alert(t('login_failed_with_details', { error: data.hint || data.error || t('unknown_error') }));
+      }
+    } catch (err) {
+      console.error('Failed to start GitHub login:', err);
+      alert(t('github_start_login_error'));
+    }
+  };
+
+  useEffect(() => {
+    let timeoutId = null;
+    let isActive = true;
+
+    const poll = async () => {
+      if (!isPolling || !deviceFlow || !isActive) return;
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/github/login/poll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_code: deviceFlow.device_code })
+        });
+        const data = await res.json();
+        
+        if (!isActive) return;
+
+        if (data.access_token) {
+          console.log('Token received successfully!');
+          setConfig(prev => ({ ...prev, copilotToken: data.access_token }));
+          setIsPolling(false);
+          setDeviceFlow(null);
+          return;
+        }
+
+        if (data.error) {
+          if (data.error === 'authorization_pending') {
+            // Keep polling
+          } else if (data.error === 'slow_down') {
+            // Just wait for the next cycle
+            console.warn('GitHub suggests slow down, waiting...');
+          } else {
+            console.error('GitHub Poll Stop Error:', data.error);
+            setIsPolling(false);
+            setDeviceFlow(null);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Polling fetch error:', err);
+      }
+
+      // Schedule next poll - Using setTimeout to prevent overlapping requests
+      if (isActive && isPolling) {
+        timeoutId = setTimeout(poll, (deviceFlow.interval || 5) * 1000);
+      }
+    };
+
+    if (isPolling && deviceFlow) {
+      console.log('Starting polling for GitHub token...');
+      poll();
+    }
+
+    return () => {
+      isActive = false;
+      if (timeoutId) {
+        console.log('Cleaning up polling timeout...');
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [isPolling, deviceFlow, setConfig]);
+
+  const addMcp = () => {
+    if (!mcpUrl) return;
+    const newMcp = [...(config.mcpServices || []), mcpUrl];
+    setConfig({ ...config, mcpServices: newMcp });
+    setMcpUrl('');
+    // Persist to backend
+    fetch(`${BACKEND_URL}/api/mcp/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpServices: newMcp })
+    });
+  };
+
+  return (
+    <motion.div
+      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4'}
+      {...(!windowed ? modalBackdropMotion : {})}
+      onClick={!windowed ? onClose : undefined}
+    >
+      <motion.div
+        className={windowed ? 'bg-white h-full w-full rounded-[28px] shadow-none overflow-hidden flex flex-col' : 'bg-white sm:rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]'}
+        {...(!windowed ? modalPanelMotion : {})}
+        onClick={!windowed ? (event) => event.stopPropagation() : undefined}
+      >
+        <div className="p-4 border-b flex items-center justify-between bg-gray-50 shrink-0">
+          <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+            <Shield size={18} className="text-blue-500" />
+            {t('settings')}
+          </h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+          {/* AI Providers */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Cpu size={16} />
+              {t('ai_provider')}
+            </h4>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {CHAT_PROVIDER_OPTIONS.map(p => (
+                <button 
+                  key={p.id}
+                  onClick={() => setConfig({...config, provider: p.id})}
+                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-blue-500 bg-blue-50' : 'hover:border-gray-300'}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <div className="min-w-0 flex-1 font-bold text-gray-900 text-sm whitespace-nowrap overflow-hidden text-ellipsis">{p.name}</div>
+                    {isApiProviderEnabled(config, p.id) && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    )}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5 line-clamp-1">{getProviderSubText(p)}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Config details based on provider */}
+            {activeApiProvider && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+                {activeApiProvider.id === 'custom' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Base URL</label>
+                    <input 
+                      type="text"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="https://api.openai.com/v1"
+                      value={activeProviderBaseUrl}
+                      onChange={(e) => updateActiveProviderBaseUrl(e.target.value)}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">{activeApiProvider.name} API Key</label>
+                  <div className="relative">
+                    <input 
+                      type="password"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none pr-10"
+                      placeholder="sk-..."
+                      value={activeProviderApiKey}
+                      onChange={(e) => updateActiveProviderApiKey(e.target.value)}
+                    />
+                    <Shield className="absolute right-3 top-2.5 text-gray-400" size={16} />
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-400">
+                  {getLocalText('这个 Key 只会保存到当前供应商，不会再和其它 API 共用。', 'This key is stored only for this provider and will not be reused by other APIs.')}
+                </p>
+              </div>
+            )}
+            <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border bg-gray-50 p-4">
+              <div className="min-w-0 pr-2">
+                <div className="text-sm font-bold text-gray-800">
+                  {getLocalText('主页列出全部已启用 API 模型', 'List all enabled API models on Home')}
+                </div>
+                <div className="mt-1 text-[10px] leading-relaxed text-gray-500">
+                  {getLocalText(
+                    `开启后，顶部模型列表会拉取所有已填写 Key 的 API 模型。当前已启用 ${configuredApiCount} 个 API。`,
+                    `When enabled, the top model list fetches models from every API with a saved key. ${configuredApiCount} API(s) enabled.`
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setConfig({ ...config, showAllEnabledApiModels: !config.showAllEnabledApiModels })}
+                className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.showAllEnabledApiModels ? 'bg-blue-600' : 'bg-gray-300'}`}
+                title={getLocalText('切换全部 API 模型列表', 'Toggle all API model listing')}
+              >
+                <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.showAllEnabledApiModels ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+            {config.provider === 'ollama' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl">
+                <label className="block text-xs font-medium text-gray-500 mb-2">{t('ollama_endpoint')}</label>
+                <input 
+                   type="text"
+                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                   placeholder="http://localhost:11434"
+                   value={config.ollamaUrl || ''}
+                   onChange={(e) => setConfig({...config, ollamaUrl: e.target.value})}
+                />
+                <p className="text-[10px] text-gray-400 mt-2">{t('ollama_tip')}</p>
+              </div>
+            )}
+            {config.provider === 'lmstudio' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl">
+                <label className="block text-xs font-medium text-gray-500 mb-2">LMStudio Endpoint</label>
+                <input 
+                   type="text"
+                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                   placeholder="http://localhost:1234"
+                   value={config.lmstudioUrl || ''}
+                   onChange={(e) => setConfig({...config, lmstudioUrl: e.target.value})}
+                />
+                <p className="text-[10px] text-gray-400 mt-2">Local LMStudio server endpoint (default: http://localhost:1234)</p>
+              </div>
+            )}
+            {config.provider === 'copilot' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-4">
+                {!config.copilotToken ? (
+                  <>
+                    <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 p-3 rounded-lg leading-relaxed">
+                      {t('github_auth_desc')}
+                    </div>
+                    {!deviceFlow ? (
+                      <button 
+                        onClick={startGitHubLogin}
+                        className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
+                      >
+                        {t('github_login_btn')}
+                        <ExternalLink size={16} />
+                      </button>
+                    ) : (
+                      <div className="text-center space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{t('enter_code_browser')}</div>
+                        <div className="text-3xl font-mono font-bold tracking-[0.3em] bg-white border-2 border-dashed border-blue-200 py-4 rounded-2xl text-blue-600 shadow-inner">
+                          {deviceFlow.user_code}
+                        </div>
+                        <a 
+                          href={deviceFlow.verification_uri} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
+                        >
+                          {t('jump_verify')}
+                          <ExternalLink size={14} />
+                        </a>
+                        <div className="flex items-center justify-center gap-2 text-[11px] text-blue-400">
+                          <RefreshCw size={12} className="animate-spin" />
+                          {t('waiting_auth')}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-green-100 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center">
+                        <CheckCircle2 size={24} className="text-green-500" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-gray-800">{t('github_authorized')}</div>
+                        <div className="text-[10px] text-gray-500 truncate w-32">Token: {config.copilotToken.slice(0, 8)}...</div>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setConfig({...config, copilotToken: ''})}
+                      className="text-xs text-red-500 font-medium hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors border border-red-50"
+                    >
+                      {t('relogin')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Search Engine Config */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Search size={16} />
+              {t('search_engine_config')}
+            </h4>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {[
+                { id: 'off', name: t('none'), sub: t('disabled') },
+                { id: 'searxng', name: 'SearxNG', sub: '(Local)' },
+                { id: 'google', name: 'Google', sub: 'Custom Search' },
+                { id: 'bing', name: 'Bing', sub: 'Azure' },
+                { id: 'duckduckgo', name: 'DuckDuckGo', sub: '(Free)' },
+              ].map(s => (
+                <button 
+                  key={s.id}
+                  onClick={() => setConfig({...config, searchEngine: s.id})}
+                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.searchEngine === s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-gray-300'}`}
+                >
+                  <div className="font-bold text-gray-900 text-sm">{s.name}</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">{s.sub}</div>
+                </button>
+              ))}
+            </div>
+
+            {config.searchEngine === 'searxng' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('searxng_url')}</label>
+                  <input 
+                    type="text"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="http://127.0.0.1:8080"
+                    value={config.searxngUrl || ''}
+                    onChange={(e) => setConfig({...config, searxngUrl: e.target.value})}
+                  />
+                  <p className="text-[10px] text-gray-400 mt-2">{t('searxng_url_tip')}</p>
+                </div>
+              </div>
+            )}
+
+            {config.searchEngine === 'google' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Google API Key</label>
+                  <input 
+                    type="password"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="AIza..."
+                    value={config.googleApiKey || ''}
+                    onChange={(e) => setConfig({...config, googleApiKey: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Google CX ID</label>
+                  <input 
+                    type="text"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="Search Engine ID"
+                    value={config.googleCxId || ''}
+                    onChange={(e) => setConfig({...config, googleCxId: e.target.value})}
+                  />
+                </div>
+              </div>
+            )}
+
+            {config.searchEngine === 'bing' && (
+              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Bing API Key</label>
+                  <input 
+                    type="password"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="Azure Key"
+                    value={config.bingApiKey || ''}
+                    onChange={(e) => setConfig({...config, bingApiKey: e.target.value})}
+                  />
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Model Personality */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <UserCircle size={16} />
+              {t('role_prompt_settings')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-3">
+              <label className="block text-xs font-medium text-gray-500">{t('personality_def')}</label>
+              <textarea 
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white min-h-[100px] resize-none"
+                placeholder={t('prompt_placeholder')}
+                value={config.systemPrompt || t('saki_personality')}
+                onChange={(e) => setConfig({...config, systemPrompt: e.target.value})}
+              />
+              <p className="text-[10px] text-gray-400 leading-relaxed">
+                {t('prompt_desc')}
+              </p>
+            </div>
+          </section>
+
+          {/* Drawing Model Settings */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Image size={16} />
+              {t('drawing_model_settings')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+               <div className="text-xs text-gray-500 mb-2">
+                 {t('drawing_desc')}
+               </div>
+
+               <div className="space-y-4">
+                 {/* 选项卡切换 */}
+                 <div className="flex p-1 bg-gray-200 rounded-lg w-fit">
+                    <button 
+                      onClick={() => setConfig({...config, drawingProvider: 'none'})}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'none' ? 'bg-white shadow-sm text-gray-600' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t('none')}
+                    </button>
+                    <button 
+                      onClick={() => setConfig({...config, drawingProvider: (config.drawingProvider === 'stable-diffusion' || config.drawingProvider === 'none') ? '' : config.drawingProvider})}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(config.drawingProvider !== 'stable-diffusion' && config.drawingProvider !== 'none') ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t('llm_drawing')}
+                    </button>
+                    <button 
+                      onClick={() => setConfig({...config, drawingProvider: 'stable-diffusion'})}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'stable-diffusion' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t('sd_drawing')}
+                    </button>
+                    <button 
+                      onClick={() => setConfig({...config, drawingProvider: 'custom'})}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'custom' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t('custom_drawing')}
+                    </button>
+                 </div>
+
+                 {config.drawingProvider === 'none' ? (
+                   <div className="p-3 bg-white/50 rounded-lg border border-dashed border-gray-300 text-center">
+                     <p className="text-[10px] text-gray-400 italic">{t('disable_drawing')}</p>
+                   </div>
+                 ) : config.drawingProvider === 'stable-diffusion' ? (
+                   <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                     <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('sd_api_url')}</label>
+                        <input 
+                          type="text"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white font-mono"
+                          placeholder="http://127.0.0.1:7860/sdapi/v1/txt2img"
+                          value={config.sdUrl || 'http://127.0.0.1:7860/sdapi/v1/txt2img'}
+                          onChange={(e) => setConfig({...config, sdUrl: e.target.value})}
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">{t('sd_tip')}</p>
+                     </div>
+                   </div>
+                 ) : config.drawingProvider === 'custom' ? (
+                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Base URL</label>
+                        <input 
+                          type="text"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          placeholder="https://api.openai.com/v1"
+                          value={config.customDrawingUrl || ''}
+                          onChange={(e) => setConfig({...config, customDrawingUrl: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">API Key</label>
+                        <input 
+                          type="password"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          placeholder="sk-..."
+                          value={config.customDrawingKey || ''}
+                          onChange={(e) => setConfig({...config, customDrawingKey: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Model ID</label>
+                        <input 
+                          type="text"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          placeholder="dall-e-3"
+                          value={config.customDrawingModel || ''}
+                          onChange={(e) => setConfig({...config, customDrawingModel: e.target.value})}
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1">{t('custom_drawing_tip')}</p>
+                    </div>
+                 ) : (
+                   <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                     <div className="relative">
+                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('select_drawing_model')}</label>
+                       <select 
+                         className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white appearance-none pr-10"
+                         value={config.drawingModel ? `${config.drawingProvider}:${config.drawingModel}` : ''}
+                         onChange={(e) => {
+                           const val = e.target.value;
+                           if (!val) {
+                             setConfig({...config, drawingModel: '', drawingProvider: ''});
+                           } else {
+                             const parts = val.split(':');
+                             const provider = parts[0];
+                             const name = parts.slice(1).join(':');
+                             setConfig({...config, drawingProvider: provider, drawingModel: name});
+                           }
+                         }}
+                       >
+                         <option value="">{t('disable_drawing')}</option>
+                         {models?.filter(m => m.provider !== 'custom').map(m => (
+                           <option key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
+                             {getChatProviderLabel(m.provider)}: {m.name}
+                           </option>
+                         ))}
+                       </select>
+                       <div className="absolute right-3 top-8 pointer-events-none text-gray-400">
+                         <ChevronDown size={16} />
+                       </div>
+                     </div>
+                   </div>
+                 )}
+               </div>
+            </div>
+          </section>
+
+          {/* TTS Settings */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Volume2 size={16} />
+              {t('tts_settings')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+              <div className="flex p-1 bg-gray-200 rounded-lg w-fit">
+                <button 
+                  onClick={() => setConfig({...config, ttsProvider: 'browser'})}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(!config.ttsProvider || config.ttsProvider === 'browser') ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  {t('browser_tts')}
+                </button>
+                <button 
+                  onClick={() => setConfig({...config, ttsProvider: 'gpt-sovits'})}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'gpt-sovits' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  GPT-SoVITS
+                </button>
+              </div>
+
+              {config.ttsProvider === 'gpt-sovits' && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">API URL</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text"
+                        className="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white font-mono"
+                        placeholder="http://127.0.0.1:9880"
+                        value={config.sovitsUrl || 'http://127.0.0.1:9880'}
+                        onChange={(e) => setConfig({...config, sovitsUrl: e.target.value})}
+                      />
+                      <button 
+                        onClick={refreshSovitsModels}
+                        className="p-2 bg-white border rounded-lg hover:bg-gray-50 text-purple-600 transition-all active:scale-95"
+                        title={t('refresh_models')}
+                      >
+                        <RefreshCw size={16} className={isRefreshingModels ? 'animate-spin' : ''} />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">GPT Model</label>
+                      <select 
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white focus:ring-2 focus:ring-purple-500 outline-none"
+                        value={config.sovitsGptModel || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setConfig({...config, sovitsGptModel: val});
+                          const url = config.sovitsUrl || 'http://127.0.0.1:9880';
+                          fetch(`${BACKEND_URL}/api/sovits/proxy/set_weights?url=${encodeURIComponent(url)}&type=gpt&weights_path=${encodeURIComponent(val)}`).catch(console.error);
+                        }}
+                      >
+                        <option value="">{t('select_model')}</option>
+                        {sovitsModels.gpt.map(m => <option key={m} value={m}>{m.split('/').pop()}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">SoVITS Model</label>
+                      <select 
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white focus:ring-2 focus:ring-purple-500 outline-none"
+                        value={config.sovitsSovitsModel || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setConfig({...config, sovitsSovitsModel: val});
+                          const url = config.sovitsUrl || 'http://127.0.0.1:9880';
+                          fetch(`${BACKEND_URL}/api/sovits/proxy/set_weights?url=${encodeURIComponent(url)}&type=sovits&weights_path=${encodeURIComponent(val)}`).catch(console.error);
+                        }}
+                      >
+                        <option value="">{t('select_model')}</option>
+                        {sovitsModels.sovits.map(m => <option key={m} value={m}>{m.split('/').pop()}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('refer_audio')}</label>
+                    <div className="flex items-center gap-3">
+                      <button 
+                        onClick={() => sovitsAudioInputRef.current?.click()}
+                        className={`flex-1 border-2 border-dashed rounded-xl p-3 text-xs transition-all flex items-center justify-center gap-2 ${config.sovitsRefAudio ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-purple-300 hover:bg-purple-50'}`}
+                      >
+                        <Mic size={14} />
+                        {config.sovitsRefAudio ? config.sovitsRefAudio.split(/[\\\/]/).pop() : t('upload_refer_audio')}
+                      </button>
+                      <input type="file" ref={sovitsAudioInputRef} className="hidden" accept="audio/*" onChange={handleSovitsAudioUpload} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('refer_text')}</label>
+                    <textarea 
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white min-h-[60px] resize-none"
+                      value={config.sovitsRefText || ''}
+                      onChange={(e) => setConfig({...config, sovitsRefText: e.target.value})}
+                      placeholder={t('refer_text_placeholder')}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Music2 size={16} />
+              {getLocalText('音乐创作', 'Music Creation')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="pr-4">
+                  <div className="text-sm font-bold text-gray-800">
+                    {getLocalText('启用纯音乐生成', 'Enable Instrumental Generation')}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                    {getLocalText(
+                      '关闭后，Agent 不会暴露 composeMusic 工具，也不会执行 MIDI 音乐生成，适合部署在低配设备上。',
+                      'When disabled, the agent hides the composeMusic tool and skips MIDI music generation for low-spec devices.'
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setConfig({ ...config, musicEnabled: config.musicEnabled !== false ? false : true })}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.musicEnabled !== false ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                  title={getLocalText('切换音乐生成开关', 'Toggle music generation')}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.musicEnabled !== false ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Brain size={16} />
+              {getLocalText('离线反思', 'Offline Reflection')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="pr-4">
+                  <div className="text-sm font-bold text-gray-800">
+                    {getLocalText('用户离线时自动蒸馏当天上下文', 'Digest today\'s context when the user is offline')}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                    {getLocalText(
+                      '当网页端无人在线一段时间后，Agent 会读取当天的对话和当天改动过的文本文件，用本地小模型提炼长期记忆，并抽取结构化实体关系，例如“某个项目当前进展到哪了”。',
+                      'After the user has been offline for a while, the agent reads today\'s chats and today\'s changed text files, uses a small local model to distill long-term memory, and extracts structured entities and relations such as the latest project status.'
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setConfig({ ...config, offlineReflectionEnabled: config.offlineReflectionEnabled ? false : true })}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.offlineReflectionEnabled ? 'bg-sky-500' : 'bg-gray-300'}`}
+                  title={getLocalText('切换离线反思开关', 'Toggle offline reflection')}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.offlineReflectionEnabled ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+
+              <div className={`space-y-3 transition-opacity ${config.offlineReflectionEnabled ? 'opacity-100' : 'opacity-60'}`}>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                    {getLocalText('反思模型', 'Reflection Model')}
+                  </label>
+                  <div className="relative">
+                    <select
+                      disabled={!config.offlineReflectionEnabled}
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:text-gray-400"
+                      value={config.offlineReflectionModel ? `${config.offlineReflectionProvider}:${config.offlineReflectionModel}` : ''}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (!value) {
+                          setConfig({
+                            ...config,
+                            offlineReflectionProvider: 'ollama',
+                            offlineReflectionModel: '',
+                          });
+                          return;
+                        }
+
+                        const [provider, ...modelParts] = value.split(':');
+                        setConfig({
+                          ...config,
+                          offlineReflectionProvider: provider,
+                          offlineReflectionModel: modelParts.join(':'),
+                        });
+                      }}
+                    >
+                      <option value="">
+                        {getLocalText('自动选择当前本地模型（推荐）', 'Auto-select current local model (Recommended)')}
+                      </option>
+                      {offlineReflectionOptions.map((model) => (
+                        <option key={`${model.provider}:${model.name}`} value={`${model.provider}:${model.name}`}>
+                          {formatOfflineReflectionProvider(model.provider)}: {model.label || model.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-3 top-3 pointer-events-none text-gray-400">
+                      <ChevronDown size={16} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-sky-100 bg-sky-50/80 px-3 py-3 text-[11px] leading-relaxed text-sky-700">
+                  {offlineReflectionModels.length > 0
+                    ? getLocalText(
+                        '模型列表来自本地提供商（Ollama / LMStudio）。如果这里留空，系统会优先跟随当前已连接的本地聊天模型。',
+                        'The model list comes from local providers (Ollama / LMStudio). If left empty, the system will prefer the currently connected local chat model.'
+                      )
+                    : getLocalText(
+                        '当前还没有检测到本地模型，离线反思启用后会在本地模型可用时自动尝试运行。',
+                        'No local models are detected yet. Once a local model becomes available, offline reflection will start trying automatically.'
+                      )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Interface Settings */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Palette size={16} />
+              {t('interface_custom')}
+            </h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+              {/* Language Selector */}
+              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Globe size={16} className="text-gray-400" />
+                  <div>
+                    <div className="text-sm font-bold text-gray-800">{t('language')}</div>
+                  </div>
+                </div>
+                <select
+                  value={i18n.language}
+                  onChange={(e) => i18n.changeLanguage(e.target.value)}
+                  className="border rounded-lg px-2 py-1.5 text-xs outline-none bg-white min-w-[120px]"
+                >
+                  <option value="zh-CN">简体中文</option>
+                  <option value="zh-TW">繁體中文</option>
+                  <option value="en-US">English (US)</option>
+                  <option value="en-GB">English (UK)</option>
+                  <option value="ja">日本語</option>
+                  <option value="fr">Français</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                <div>
+                  <div className="text-sm font-bold text-gray-800">{t('particles_effect')}</div>
+                  <div className="text-[10px] text-gray-500">{t('particles_desc')}</div>
+                </div>
+                <button 
+                  onClick={() => setConfig({...config, showParticles: !config.showParticles})}
+                  className={`w-10 h-5 rounded-full transition-all relative ${config.showParticles ? 'bg-pink-400' : 'bg-gray-300'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.showParticles ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-4">{t('avatar_custom')}</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  {/* User Avatar */}
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <UserCircle size={12} />
+                      {t('user_avatar')}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div 
+                        className="w-16 h-16 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all shadow-sm shrink-0"
+                        onClick={() => document.getElementById('avatar-upload').click()}
+                      >
+                        {config.userAvatar ? (
+                          <img src={config.userAvatar} alt="Avatar Preview" className="w-full h-full object-cover" />
+                        ) : (
+                          <Plus size={20} className="text-gray-400 group-hover:text-blue-500" />
+                        )}
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <input 
+                          id="avatar-upload"
+                          type="file" 
+                          accept="image/*" 
+                          className="hidden" 
+                          onChange={(e) => {
+                            const file = e.target.files[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                setCropperData({
+                                  isOpen: true,
+                                  image: reader.result,
+                                  target: 'user'
+                                });
+                              };
+                              reader.readAsDataURL(file);
+                              e.target.value = ''; // Reset to allow same file again
+                            }
+                          }}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button 
+                            onClick={() => document.getElementById('avatar-upload').click()}
+                            className="text-[11px] bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-bold shadow-sm transition-all active:scale-95"
+                          >
+                            {t('change_avatar')}
+                          </button>
+                          {config.userAvatar && config.userAvatar !== '/assets/head_user.png' && (
+                            <button 
+                              onClick={() => setConfig({...config, userAvatar: '/assets/head_user.png'})}
+                              className="text-[11px] text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                            >
+                              {t('restore_default')}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Avatar */}
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <Bot size={12} />
+                      {t('ai_avatar')}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div 
+                        className="w-16 h-16 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all shadow-sm shrink-0"
+                        onClick={() => document.getElementById('ai-avatar-upload').click()}
+                      >
+                        {config.aiAvatar ? (
+                          <img src={config.aiAvatar} alt="AI Avatar Preview" className="w-full h-full object-cover" />
+                        ) : (
+                          <img src={botAvatar} alt="AI Avatar Preview" className="w-full h-full object-cover opacity-50" />
+                        )}
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <input 
+                          id="ai-avatar-upload"
+                          type="file" 
+                          accept="image/*" 
+                          className="hidden" 
+                          onChange={(e) => {
+                            const file = e.target.files[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                setCropperData({
+                                  isOpen: true,
+                                  image: reader.result,
+                                  target: 'ai'
+                                });
+                              };
+                              reader.readAsDataURL(file);
+                              e.target.value = '';
+                            }
+                          }}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button 
+                            onClick={() => document.getElementById('ai-avatar-upload').click()}
+                            className="text-[11px] bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-bold shadow-sm transition-all active:scale-95"
+                          >
+                            {t('change_ai_avatar')}
+                          </button>
+                          {config.aiAvatar && (
+                            <button 
+                              onClick={() => setConfig({...config, aiAvatar: ''})}
+                              className="text-[11px] text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                            >
+                              {t('restore_default')}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2">{t('background_image')}</label>
+                <div className="flex items-center gap-4">
+                  <div 
+                    className="w-24 h-16 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all"
+                    onClick={() => document.getElementById('bg-upload').click()}
+                  >
+                    {config.chatBackgroundImage ? (
+                      <img src={config.chatBackgroundImage} alt="Background Preview" className="w-full h-full object-cover" />
+                    ) : (
+                      <Plus size={20} className="text-gray-400 group-hover:text-blue-500" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <input 
+                      id="bg-upload"
+                      type="file" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={async (e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          const formData = new FormData();
+                          formData.append('file', file);
+                          try {
+                            const res = await fetch(`${BACKEND_URL}/api/upload`, {
+                              method: 'POST',
+                              body: formData
+                            });
+                            const data = await res.json();
+                            if (data.filename) {
+                              const imageUrl = `${BACKEND_URL}/uploads/${data.filename}`;
+                              setConfig({...config, chatBackgroundImage: imageUrl});
+                            }
+                          } catch (err) {
+                            console.error('Failed to upload background:', err);
+                            alert(t('upload_bg_fail'));
+                          }
+                        }
+                      }}
+                    />
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => document.getElementById('bg-upload').click()}
+                        className="text-xs bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-medium"
+                      >
+                        {t('upload_image')}
+                      </button>
+                      {config.chatBackgroundImage && config.chatBackgroundImage !== '/assets/background.png' && (
+                        <button 
+                          onClick={() => setConfig({...config, chatBackgroundImage: '/assets/background.png'})}
+                          className="text-xs text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-medium"
+                        >
+                          {t('restore_default')}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-2">{t('image_format_tip')}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* MCP Services */}
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Server size={16} />
+              {t('mcp_config')}
+</h4>
+            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+              <div className="text-xs text-gray-500 leading-relaxed">
+                {t('mcp_config_desc')}
+              </div>
+              <textarea 
+                className="w-full border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none bg-white min-h-[200px] resize-none"
+                value={mcpConfigText}
+                onChange={(e) => {
+                  setMcpConfigText(e.target.value);
+                  try {
+                    const parsed = JSON.parse(e.target.value);
+                    setConfig({ ...config, mcpConfig: parsed });
+                  } catch (e) {
+                    // Invalid JSON - don't update config yet
+                  }
+                }}
+              />
+              <p className="text-[10px] text-gray-400">{t('mcp_tip')}</p>
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Trash2 size={16} />
+              {getLocalText('\u7f13\u5b58\u6e05\u7406', 'Cache Cleanup')}
+            </h4>
+            <div className="bg-red-50 rounded-xl p-4 border border-red-100 space-y-4">
+              <div>
+                <div className="text-sm font-bold text-gray-800">
+                  {getLocalText('\u6e05\u7a7a QQ \u673a\u5668\u4eba\u7f13\u5b58\u6587\u4ef6', 'Clear QQ Bot Cache Files')}
+                </div>
+                <div className="text-xs text-gray-600 mt-1 leading-relaxed">
+                  {getLocalText(
+                    '\u4f1a\u6e05\u7406 QQ \u6536\u5230\u7684\u56fe\u7247\u3001\u6587\u4ef6\u3001\u8bed\u97f3\u7f13\u5b58\uff0c\u4ee5\u53ca\u751f\u6210\u7684 PDF/\u56fe\u7247\u62a5\u544a\u3002\u4e0d\u4f1a\u5220\u9664\u4f1a\u8bdd\u3001\u6a21\u578b\u914d\u7f6e\u3001\u5934\u50cf\u3001\u80cc\u666f\u56fe\u6216\u53c2\u8003\u97f3\u9891\u3002',
+                    'Clears QQ image/file/voice caches and generated PDF or image reports. Sessions, model settings, avatars, background images, and reference audio are kept.'
+                  )}
+                </div>
+              </div>
+
+              <div className="text-[11px] text-gray-500 leading-relaxed">
+                {getLocalText(
+                  '\u63d0\u793a\uff1a\u6e05\u7406\u540e\uff0c\u5386\u53f2\u6d88\u606f\u91cc\u6307\u5411\u8fd9\u4e9b\u7f13\u5b58\u6587\u4ef6\u7684\u4e0b\u8f7d\u94fe\u63a5\u53ef\u80fd\u5931\u6548\u3002',
+                  'Note: download links to these cached files in previous messages may stop working after cleanup.'
+                )}
+              </div>
+
+              {cacheCleanupMessage && (
+                <div className={`rounded-lg border px-3 py-2 text-xs ${cacheCleanupError ? 'border-red-200 bg-white text-red-600' : 'border-emerald-200 bg-white text-emerald-700'}`}>
+                  {cacheCleanupMessage}
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  onClick={clearQQBotCache}
+                  disabled={isClearingCache}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${isClearingCache ? 'cursor-not-allowed bg-gray-200 text-gray-500' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-100'}`}
+                >
+                  {isClearingCache ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                  {isClearingCache ? getLocalText('\u6b63\u5728\u6e05\u7406...', 'Clearing...') : getLocalText('\u6e05\u9664\u7f13\u5b58', 'Clear Cache')}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+
+        <div className="p-4 border-t bg-gray-50 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="bg-blue-600 text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-blue-700 shadow-lg shadow-blue-100"
+          >
+            {t('save')}
+          </button>
+        </div>
+
+        {cropperData.isOpen && (
+          <ImageCropperModal 
+            image={cropperData.image} 
+            onCropComplete={handleCropComplete} 
+            onClose={() => setCropperData({ ...cropperData, isOpen: false })} 
+          />
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
