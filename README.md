@@ -21,7 +21,10 @@ Saki AI Agent is a **Local AI Agent, Desktop Application, and Windows AI Assista
 
 > **Keywords**: Local AI Agent, OpenClaw Alternative, Ollama, Windows AI Assistant, Desktop AI Workspace, Low-resource Deployment, Sandbox, Security, File Versioning
 
-<video src="https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/20/58/36118855820/36118855820-1-192.mp4?e=ig8euxZM2rNcNbRVhwdVhwdlhWdVhwdVhoNvNC8BqJIzNbfq9rVEuxTEnE8L5F6VnEsSTx0vkX8fqJeYTj_lta53NCM=&gen=playurlv3&os=estgcos&og=cos&oi=2067284620&deadline=1780108609&uipk=5&platform=html5&trid=397a33ebff6a435c882f035bda474eeO&mid=0&nbs=1&upsig=1ea74f498f64f17fbde82e4dc712d617&uparams=e,gen,os,og,oi,deadline,uipk,platform,trid,mid,nbs&bvc=vod&nettype=1&bw=717222&lrs=0&f=O_0_0&agrr=1&buvid=&build=7330300&dl=0&orderid=0,3" controls width="100%"></video>
+
+
+https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
+
 
 ---
 
