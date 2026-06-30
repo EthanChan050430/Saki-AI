@@ -8293,9 +8293,10 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
     });
 
     const isLocal = provider === 'ollama' || provider === 'lmstudio';
+    const promptSlimmingEnabled = typeof config?.promptSlimming !== 'undefined' ? config.promptSlimming : isLocal;
     let currentPrompt = "";
 
-    if (isLocal) {
+    if (promptSlimmingEnabled) {
         currentPrompt = `## Role
 ${persona}
 
