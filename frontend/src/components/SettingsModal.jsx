@@ -570,6 +570,25 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               <p className="text-[10px] text-gray-400 leading-relaxed">
                 {t('prompt_desc')}
               </p>
+              <div className="flex items-center justify-between border-t border-gray-200/60 pt-3 mt-2">
+                <div className="pr-4">
+                  <label className="block text-xs font-bold text-gray-700">
+                    {t('prompt_slimming_title', '极速模式 (本地模型提示词瘦身)')}
+                  </label>
+                  <p className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">
+                    {t('prompt_slimming_desc', '开启后大幅精简后台系统指令，降低本地大模型的首字延迟并提高响应速度。若遇到工具调用异常，请关闭此模式。')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConfig({...config, promptSlimming: !config.promptSlimming})}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${config.promptSlimming ? 'bg-blue-600' : 'bg-gray-200'}`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${config.promptSlimming ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
             </div>
           </section>
 
