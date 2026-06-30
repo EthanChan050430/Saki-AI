@@ -2376,6 +2376,7 @@ function App() {
                 const updated = prev.map(m => {
                   if (m.id === assistantMsgId) {
                     const parts = Array.isArray(m.parts) ? [...m.parts] : [];
+                    let rawText = m.rawText || '';
                     if (data.text) {
                       const lastIndex = parts.length - 1;
                       let newContent = data.text;
@@ -2387,6 +2388,8 @@ function App() {
                         parts.push({ type: 'text', content: data.text });
                         newContent = data.text;
                       }
+
+                      rawText += data.text;
 
                       if (!options.useWeb) {
                         const expressionRegex = /\[expression:\s*([\w.-]+)\s*\]/g;
@@ -2401,12 +2404,19 @@ function App() {
                     }
                     if (data.action) {
                       parts.push({ type: 'action', data: data.action });
+                      rawText += `\n[Tool Call: ${data.action.tool || data.action.action}(${JSON.stringify(data.action.args || {})})]\n`;
                     }
                     if (data.observation || data.fileMetadata) {
                       for (let i = parts.length - 1; i >= 0; i--) {
                         if (parts[i].type === 'action') {
-                          if (data.observation) parts[i].observation = data.observation;
-                          if (data.fileMetadata) parts[i].fileMetadata = data.fileMetadata;
+                          if (data.observation) {
+                            parts[i].observation = data.observation;
+                            rawText += `\n[Observation: ${String(data.observation)}]\n`;
+                          }
+                          if (data.fileMetadata) {
+                            parts[i].fileMetadata = data.fileMetadata;
+                            rawText += `\n[File Metadata: ${JSON.stringify(data.fileMetadata)}]\n`;
+                          }
                           break;
                         }
                       }
@@ -2414,7 +2424,7 @@ function App() {
                     const generatedFiles = data.generatedFile
                       ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
                       : (m.generatedFiles || []);
-                    return { ...m, parts, generatedFiles, status: 'streaming' };
+                    return { ...m, parts, generatedFiles, rawText, status: 'streaming' };
                   }
                   return m;
                 });
