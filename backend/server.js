@@ -8292,7 +8292,68 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
         mcpToolCount: mcpTools.length,
     });
 
-    let currentPrompt = `## Role
+    const isLocal = provider === 'ollama' || provider === 'lmstudio';
+    let currentPrompt = "";
+
+    if (isLocal) {
+        currentPrompt = `## Role
+${persona}
+
+## Thinking Framework & Errors
+- Before calling tools, plan your steps briefly in "Thought:".
+- If a tool fails, analyze the error and try a different tool or command immediately. Don't give up.
+
+## Environment Context
+- OS: ${envInfo.os} | CWD: ${envInfo.cwd} | Shell: ${envInfo.shell}
+- Workspace Files Dir: ${FILES_DIR}
+
+## Tool Usage
+- You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
+- Tool calls MUST start with \`Tool:\` on a new line. Do not mention them in conversational text.
+- Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
+
+## Output Contract
+- Every turn MUST end with either a \`Tool:\` call or a final \`Tool: respond("...")\`. Never answer in plain text outside \`Tool: respond(...)\`.
+
+## Available tools:
+${searchEnabled ? '- search(query): Search the web.' : ''}
+- browse(url): Fetch and read webpage content.
+${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image.` : ''}
+- terminal(command, timeoutSeconds): Run a PowerShell command. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Restricted to sandbox ${FILES_DIR}.` : ''}
+${musicEnabled ? '- composeMusic(prompt, bars): Create MIDI music.' : ''}
+- readFile(path, startLine, endLine): Read file lines.
+- planFileRead(path, chunkLines): Create a chunk plan for large files.
+- readFileChunk(path, chunkIndex, chunkLines): Read one planned chunk.
+- writeFile(path, content, expectedHash): Create or overwrite a file.
+- editFile(path, startLine, endLine, content, expectedHash): Replace lines.
+- replaceInFile(path, oldText, newText, expectedHash, occurrence): Replace exact text.
+- deleteFile(path, expectedHash): Delete a file.
+- listDir(path, limit, offset, includeIgnored): List folder contents.
+- createProjectFolder(name): Create folder under ${FILES_DIR}.
+- ensureDir(path): Create directory.
+- diagram(mermaidCode): Render Mermaid diagram.
+- updateTodo(json): Update visible todo task checklist.
+- respond(text): Final reply to user in their language.
+${shouldUseMemory ? '- listMemories(): List memories.\n- searchMemories(query): Semantic search memories.\n- readMemory(filename): Read a memory.\n- saveMemory(name, content): Save a memory.' : ''}
+- listSkills(): List skills.
+- searchSkills(query): Find relevant skills.
+- searchOpenHubSkills(query): Search remote skills.
+- inspectOpenHubSkill(slug): Inspect remote skill.
+- readSkill(name): Read skill content.
+- installSkill(sourceType, sourceOrName, content): Install skill.
+${mcpToolsText}
+
+## Language Requirement
+- Thought/Response: Use user's language. Tool: English.
+
+## Conversation History:
+${formattedHistory}
+
+## Current Task:
+User message: ${message}
+${context}`;
+    } else {
+        currentPrompt = `## Role
 ${persona}
 
 ## Thinking Framework
@@ -8423,6 +8484,7 @@ ${formattedHistory}
 ## Current Task:
 User message: ${message}
 ${context}`;
+    }
 
     if (approvalDecision?.signature && approvalDecision?.toolName) {
         const approvedArgs = Array.isArray(approvalDecision.args)
