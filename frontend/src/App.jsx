@@ -950,7 +950,7 @@ function App() {
       if (lastMsg.role === 'assistant') {
         const textToSpeak = lastMsg.parts
           .filter(p => p.type === 'text')
-          .map(p => p.content.replace(/\[expression:.*?\.png\]/g, '').replace(/```[\s\S]*?```/g, '').trim())
+          .map(p => p.content.replace(/\[expression[:=].*?\.png\]/g, '').replace(/```[\s\S]*?```/g, '').trim())
           .join(' ')
           .trim();
 
@@ -1912,7 +1912,21 @@ function App() {
               continue;
             }
 
-            if (data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
+            if (data.streamingActions) {
+              setMessages(prev => {
+                const updated = prev.map(m => {
+                  if (m.id === assistantMsgId) {
+                    return { ...m, streamingActions: data.streamingActions };
+                  }
+                  return m;
+                });
+                latestMessagesRef.current = updated;
+                return updated;
+              });
+              continue;
+            }
+
+            if (data.reasoning || data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
               // Stop thinking animation when content starts arriving
               setAnimationTrigger(prev => {
                 if (prev && prev.type === 'thinking') {
@@ -1925,6 +1939,16 @@ function App() {
                 const updated = prev.map(m => {
                   if (m.id === assistantMsgId) {
                     const parts = [...m.parts];
+                    if (data.reasoning) {
+                      const lastIndex = parts.length - 1;
+                      if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
+                        const updatedContent = parts[lastIndex].content + data.reasoning;
+                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+                      } else {
+                        const reasoningPart = { type: 'reasoning', content: data.reasoning };
+                        parts.push(reasoningPart);
+                      }
+                    }
                     if (data.text) {
                       const lastIndex = parts.length - 1;
                       let newContent = data.text;
@@ -1942,7 +1966,7 @@ function App() {
                       if (!options.useWeb) {
                         // Extract filename.png from [expression:filename.png]
                         // Using a greedy approach to find the latest completed marker
-                        const expressionRegex = /\[expression:\s*([\w.-]+)\s*\]/g;
+                        const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
                         const expressionMatches = [...newContent.matchAll(expressionRegex)];
                         if (expressionMatches.length > 0) {
                           const lastMatch = expressionMatches[expressionMatches.length - 1];
@@ -1968,7 +1992,8 @@ function App() {
                     const generatedFiles = data.generatedFile
                       ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
                       : (m.generatedFiles || []);
-                    return { ...m, parts, generatedFiles };
+                    const newStreamingActions = data.action ? [] : (m.streamingActions || []);
+                    return { ...m, parts, generatedFiles, streamingActions: newStreamingActions };
                   }
                   return m;
                 });
@@ -2364,7 +2389,7 @@ function App() {
               continue;
             }
 
-            if (data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
+            if (data.reasoning || data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
               setAnimationTrigger(prev => {
                 if (prev && prev.type === 'thinking') {
                   return { type: 'stop', timestamp: Date.now() };
@@ -2377,6 +2402,16 @@ function App() {
                   if (m.id === assistantMsgId) {
                     const parts = Array.isArray(m.parts) ? [...m.parts] : [];
                     let rawText = m.rawText || '';
+                    if (data.reasoning) {
+                      const lastIndex = parts.length - 1;
+                      if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
+                        const updatedContent = parts[lastIndex].content + data.reasoning;
+                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+                      } else {
+                        const reasoningPart = { type: 'reasoning', content: data.reasoning };
+                        parts.push(reasoningPart);
+                      }
+                    }
                     if (data.text) {
                       const lastIndex = parts.length - 1;
                       let newContent = data.text;
@@ -2392,7 +2427,7 @@ function App() {
                       rawText += data.text;
 
                       if (!options.useWeb) {
-                        const expressionRegex = /\[expression:\s*([\w.-]+)\s*\]/g;
+                        const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
                         const expressionMatches = [...newContent.matchAll(expressionRegex)];
                         if (expressionMatches.length > 0) {
                           const fileName = expressionMatches[expressionMatches.length - 1][1]?.trim();

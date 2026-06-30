@@ -496,7 +496,7 @@ function evaluateTerminalPermission(command, permissionMode) {
     };
 }
 
-function runTerminalCommand({ command, cwd, actionControl, timeoutMs = TERMINAL_COMMAND_DEFAULT_TIMEOUT_MS }) {
+function runTerminalCommand({ command, cwd, actionControl, timeoutMs = TERMINAL_COMMAND_DEFAULT_TIMEOUT_MS, onStdout, onStderr }) {
     return new Promise(resolve => {
         const isWin = process.platform === 'win32';
         const cmd = isWin ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}` : command;
@@ -588,14 +588,33 @@ function runTerminalCommand({ command, cwd, actionControl, timeoutMs = TERMINAL_
                 });
             });
 
+            const promptRegex = /(?:\[[yN]\/[yN]\]|\([yN]\/[yN]\)|continue|confirm|proceed|are you sure|do you want to continue|确定要|是否继续)[?\s:]*$/i;
+            const handleStdinPrompt = (str) => {
+                if (promptRegex.test(str)) {
+                    if (child.stdin && child.stdin.writable) {
+                        child.stdin.write('y\n');
+                        const autoEcho = "\n[Auto-input: y]\n";
+                        partialStdout = appendPartial(partialStdout, autoEcho);
+                        if (onStdout) onStdout(autoEcho);
+                        console.log(`[Terminal] Auto-confirmed interactive prompt: ${str.trim()}`);
+                    }
+                }
+            };
+
             if (child.stdout) {
                 child.stdout.on('data', chunk => {
+                    const str = chunk.toString();
                     partialStdout = appendPartial(partialStdout, chunk);
+                    if (onStdout) onStdout(str);
+                    handleStdinPrompt(str);
                 });
             }
             if (child.stderr) {
                 child.stderr.on('data', chunk => {
+                    const str = chunk.toString();
                     partialStderr = appendPartial(partialStderr, chunk);
+                    if (onStderr) onStderr(str);
+                    handleStdinPrompt(str);
                 });
             }
 
@@ -701,6 +720,7 @@ function serializeMessageForContext(msg = {}, options = {}) {
     if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
         text = msg.parts.map(part => {
             if (part.type === 'text') return part.content || '';
+            if (part.type === 'reasoning') return `<think>${part.content || ''}</think>\n`;
             let obs = part.observation || '';
             if (obs.length > observationLimit) {
                 obs = `${obs.substring(0, observationLimit)}... [DATA TRUNCATED]`;
@@ -731,8 +751,13 @@ function buildBackgroundDigest({ olderMessages = [], previousSummary = '', curre
         const role = msg.role === 'user' ? 'User' : 'Assistant';
         if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
             const textParts = msg.parts
-                .filter(part => part.type === 'text')
-                .map(part => compactPreview(part.content, 420))
+                .filter(part => part.type === 'text' || part.type === 'reasoning')
+                .map(part => {
+                    if (part.type === 'reasoning') {
+                        return `<think>${compactPreview(part.content, 200)}</think>`;
+                    }
+                    return compactPreview(part.content, 420);
+                })
                 .filter(Boolean);
             const actionParts = msg.parts
                 .filter(part => part.type === 'action')
@@ -5093,9 +5118,138 @@ function coerceObservationToImageMarkdown(observation = '') {
     return '';
 }
 
+// --- Streaming Tool Parser Helpers ---
+function parseStreamingArgs(argsStr) {
+    const args = [];
+    let current = "";
+    let inQuotes = false;
+    let quoteChar = "";
+    let esc = false;
+
+    for (let i = 0; i < argsStr.length; i++) {
+        const char = argsStr[i];
+        if (esc) {
+            if (char === 'n') current += '\n';
+            else if (char === 'r') current += '\r';
+            else if (char === 't') current += '\t';
+            else current += char;
+            esc = false;
+            continue;
+        }
+        if (char === '\\') {
+            esc = true;
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            if (!inQuotes) {
+                inQuotes = true;
+                quoteChar = char;
+            } else if (char === quoteChar) {
+                inQuotes = false;
+            } else {
+                current += char;
+            }
+        } else if (char === ',' && !inQuotes) {
+            args.push(current.trim());
+            current = "";
+        } else {
+            current += char;
+        }
+    }
+    // Append the last incomplete argument
+    args.push(current.trim());
+    return args;
+}
+
+function parseResponseStream(fullText) {
+    // Find all occurrences of Tool: or 工具: (must be at the beginning of the string or preceded by a newline)
+    const regex = /(?:^|\n)(?:[`*]*)(?:Tool|工具)[:：]/gi;
+    let match;
+    const toolCallStarts = [];
+    while ((match = regex.exec(fullText)) !== null) {
+        toolCallStarts.push({
+            index: match.index,
+            length: match[0].length
+        });
+    }
+
+    let conversationalText = "";
+    const toolCalls = [];
+
+    if (toolCallStarts.length === 0) {
+        // No tool calls yet, the entire text is conversational text
+        conversationalText = fullText;
+        return { text: conversationalText, toolCalls };
+    }
+
+    // Add the text before the first Tool:
+    const textBeforeTool = fullText.substring(0, toolCallStarts[0].index);
+    conversationalText += textBeforeTool;
+
+    for (let i = 0; i < toolCallStarts.length; i++) {
+        const startInfo = toolCallStarts[i];
+        const nextStart = i + 1 < toolCallStarts.length ? toolCallStarts[i + 1].index : fullText.length;
+        const rawCall = fullText.substring(startInfo.index + startInfo.length, nextStart).trim();
+
+        // Parse tool name and args
+        // E.g., name(args)
+        const parenIndex = rawCall.indexOf('(');
+        let name = "";
+        let rawArgs = "";
+        if (parenIndex !== -1) {
+            name = rawCall.substring(0, parenIndex).trim();
+            let argsStr = rawCall.substring(parenIndex + 1);
+            const closeParenIndex = argsStr.lastIndexOf(')');
+            if (closeParenIndex !== -1) {
+                argsStr = argsStr.substring(0, closeParenIndex);
+            }
+            rawArgs = argsStr.trim();
+        } else {
+            name = rawCall.trim();
+        }
+
+        const normalizedName = name.toLowerCase();
+
+        if (normalizedName === 'respond') {
+            // Parse arguments of respond(...)
+            let parsedText = rawArgs;
+            if (parsedText.startsWith('"')) {
+                parsedText = parsedText.substring(1);
+                if (parsedText.endsWith('"')) {
+                    parsedText = parsedText.substring(0, parsedText.length - 1);
+                }
+            } else if (parsedText.startsWith("'")) {
+                parsedText = parsedText.substring(1);
+                if (parsedText.endsWith("'")) {
+                    parsedText = parsedText.substring(0, parsedText.length - 1);
+                }
+            }
+            // Unescape common characters
+            parsedText = parsedText
+                .replace(/\\n/g, '\n')
+                .replace(/\\"/g, '"')
+                .replace(/\\'/g, "'")
+                .replace(/\\\\/g, '\\');
+            
+            conversationalText += parsedText;
+        } else if (normalizedName === 'updatetodo' || normalizedName === 'todo') {
+            // Skip todo updates for tool box
+        } else {
+            toolCalls.push({
+                index: toolCalls.length,
+                name: name,
+                args: parseStreamingArgs(rawArgs),
+                raw: rawCall
+            });
+        }
+    }
+
+    return { text: conversationalText, toolCalls };
+}
+
 
 // --- Agent Logic ---
-async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallback) {
+async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallback, reasoningCallback) {
     provider = normalizeChatProviderId(provider);
     let baseUrl = '';
     let apiKey = getConfiguredChatApiKey(config, provider);
@@ -5123,6 +5277,12 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                     if (!line.trim()) continue;
                     try {
                         const json = JSON.parse(line);
+                        
+                        const reasoning = json.reasoning_content || "";
+                        if (reasoning && reasoningCallback) {
+                            reasoningCallback(reasoning);
+                        }
+                        
                         if (json.response) {
                             fullText += json.response;
                             if (streamCallback) streamCallback(json.response);
@@ -5169,6 +5329,7 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
             baseUrl = 'https://api.anthropic.com/v1/messages';
             headers['x-api-key'] = apiKey;
             headers['anthropic-version'] = '2023-06-01';
+            headers['anthropic-beta'] = 'prompt-caching-2024-07-31';
             break;
         case 'moonshot':
             baseUrl = 'https://api.moonshot.cn/v1/chat/completions';
@@ -5197,13 +5358,37 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
 
     // 2. Prepare Payload
     if (provider === 'anthropic') {
+        const isClaude37 = String(model || '').toLowerCase().includes('claude-3-7') || String(model || '').toLowerCase().includes('claude-3.7');
         payload = {
             model: model,
-            max_tokens: 4096,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: prompt }],
+            max_tokens: isClaude37 ? 16000 : 4096,
+            system: [
+                {
+                    type: "text",
+                    text: systemPrompt,
+                    cache_control: { type: "ephemeral" }
+                }
+            ],
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: "text",
+                            text: prompt,
+                            cache_control: { type: "ephemeral" }
+                        }
+                    ]
+                }
+            ],
             stream: true
         };
+        if (isClaude37) {
+            payload.thinking = {
+                type: "enabled",
+                budget_tokens: 4096
+            };
+        }
     } else {
         payload = {
             model: provider === 'copilot' ? normalizeCopilotModelId(model) : model,
@@ -5255,10 +5440,15 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                     if (l.startsWith('data: ')) {
                         try {
                             const json = JSON.parse(l.slice(6));
-                            if (json.type === 'content_block_delta' && json.delta?.text) {
-                                const text = json.delta.text;
-                                fullText += text;
-                                if (streamCallback) streamCallback(text);
+                            if (json.type === 'content_block_delta') {
+                                if (json.delta?.type === 'thinking_delta' && json.delta?.thinking) {
+                                    const thinking = json.delta.thinking;
+                                    if (reasoningCallback) reasoningCallback(thinking);
+                                } else if (json.delta?.text) {
+                                    const text = json.delta.text;
+                                    fullText += text;
+                                    if (streamCallback) streamCallback(text);
+                                }
                             }
                         } catch (e) {}
                     }
@@ -5268,9 +5458,18 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                         if (dataStr === '[DONE]') continue;
                         try {
                             const json = JSON.parse(dataStr);
+                            
+                            // Check for reasoning_content (DeepSeek compatible APIs)
+                            const reasoning = json.choices[0]?.delta?.reasoning_content || "";
+                            if (reasoning && reasoningCallback) {
+                                reasoningCallback(reasoning);
+                            }
+                            
                             const text = json.choices[0]?.delta?.content || "";
-                            fullText += text;
-                            if (streamCallback) streamCallback(text);
+                            if (text) {
+                                fullText += text;
+                                if (streamCallback) streamCallback(text);
+                            }
                         } catch (e) {}
                     }
                 }
@@ -8097,6 +8296,198 @@ async function getSystemInfo() {
     };
 }
 
+function extractThoughtsAndText(fullText) {
+    let text = "";
+    let reasoning = "";
+    let lastIndex = 0;
+    
+    const thinkStartRegex = /<think>/gi;
+    const thinkEndRegex = /<\/think>/gi;
+    
+    let matchStart;
+    while ((matchStart = thinkStartRegex.exec(fullText)) !== null) {
+        text += fullText.substring(lastIndex, matchStart.index);
+        
+        thinkEndRegex.lastIndex = matchStart.index + 7;
+        const matchEnd = thinkEndRegex.exec(fullText);
+        if (matchEnd) {
+            reasoning += fullText.substring(matchStart.index + 7, matchEnd.index) + "\n";
+            lastIndex = matchEnd.index + 8;
+            thinkStartRegex.lastIndex = lastIndex;
+        } else {
+            reasoning += fullText.substring(matchStart.index + 7);
+            lastIndex = fullText.length;
+            break;
+        }
+    }
+    if (lastIndex < fullText.length) {
+        text += fullText.substring(lastIndex);
+    }
+    return { text, reasoning };
+}
+
+function getTrailingPartialTagLength(str) {
+    const tags = ['<think>', '</think>'];
+    for (const tag of tags) {
+        for (let len = tag.length - 1; len > 0; len--) {
+            const prefix = tag.substring(0, len);
+            if (str.toLowerCase().endsWith(prefix)) {
+                return len;
+            }
+        }
+    }
+    return 0;
+}
+
+function parseSearchReplaceBlocks(blocksText) {
+    const blocks = [];
+    const lines = String(blocksText || '').split(/\r?\n/);
+    let currentBlock = null;
+    let state = 'normal'; // 'normal', 'search', 'replace'
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('<<<<<<< SEARCH')) {
+            currentBlock = { searchLines: [], replaceLines: [] };
+            state = 'search';
+        } else if (line.startsWith('=======')) {
+            if (state === 'search' && currentBlock) {
+                state = 'replace';
+            } else {
+                throw new Error(`Unexpected ======= line at line ${i + 1} without a preceding <<<<<<< SEARCH`);
+            }
+        } else if (line.startsWith('>>>>>>> REPLACE')) {
+            if (state === 'replace' && currentBlock) {
+                blocks.push({
+                    search: currentBlock.searchLines.join('\n'),
+                    replace: currentBlock.replaceLines.join('\n')
+                });
+                currentBlock = null;
+                state = 'normal';
+            } else {
+                throw new Error(`Unexpected >>>>>>> REPLACE line at line ${i + 1} without matching SEARCH and =======`);
+            }
+        } else {
+            if (state === 'search' && currentBlock) {
+                currentBlock.searchLines.push(line);
+            } else if (state === 'replace' && currentBlock) {
+                currentBlock.replaceLines.push(line);
+            }
+        }
+    }
+    
+    if (state !== 'normal' || currentBlock) {
+        throw new Error('Incomplete SEARCH/REPLACE block. Missing >>>>>>> REPLACE boundary.');
+    }
+    
+    return blocks;
+}
+
+function applySearchReplaceBlocks(fileContent, blocks) {
+    let content = fileContent;
+    for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        
+        const normalizedContent = content.replace(/\r\n/g, '\n');
+        const normalizedSearch = block.search.replace(/\r\n/g, '\n');
+        const normalizedReplace = block.replace.replace(/\r\n/g, '\n');
+        
+        const firstIndex = normalizedContent.indexOf(normalizedSearch);
+        if (firstIndex === -1) {
+            throw new Error(`SEARCH block ${i + 1} not found in the file. Please make sure it matches the file content exactly (including spacing and indentation).`);
+        }
+        
+        const lastIndex = normalizedContent.lastIndexOf(normalizedSearch);
+        if (firstIndex !== lastIndex) {
+            throw new Error(`SEARCH block ${i + 1} is not unique. It matches ${normalizedContent.split(normalizedSearch).length - 1} locations. Please add more surrounding lines of context to make it unique.`);
+        }
+        
+        const beforeStr = normalizedContent.substring(0, firstIndex);
+        const afterStr = normalizedContent.substring(firstIndex + normalizedSearch.length);
+        content = beforeStr + normalizedReplace + afterStr;
+    }
+    return content;
+}
+
+async function scanRepoOutline(dirPath, maxFiles = 80, currentDepth = 0, maxDepth = 4) {
+    const outline = [];
+    if (currentDepth > maxDepth) return outline;
+    
+    let entries = [];
+    try {
+        entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch (e) {
+        return outline;
+    }
+    
+    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'build', '.gemini', '.agents', '.next', '.expo', 'venv', 'env', '__pycache__', 'out', 'temp']);
+    const ignoreFiles = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.ds_store', 'tsconfig.tsbuildinfo']);
+    
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            if (ignoreDirs.has(entry.name.toLowerCase())) continue;
+            const subOutline = await scanRepoOutline(fullPath, maxFiles, currentDepth + 1, maxDepth);
+            outline.push(...subOutline);
+            if (outline.length >= maxFiles) break;
+        } else if (entry.isFile()) {
+            if (ignoreFiles.has(entry.name.toLowerCase())) continue;
+            
+            const ext = path.extname(entry.name).toLowerCase();
+            const allowedExts = new Set(['.js', '.jsx', '.ts', '.tsx', '.py', '.go']);
+            if (!allowedExts.has(ext)) continue;
+            
+            let content = "";
+            try {
+                const fd = await fs.open(fullPath, 'r');
+                const buffer = Buffer.alloc(20000);
+                const { bytesRead } = await fd.read(buffer, 0, 20000, 0);
+                await fd.close();
+                content = buffer.toString('utf8', 0, bytesRead);
+            } catch (e) {
+                continue;
+            }
+            
+            const fileSymbols = [];
+            const lines = content.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                if (ext === '.py') {
+                    const classMatch = line.match(/^class\s+([a-zA-Z0-9_]+)/);
+                    const defMatch = line.match(/^def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)/);
+                    if (classMatch) fileSymbols.push(`class ${classMatch[1]}`);
+                    if (defMatch) fileSymbols.push(`def ${defMatch[1]}(${defMatch[2].split(',').map(s => s.trim().split(':')[0]).join(', ')})`);
+                } else if (ext === '.go') {
+                    const typeMatch = line.match(/^type\s+([a-zA-Z0-9_]+)\s+struct/);
+                    const funcMatch = line.match(/^func\s+(?:\([^)]+\)\s+)?([a-zA-Z0-9_]+)\s*\(([^)]*)\)/);
+                    if (typeMatch) fileSymbols.push(`type ${typeMatch[1]} struct`);
+                    if (funcMatch) fileSymbols.push(`func ${funcMatch[1]}(${funcMatch[2]})`);
+                } else {
+                    const classMatch = line.match(/^(?:export\s+)?class\s+([a-zA-Z0-9_]+)/);
+                    const funcMatch = line.match(/^(?:export\s+)?function\s+([a-zA-Z0-9_]+)/);
+                    const arrowFuncMatch = line.match(/^(?:export\s+)?(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*\([^)]*\)\s*=>/);
+                    
+                    if (classMatch) fileSymbols.push(`class ${classMatch[1]}`);
+                    if (funcMatch) fileSymbols.push(`function ${funcMatch[1]}`);
+                    if (arrowFuncMatch) fileSymbols.push(`const ${arrowFuncMatch[1]} = (...) =>`);
+                }
+            }
+            
+            const relativePath = path.relative(FILES_DIR, fullPath);
+            outline.push({
+                file: relativePath.replace(/\\/g, '/'),
+                symbols: fileSymbols.slice(0, 30)
+            });
+            
+            if (outline.length >= maxFiles) break;
+        }
+    }
+    
+    return outline;
+}
+
 async function runAgentLoop(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState = null, approvalDecision = null }) {
     provider = normalizeChatProviderId(provider || config?.provider || 'ollama');
     model = model || config?.model || 'llama3';
@@ -8274,7 +8665,7 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
         res.write(`data: ${JSON.stringify({ contextStatus: historyContext.status })}\n\n`);
     }
 
-    const persona = config?.systemPrompt || "你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切。严禁输出 \"Tool\" 或 \"Thought\" 等前缀标记。请在回复开头和结尾带上 [expression:文件名.png] 格式的表情。";
+    const persona = config?.systemPrompt || "你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切。请用不同的话语回复用户的问候，切勿直接复制或重复对话历史中的首次问候语。严禁输出 \"Tool\" 或 \"Thought\" 等前缀标记。请在回复开头和结尾带上 [expression:文件名.png] 格式的表情。";
 
     const mcpTools = mcpEnabled ? mcpManager.getAllTools() : [];
     const mcpToolsText = mcpTools.length > 0 
@@ -8311,6 +8702,8 @@ ${persona}
 ## Tool Usage & Output Contract
 - ONLY call tools when you need a system action (like reading files, running commands, searching). For writing, storytelling, chatting, explaining, or answering questions, you MUST ONLY use respond(...) and nothing else.
 - DO NOT call composeMusic, draw, or terminal unless the user explicitly asked you to compose music, draw an image, or run a terminal command.
+- **No Random Fallbacks**: If you cannot answer a question (e.g., checking weather, time, or news but the \`search\` tool is disabled), DO NOT call unrelated tools like \`composeMusic\` or \`draw\`. Instead, you can use \`terminal("curl wttr.in/城市名")\` to fetch weather info via CLI, or use \`respond\` to state that you lack the search capability.
+- **Strict Todo Limit**: DO NOT call \`updateTodo\` for simple one-shot queries, questions, or weather checks. ONLY call \`updateTodo\` when undertaking complex, multi-step coding/project tasks.
 - Use respond(...) to reply to the user. Do NOT write files (e.g. writeFile) unless the user explicitly asks to save to a file.
 - NEVER use placeholders (like "content...", "[code]", "TODO") in tool calls; write the actual final content.
 - You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
@@ -8321,21 +8714,23 @@ ${persona}
 ## Available tools:
 ${searchEnabled ? '- search(query): Search the web.' : ''}
 - browse(url): Fetch and read webpage content.
-${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image.` : ''}
+${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image. STRICT WARNING: Only call this tool if the user explicitly asked you to draw or create an image/picture. Never call it for general questions or searching.` : ''}
 - terminal(command, timeoutSeconds): Run a PowerShell command. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Restricted to sandbox ${FILES_DIR}.` : ''}
-${musicEnabled ? '- composeMusic(prompt, bars): Create MIDI music.' : ''}
+${musicEnabled ? '- composeMusic(prompt, bars): Create MIDI music. STRICT WARNING: Only call this tool if the user explicitly asked you to compose or make music/MIDI. Never call it for general queries, questions, or searching.' : ''}
 - readFile(path, startLine, endLine): Read file lines.
 - planFileRead(path, chunkLines): Create a chunk plan for large files.
 - readFileChunk(path, chunkIndex, chunkLines): Read one planned chunk.
 - writeFile(path, content, expectedHash): Create or overwrite a file.
 - editFile(path, startLine, endLine, content, expectedHash): Replace lines.
 - replaceInFile(path, oldText, newText, expectedHash, occurrence): Replace exact text.
+- replaceBlocks(path, blocks, expectedHash): Edit a file using SEARCH/REPLACE blocks (conflict-marker format). Preferred over editFile/replaceInFile.
 - deleteFile(path, expectedHash): Delete a file.
 - listDir(path, limit, offset, includeIgnored): List folder contents.
+- getRepoMap(path): Scan code structure (classes, functions, exports) recursively. Preferred first step when exploring a codebase.
 - createProjectFolder(name): Create folder under ${FILES_DIR}.
 - ensureDir(path): Create directory.
 - diagram(mermaidCode): Render Mermaid diagram.
-- updateTodo(json): Update visible todo task checklist.
+- updateTodo(json): Update the visible task checklist. STRICT WARNING: ONLY call this for complex, multi-step tasks (e.g. creating projects, writing code, multi-file editing). NEVER call this for simple one-shot questions, explanations, or weather queries.
 - respond(text): Final reply to user in their language.
 ${shouldUseMemory ? '- listMemories(): List memories.\n- searchMemories(query): Semantic search memories.\n- readMemory(filename): Read a memory.\n- saveMemory(name, content): Save a memory.' : ''}
 - listSkills(): List skills.
@@ -8347,7 +8742,8 @@ ${shouldUseMemory ? '- listMemories(): List memories.\n- searchMemories(query): 
 ${mcpToolsText}
 
 ## Language Requirement
-- Thought/Response: Use user's language. Tool: English.
+- Thought/Response: MUST be in Chinese (中文). You must write your internal thoughts and planning in Chinese (中文).
+- Tool: MUST be in English.
 
 ## Conversation History:
 ${formattedHistory}
@@ -8408,9 +8804,9 @@ ${musicEnabled ? '- **Instrumental Music**: If the user asks you to create BGM, 
 - **Background Compression**: Earlier conversation may be automatically compressed when context is near full. The current user request and recent tool observations are kept verbatim; use the compressed background for continuity, not as a reason to forget the active task.
 
 ## Task Todo Protocol
-- For complex, large, multi-step, or multi-task requests, create a visible todo list before the first substantial work step by calling \`updateTodo\`.
-- For simple one-shot questions or tiny edits, do not create a todo list.
-- Keep the todo list short and concrete, usually 3-7 items. Mark the current item as \`in_progress\`, completed items as \`completed\`, and future items as \`pending\`.
+- **Strict Limit**: ONLY use the todo list for complex, large, multi-step, or multi-task requests (e.g., creating projects, multi-file edits).
+- **Prohibited for Simple Tasks**: NEVER call \`updateTodo\` or create a todo list for simple, one-shot, or single-turn requests (such as weather checks, explanations, simple CLI terminal queries, or simple questions).
+- For complex tasks, call \`updateTodo\` to create the list before the first substantial work step. Keep the todo list short and concrete, usually 3-7 items. Mark the current item as \`in_progress\`, completed items as \`completed\`, and future items as \`pending\`.
 - After each meaningful step is completed, call \`updateTodo\` again with the full updated list before moving on.
 - Do not write the todo list into the final natural-language answer; the UI displays it separately.
 
@@ -8446,26 +8842,37 @@ ${musicEnabled ? '- **Instrumental Music**: If the user asks you to create BGM, 
   2. exactly one final \`Tool: respond("...")\`
 - NEVER answer the user directly in plain text outside \`Tool: respond(...)\`.
 - NEVER stop after filler text like "我来帮你看看" or "稍等一下". If work is needed, call tools immediately.
-- If your previous reply had no \`Tool:\`, self-correct on the next attempt.
+## Tool Usage & Output Contract
+- **Tool Selection Safety**: If you cannot answer a question (e.g. checking weather, time, or news but the \`search\` tool is disabled), DO NOT call unrelated tools like \`composeMusic\` or \`draw\`. Instead, you can use \`terminal("curl wttr.in/城市名")\` to fetch weather info via CLI, or use \`respond\` to state that you lack the search capability. Never fallback to random tools.
+- ONLY call tools when you need a system action (like reading files, running commands, searching). For writing, storytelling, chatting, explaining, or answering questions, you MUST ONLY use respond(...) and nothing else.
+- DO NOT call composeMusic, draw, or terminal unless the user explicitly asked you to compose music, draw an image, or run a terminal command.
+- Use respond(...) to reply to the user. Do NOT write files (e.g. writeFile) unless the user explicitly asks to save to a file.
+- NEVER use placeholders (like "content...", "[code]", "TODO") in tool calls; write the actual final content.
+- You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
+- Tool calls MUST start with \`Tool:\` on a new line. Do not mention them in conversational text.
+- Every turn MUST end with either a \`Tool:\` call or a final \`Tool: respond("...")\`. Never answer in plain text outside \`Tool: respond(...)\`.
+- Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
 
 ## Available tools:
 ${searchEnabled ? '- search(query): Search the web. Use this for up-to-date info or documentation.' : ''}
 - browse(url): Fetch and read the text content of a specific webpage. Use this AFTER searching to get detailed information.
-${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image. width and height are optional (default ${getDefaultDrawDimension(config?.drawingProvider, config?.customDrawingModel || config?.drawingModel)}). If images are uploaded, they will be used as reference.` : ''}
+${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image. width and height are optional (default ${getDefaultDrawDimension(config?.drawingProvider, config?.customDrawingModel || config?.drawingModel)}). STRICT WARNING: Only call this tool if the user explicitly asked you to draw or create an image/picture. Never call it for general questions or searching.` : ''}
 - terminal(command, timeoutSeconds): Run a PowerShell command. timeoutSeconds is optional; default is ${formatDurationMs(TERMINAL_COMMAND_DEFAULT_TIMEOUT_MS)}, and 0 disables automatic timeout for large downloads or long model jobs. For servers or model runners that should keep running, prefer Start-Process or Start-Job so this turn can continue. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission keeps this inside sandbox ${FILES_DIR}; sensitive commands may pause for approval.` : 'Full access may reach the broader workspace.'}
-${musicEnabled ? '- composeMusic(prompt, bars): Create a short instrumental MIDI sketch and attach it to the chat. Use this for pure music, loops, BGM, and melody ideas. bars is optional and should usually stay between 4 and 12.' : ''}
+${musicEnabled ? '- composeMusic(prompt, bars): Create a short instrumental MIDI sketch and attach it to the chat. Use this for pure music, loops, BGM, and melody ideas. bars is optional and should usually stay between 4 and 12. STRICT WARNING: Only call this tool if the user explicitly asked you to compose or make music/MIDI. Never call it for general queries, questions, or searching.' : ''}
 - readFile(path, startLine, endLine): Read text content with line numbers. startLine/endLine are optional and useful for large code files. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows non-sensitive files inside sandbox ${FILES_DIR}.` : ''}
 - planFileRead(path, chunkLines): For large text files, return a chunk plan without loading every line into context. chunkLines defaults to ${LARGE_FILE_CHUNK_LINES}.
 - readFileChunk(path, chunkIndex, chunkLines): Read one planned large-file chunk. Prefer this over full-file reading when a file has many lines.
 - writeFile(path, content, expectedHash): Create or overwrite a text file. Relative paths are resolved under ${FILES_DIR}; new files are blocked in repository code directories outside ${FILES_DIR}. Pass expectedHash when overwriting an existing file. The resulting file will be attached for download. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows sandbox paths, and overwriting an existing file may pause for approval.` : ''}
 - editFile(path, startLine, endLine, content, expectedHash): Replace lines (1-indexed, inclusive). To insert, set endLine < startLine. expectedHash is required and must be the SHA256 from the latest readFile output. The updated file will be attached for download. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? 'Editing in default permission may pause for approval.' : ''}
 - replaceInFile(path, oldText, newText, expectedHash, occurrence): Replace an exact text match. expectedHash is required. Omit occurrence only when oldText appears exactly once; otherwise pass a 1-based occurrence number.
+- replaceBlocks(path, blocks, expectedHash): Edit a file using SEARCH/REPLACE blocks (conflict-marker format). Preferred over editFile/replaceInFile for code modifications to prevent line number offset issues. expectedHash is required.
 - deleteFile(path, expectedHash): Delete a file. expectedHash is required and must be the SHA256 from the latest readFile output. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? 'Default permission only allows sandbox paths and requires approval before deletion.' : ''}
 - listDir(path, limit, offset, includeIgnored): List contents of a folder with pagination. Defaults to 200 entries and ignores common heavy folders unless includeIgnored=true. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows sandbox paths inside ${FILES_DIR}.` : ''}
+- getRepoMap(path): Scan code structures (classes, functions, declarations, exports) recursively in the target directory. Preferred first step when exploring a new codebase.
 - createProjectFolder(name): Create a dedicated project folder under ${FILES_DIR} and return its path. Use before multi-file deliverables.
 - ensureDir(path): Create a directory. Relative paths resolve under ${FILES_DIR}; project-code directories outside ${FILES_DIR} are blocked for new user deliverables.
 - diagram(mermaidCode): Generate and render a Mermaid diagram. DO NOT wrap the mermaidCode in backticks or markdown code blocks when calling this tool. Example: Tool: diagram("graph TD\nA-->B")
-- updateTodo(json): Update the visible task checklist for complex work. Pass one JSON object string like {"title":"Implementation plan","items":[{"id":"inspect","text":"Inspect the relevant files","status":"in_progress"},{"id":"edit","text":"Implement the change","status":"pending"}]}. Use status values pending, in_progress, or completed. Send the full list each time.
+- updateTodo(json): Update the visible task checklist. STRICT WARNING: ONLY call this for complex, multi-step tasks (e.g. creating projects, writing code, multi-file editing). NEVER call this for simple one-shot questions, explanations, or weather queries. Pass one JSON object string like {"title":"Implementation plan","items":[{"id":"inspect","text":"Inspect the relevant files","status":"in_progress"},{"id":"edit","text":"Implement the change","status":"pending"}]}. Use status values pending, in_progress, or completed. Send the full list each time.
 - respond(text): Final answer to the user in their language.
 ${shouldUseMemory ? '- listMemories(): List memory items with categories, importance, previews, and whether they were auto-saved.\n- searchMemories(query): Search the memory system semantically by title, summary, tags, and content.\n- readMemory(filename): Read the full content and metadata of a memory item.\n- saveMemory(name, content): Save durable information worth remembering long-term, such as preferences, identity, project constraints, or communication style. Do not save trivial one-off details.' : ''}
 - listSkills(): List installed skills with names, descriptions, and source types.
@@ -8477,9 +8884,9 @@ ${shouldUseMemory ? '- listMemories(): List memory items with categories, import
 ${mcpToolsText}
 
 ## Language Requirement
-- **Thought**: Use the user's language.
+- **Thought**: MUST be in Chinese (中文). You must write your internal thoughts and planning in Chinese (中文).
 - **Tool**: MUST be in English: \`Tool: tool_name("arg1", ...)\`.
-- **Response**: Use the user's language.
+- **Response**: MUST be in Chinese (中文).
 
 ## Conversation History:
 ${formattedHistory}
@@ -8503,6 +8910,7 @@ Do not expand the scope of this approval. If you still need that exact action, r
         const partialAssistantText = Array.isArray(resumeState.parts)
             ? resumeState.parts.map(part => {
                 if (part.type === 'text') return part.content || '';
+                if (part.type === 'reasoning') return `<think>${part.content || ''}</think>\n`;
                 if (part.type === 'action') {
                     const args = Array.isArray(part.data?.args) ? part.data.args.join(', ') : '';
                     const observation = part.observation ? `\nObservation: ${String(part.observation).slice(0, 800)}` : '';
@@ -8534,6 +8942,66 @@ ${partialAssistantText || '(empty partial output)'}`;
         let assistantReasoning = "";
         let assistantReasoningStreamed = false;
         
+        let streamedReasoningLength = 0;
+        let streamedTextLength = 0;
+        let lastToolCallsJSON = "";
+
+        const handleStreamProgress = (content) => {
+            if (aborted) return;
+            assistantResponse += content;
+
+            // Extract real-time thoughts and plain text
+            const parsedThoughts = extractThoughtsAndText(assistantResponse);
+            
+            // 1. Stream reasoning/thinking block delta
+            if (parsedThoughts.reasoning.length > streamedReasoningLength) {
+                const reasoningDelta = parsedThoughts.reasoning.substring(streamedReasoningLength);
+                streamedReasoningLength = parsedThoughts.reasoning.length;
+                if (!res.writableEnded) {
+                    assistantReasoningStreamed = true;
+                    res.write(`data: ${JSON.stringify({ reasoning: reasoningDelta })}\n\n`);
+                }
+            }
+
+            // Extract tools & conversational text from the clean text
+            const parsed = parseResponseStream(parsedThoughts.text);
+            
+            // 2. Stream text delta (excluding potential partial <think>/Tool tags at the end)
+            let rawText = parsed.text;
+            const partialTagLen = getTrailingPartialTagLength(rawText);
+            if (partialTagLen > 0) {
+                rawText = rawText.substring(0, rawText.length - partialTagLen);
+            }
+
+            if (rawText.length > streamedTextLength) {
+                const textDelta = rawText.substring(streamedTextLength);
+                streamedTextLength = rawText.length;
+                if (!res.writableEnded) {
+                    res.write(`data: ${JSON.stringify({ text: textDelta })}\n\n`);
+                }
+            }
+
+            // 3. Stream tool calls list if changed
+            const toolCallsJSON = JSON.stringify(parsed.toolCalls);
+            if (toolCallsJSON !== lastToolCallsJSON) {
+                lastToolCallsJSON = toolCallsJSON;
+                if (!res.writableEnded) {
+                    res.write(`data: ${JSON.stringify({ streamingActions: parsed.toolCalls })}\n\n`);
+                }
+            }
+        };
+
+        const handleReasoningProgress = (content) => {
+            if (aborted) return;
+            const cleanContent = String(content || '').replace(/<\/?think>/gi, '');
+            if (!cleanContent) return;
+            assistantReasoning += cleanContent;
+            if (!res.writableEnded) {
+                assistantReasoningStreamed = true;
+                res.write(`data: ${JSON.stringify({ reasoning: cleanContent })}\n\n`);
+            }
+        };
+
         if (provider === 'ollama') {
             let retryCount = 0;
             const maxRetries = 3;
@@ -8571,8 +9039,6 @@ ${partialAssistantText || '(empty partial output)'}`;
                         signal: loopAbortController.signal 
                     }); 
 
-                    let hasHitTool = false;
-                    
                     for await (const chunk of response.data) {
                         if (aborted) break;
                         const lines = chunk.toString().split('\n');
@@ -8580,30 +9046,21 @@ ${partialAssistantText || '(empty partial output)'}`;
                             if (!line.trim()) continue;
                             try {
                                 const data = JSON.parse(line);
-                                const content = data.message?.content || "";
+                                
+                                const reasoningContent = data.message?.reasoning_content || data.reasoning_content || "";
+                                if (reasoningContent) {
+                                    handleReasoningProgress(reasoningContent);
+                                }
+                                
+                                const content = data.message?.content || data.response || "";
                                 if (content) {
-                                    assistantResponse += content;
-                                    
-                                    // Streaming logic to UI
-                                    if (!hasHitTool) {
-                                        // Detect if we hit a tool call, including possible Chinese translations like "工具:"
-                                        // "Tool:" is standard, "工具:" is sometimes output by multilingual models.
-                                        if (assistantResponse.match(/(?:Tool|工具)[:：]/i)) {
-                                            hasHitTool = true;
-                                        } else {
-                                            if (!res.writableEnded) {
-                                                res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
-                                            }
-                                        }
-                                    }
+                                    handleStreamProgress(content);
                                 }
                             } catch (e) {}
                         }
                     }
 
                     if (aborted) return;
-                    // 自动续写逻辑（暂不适配流式，保留原意但需注意 assistantResponse 已填充）
-                    // ... existing truncated logic if needed, but usually not with 8k limit
                     success = true;
                 } catch (err) {
                     if (aborted) return;
@@ -8647,32 +9104,15 @@ ${partialAssistantText || '(empty partial output)'}`;
                     max_tokens: 16384
                 };
 
-                let hasHitTool = false;
-                const streamed = await streamCopilotChat({
+                await streamCopilotChat({
                     apiToken,
                     payload: copilotPayload,
                     signal: loopAbortController.signal,
                     onText: (content) => {
-                        if (aborted) return;
-                        assistantResponse += content;
-
-                        if (!hasHitTool) {
-                            if (assistantResponse.match(/(?:Tool|工具)[:：]/i)) {
-                                hasHitTool = true;
-                            }
-                        }
+                        handleStreamProgress(content);
                     },
                     onReasoning: (content) => {
-                        if (aborted) return;
-                        const cleanContent = String(content || '').replace(/<\/?think>/gi, '');
-                        if (!cleanContent) return;
-                        const isFirstReasoningChunk = !assistantReasoning;
-                        assistantReasoning += cleanContent;
-                        if (!res.writableEnded) {
-                            assistantReasoningStreamed = true;
-                            const streamedChunk = isFirstReasoningChunk ? `<think>${cleanContent}` : cleanContent;
-                            res.write(`data: ${JSON.stringify({ text: streamedChunk })}\n\n`);
-                        }
+                        handleReasoningProgress(content);
                     }
                 });
 
@@ -8684,34 +9124,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     });
                     if (fallbackText) {
                         assistantResponse = fallbackText;
-                    }
-                } else if (streamed.finishReason === 'length') {
-                    console.warn(`[Agent] GitHub Copilot response reached token limit for model ${resolvedModel}`);
-                }
-
-                if (false) for await (const chunk of response.data) {
-                    if (aborted) break;
-                    const lines = chunk.toString().split('\n');
-                    for (const line of lines) {
-                        if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-                                const content = data.choices[0]?.delta?.content || "";
-                                if (content) {
-                                    assistantResponse += content;
-
-                                    if (!hasHitTool) {
-                                        // Detect if we hit a tool call, including possible Chinese translations like "工具:"
-                                        // "Tool:" is standard, "工具:" is sometimes output by multilingual models.
-                                        if (assistantResponse.match(/(?:Tool|工具)[:：]/i)) {
-                                            hasHitTool = true;
-                                        } else {
-                                            res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
-                                        }
-                                    }
-                                }
-                            } catch (e) {}
-                        }
+                        handleStreamProgress(""); // Trigger update
                     }
                 }
             } catch (err) {
@@ -8727,7 +9140,6 @@ ${partialAssistantText || '(empty partial output)'}`;
                 const providerLabel = getChatProviderLabel(provider);
                 console.log(`[Agent] Calling ${providerLabel} (Model: ${model})`);
 
-                let hasHitTool = false;
                 assistantResponse = await callLLM(
                     provider,
                     model,
@@ -8735,12 +9147,10 @@ ${partialAssistantText || '(empty partial output)'}`;
                     currentPrompt,
                     config,
                     (content) => {
-                        if (aborted) return;
-                        if (!hasHitTool && String(content || '')) {
-                            if ((assistantResponse + content).match(/(?:Tool|工具)[:：]/i)) {
-                                hasHitTool = true;
-                            }
-                        }
+                        handleStreamProgress(content);
+                    },
+                    (reasoning) => {
+                        handleReasoningProgress(reasoning);
                     }
                 );
             } catch (err) {
@@ -8760,24 +9170,32 @@ ${partialAssistantText || '(empty partial output)'}`;
             }
         }
 
-        const reasoningText = assistantReasoning.trim();
-        if (reasoningText) {
-            const reasoningPart = `<think>${reasoningText}</think>\n`;
-            currentParts.push({ type: 'text', content: reasoningPart });
-            await persist();
-            if (!aborted && !res.writableEnded) {
-                const reasoningTail = assistantReasoningStreamed ? '</think>\n' : reasoningPart;
-                res.write(`data: ${JSON.stringify({ text: reasoningTail })}\n\n`);
-            }
+        // Clear streaming actions once generation is complete
+        if (!aborted && !res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ streamingActions: [] })}\n\n`);
         }
 
-        // Parse Thought for persistence (Don't stream again as it was streamed during LLM call)
-        // Also support Chinese "思考:" as a fallback
-        const thoughtMatch = assistantResponse.match(/(?:Thought|思考)[:：]\s*([\s\S]*?)(?=(?:Tool|工具)[:：]|$)/i);
-        if (thoughtMatch) {
-            const thoughtText = `<think>${thoughtMatch[1].trim()}</think>\n`;
-            currentParts.push({ type: 'text', content: thoughtText });
+        const reasoningText = assistantReasoning.trim();
+        if (reasoningText) {
+            currentParts.push({ type: 'reasoning', content: reasoningText });
             await persist();
+        } else {
+            // Parse Thought/`<think>` for persistence
+            let thoughtText = "";
+            const thinkMatch = assistantResponse.match(/<think>([\s\S]*?)<\/think>/i);
+            if (thinkMatch) {
+                thoughtText = thinkMatch[1].trim();
+            } else {
+                const thoughtMatch = assistantResponse.match(/(?:Thought|思考)[:：]\s*([\s\S]*?)(?=(?:Tool|工具)[:：]|$)/i);
+                if (thoughtMatch) {
+                    thoughtText = thoughtMatch[1].trim();
+                }
+            }
+
+            if (thoughtText) {
+                currentParts.push({ type: 'reasoning', content: thoughtText });
+                await persist();
+            }
         }
 
         // --- Multi-Tool execution (Robust Parsing) ---
@@ -8989,7 +9407,9 @@ ${partialAssistantText || '(empty partial output)'}`;
                         }
                     }
                     if (!aborted && !res.writableEnded) {
-                        res.write(`data: ${JSON.stringify({ text: finalReply })}\n\n`);
+                        if (streamedTextLength === 0) {
+                            res.write(`data: ${JSON.stringify({ text: finalReply })}\n\n`);
+                        }
                         currentParts.push({ type: 'text', content: finalReply });
                         await persist();
                         sendDone();
@@ -9207,11 +9627,29 @@ ${partialAssistantText || '(empty partial output)'}`;
                         } else {
                             const executionDir = terminalPermission.cwd || FILES_DIR;
                             const terminalTimeoutMs = normalizeTerminalTimeoutMs(args[1]);
+                            let accumulatedOut = "";
+                            let accumulatedErr = "";
+                            const sendTerminalProgress = () => {
+                                if (aborted || res.writableEnded) return;
+                                const currentOutput = `STDOUT: ${accumulatedOut}\nSTDERR: ${accumulatedErr}`.trim();
+                                res.write(`data: ${JSON.stringify({ 
+                                    observation: currentOutput || "(Running...)"
+                                })}\n\n`);
+                            };
+
                             const commandRes = await runTerminalCommand({
                                 command: args[0],
                                 cwd: executionDir,
                                 actionControl,
                                 timeoutMs: terminalTimeoutMs,
+                                onStdout: (data) => {
+                                    accumulatedOut += data;
+                                    sendTerminalProgress();
+                                },
+                                onStderr: (data) => {
+                                    accumulatedErr += data;
+                                    sendTerminalProgress();
+                                }
                             });
 
                             if (commandRes.skipped) {
@@ -9546,6 +9984,115 @@ ${partialAssistantText || '(empty partial output)'}`;
                                 }
                             });
                             if (approvalRequested) return;
+                        }
+                    } else if (toolName === 'replaceblocks') {
+                        const filePath = resolveToolPath(args[0]);
+                        const blocksText = args[1] || "";
+                        const expectedHash = args[2];
+                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+
+                        if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(filePath)) {
+                            observation = `Permission denied: default permission only allows editing files inside sandbox ${FILES_DIR}. Switch to full access to edit project files.`;
+                        } else if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && isSensitivePath(filePath)) {
+                            observation = 'Permission denied: default permission blocks editing sensitive config or secret files.';
+                        } else if (!(await fs.exists(filePath))) {
+                            observation = `Error: File not found at ${filePath}`;
+                        } else {
+                            let approvalRequested = false;
+                            await withFileLock(filePath, async () => {
+                                const stats = await fs.stat(filePath);
+                                if (!stats.isFile()) {
+                                    observation = `Error: ${filePath} is not a regular file and cannot be edited.`;
+                                } else {
+                                    const snapshot = await readTextFileSnapshot(filePath, stats);
+                                    if (snapshot.isBinary) {
+                                        observation = `Error: ${filePath} appears to be binary. Refusing to edit.`;
+                                        return;
+                                    }
+
+                                    const hashCheck = validateExpectedFileHash(expectedHash, snapshot.hash, 'edit');
+                                    if (!hashCheck.ok) {
+                                        observation = hashCheck.error;
+                                        return;
+                                    }
+
+                                    let blocks = [];
+                                    try {
+                                        blocks = parseSearchReplaceBlocks(blocksText);
+                                    } catch (e) {
+                                        observation = `Error parsing SEARCH/REPLACE blocks: ${e.message}`;
+                                        return;
+                                    }
+
+                                    if (blocks.length === 0) {
+                                        observation = `Error: No SEARCH/REPLACE blocks found in the argument. Make sure your input follows the exact conflict-marker format:\n<<<<<<< SEARCH\n[old code]\n=======\n[new code]\n>>>>>>> REPLACE`;
+                                        return;
+                                    }
+
+                                    let editedContent = "";
+                                    try {
+                                        editedContent = applySearchReplaceBlocks(snapshot.content, blocks);
+                                    } catch (e) {
+                                        observation = `Error: ${e.message}`;
+                                        return;
+                                    }
+
+                                    if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !editApproved) {
+                                        approvalRequested = true;
+                                        await requestUserApproval({
+                                            reasonKey: 'sandbox-file-edit',
+                                            reason: 'Editing an existing sandbox file requires user approval.',
+                                            summary: `${filePath} (replaceBlocks)`,
+                                        });
+                                        return;
+                                    }
+
+                                    const targetEol = snapshot.format?.eol || '\n';
+                                    const finalContent = editedContent.replace(/\r\n/g, '\n').replace(/\n/g, targetEol);
+                                    
+                                    const writeResult = await atomicWriteTextFile(filePath, finalContent, snapshot.format);
+                                    const afterLineCount = splitTextForLineEdit(finalContent).lines.length;
+                                    
+                                    observation = `Success: Applied ${blocks.length} SEARCH/REPLACE block(s) to ${filePath}. File now has ${afterLineCount} lines. SHA256 ${writeResult.hash}`;
+                                    
+                                    fileMetadata = {
+                                        filePath,
+                                        before: snapshot.content,
+                                        after: finalContent,
+                                        operation: 'edit',
+                                        beforeHash: snapshot.hash,
+                                        afterHash: writeResult.hash,
+                                        encoding: snapshot.format?.label || 'UTF-8',
+                                        textFormat: serializeTextFormat(snapshot.format),
+                                    };
+                                    generatedFile = await buildDownloadableFile(filePath);
+                                }
+                            });
+                            if (approvalRequested) return;
+                        }
+                    } else if (toolName === 'getrepomap') {
+                        const targetDir = resolveToolPath(args[0] || ".");
+                        if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(targetDir)) {
+                            observation = `Permission denied: default permission only allows accessing files inside sandbox ${FILES_DIR}.`;
+                        } else if (!(await fs.exists(targetDir))) {
+                            observation = `Error: Path not found at ${targetDir}`;
+                        } else {
+                            try {
+                                const stats = await fs.stat(targetDir);
+                                const rootScanPath = stats.isDirectory() ? targetDir : path.dirname(targetDir);
+                                const outline = await scanRepoOutline(rootScanPath, 80);
+                                if (outline.length === 0) {
+                                    observation = `No code files (.js, .ts, .py, .go) found in directory ${rootScanPath}.`;
+                                } else {
+                                    const formatted = outline.map(o => {
+                                        if (o.symbols.length === 0) return `- ${o.file}`;
+                                        return `- ${o.file}\n${o.symbols.map(s => `  * ${s}`).join('\n')}`;
+                                    }).join('\n');
+                                    observation = `Success: Scanned repository outline for ${rootScanPath}:\n${formatted}`;
+                                }
+                            } catch (e) {
+                                observation = `Error scanning codebase: ${e.message}`;
+                            }
                         }
                     } else if (toolName === 'replaceinfile') {
                         const filePath = resolveToolPath(args[0]);
@@ -10044,6 +10591,386 @@ ${invalidOutputPreview || '(empty output)'}`;
         sendDone();
     }
 }
+
+const isDeveloperAction = (msg) => {
+    const trimmed = String(msg || '').trim().toLowerCase();
+    
+    // 1. Common CLI commands at the start of a query
+    const cliCommands = [
+        'git ', 'npm ', 'pnpm ', 'yarn ', 'pip ', 'python ', 'python3 ', 'node ', 'deno ', 'docker ',
+        'cargo ', 'go ', 'curl ', 'wget ', 'ssh ', 'mkdir ', 'rm ', 'cp ', 'mv ', 'chmod ', 'chown ',
+        'grep ', 'rg ', 'find ', 'cat ', 'ls', 'dir', 'pwd', 'clear', 'echo '
+    ];
+    if (cliCommands.some(cmd => trimmed.startsWith(cmd))) {
+        return true;
+    }
+    
+    // 2. Mentions of code folders or common files
+    if (/\b(?:package\.json|package-lock\.json|tsconfig\.json|jsconfig\.json|vite\.config\.|next\.config\.|webpack|makefile|dockerfile|eslint|\.js|\.jsx|\.ts|\.tsx|\.py|\.go|\.java|\.cpp|\.c|\.rs|\.html|\.css|\.json|\.md|\.sh|\.bat|src\/|public\/|backend\/|frontend\/|utils\/|components\/)\b/i.test(trimmed)) {
+        return true;
+    }
+    
+    return false;
+};
+
+const isGreetingOrSimple = (msg) => {
+    const trimmed = String(msg || '').trim().toLowerCase();
+    if (!trimmed) return true;
+    
+    const greetings = [
+        '你好', '早上好', '中午好', '下午好', '晚上好', '哈喽', '在吗', 'hey', 'hello', 'hi', 'hola', 
+        'good morning', 'good afternoon', 'good evening', 'how are you', 'how\'s it going',
+        '随便聊聊', '问个好', '自我介绍', '你是谁', '谁是saki', '介绍一下你自己', '介绍你自己'
+    ];
+    // Strip trailing punctuation for clean exact matching
+    const cleanStr = trimmed.replace(/[?？!！.~#%*()\s_-]+$/, '');
+    return greetings.includes(cleanStr);
+};
+
+async function classifyIntent({ message, provider, model, ollamaUrl, config }) {
+    const classificationPrompt = `You are an advanced routing assistant. Determine whether the user's query requires system tools or terminal actions.
+
+Respond with "CHAT" if the query:
+- Is a conversational greeting, social chat, or character play.
+- Is a general question, conceptual explanation, language translation, or writing task that can be answered using general knowledge (e.g. "Explain quantum computing", "Compare SQL and NoSQL", "Write a poem about rain").
+
+Respond with "AGENT" if the query:
+- Requires interacting with files or folders in the workspace (e.g. reading, writing, editing, listing, or creating files).
+- Requires running commands on the terminal/shell (e.g. "ls", "git status", "npm install", "run tests", "show directory").
+- Requires real-time/web information like weather, search, or news (e.g. "what's the weather in Tokyo?").
+- Requires drawing/generating images or composing MIDI music.
+
+User Request: "${message}"
+
+Respond with exactly one word: "CHAT" or "AGENT".`;
+
+    try {
+        const responseData = await callLLM(
+            provider,
+            model,
+            ollamaUrl,
+            classificationPrompt,
+            {
+                ...config,
+                temperature: 0
+            }
+        );
+        const result = String(responseData || '').trim().toUpperCase();
+        console.log(`[Router] Classified intent for "${message.slice(0, 30)}...": ${result}`);
+        if (result.includes('AGENT')) return 'AGENT';
+        return 'CHAT';
+    } catch (err) {
+        console.error('[Router] Intent classification failed, defaulting to AGENT:', err);
+        return 'AGENT';
+    }
+}
+
+async function runChatLoop(res, { message, history, provider, model, ollamaUrl, chatId, assistantMsgId, uploadedFiles, config }) {
+    provider = normalizeChatProviderId(provider || config?.provider || 'ollama');
+    model = model || config?.model || 'llama3';
+    ollamaUrl = ollamaUrl || config?.ollamaUrl || 'http://localhost:11434';
+
+    const persona = config?.systemPrompt || "你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切。请用不同的话语回复用户的问候，切勿直接复制或重复对话历史中的首次问候语。严禁输出 \"Tool\" 或 \"Thought\" 等前缀标记。请在回复开头和结尾带上 [expression:文件名.png] 格式的表情。";
+
+    let aborted = false;
+    let streamCompleted = false;
+    const heartbeatTimer = setInterval(() => {
+        if (aborted || res.writableEnded) {
+            clearInterval(heartbeatTimer);
+            return;
+        }
+        try {
+            res.write(': keepalive\n\n');
+        } catch {
+            clearInterval(heartbeatTimer);
+        }
+    }, 15000);
+
+    const sendDone = () => {
+        streamCompleted = true;
+        clearInterval(heartbeatTimer);
+        if (!res.writableEnded) {
+            res.write('data: [DONE]\n\n');
+            res.end();
+        }
+    };
+
+    res.on('close', () => {
+        clearInterval(heartbeatTimer);
+        if (streamCompleted) return;
+        aborted = true;
+        console.log(`[Chat] Client disconnected. Aborting request for chatId: ${chatId}`);
+    });
+
+    const imageBase64s = [];
+    const seenPaths = new Set();
+    const addImage = async (file) => {
+        const isImg = file.isImage || (file.path && isImageFile(file.path));
+        if (isImg && file.path && !seenPaths.has(file.path)) {
+            try {
+                if (await fs.exists(file.path)) {
+                    const data = await fs.readFile(file.path);
+                    const ext = path.extname(file.path).toLowerCase();
+                    const mime = ext === '.png' ? 'image/png' : 
+                                 ext === '.webp' ? 'image/webp' : 
+                                 ext === '.gif' ? 'image/gif' : 'image/jpeg';
+                    imageBase64s.push({ mime, b64: data.toString('base64') });
+                    seenPaths.add(file.path);
+                }
+            } catch (e) {
+                console.error(`Failed to read image ${file.path}:`, e.message);
+            }
+        }
+    };
+    if (uploadedFiles && uploadedFiles.length > 0) {
+        for (const file of uploadedFiles) await addImage(file);
+    }
+    for (const msg of history || []) {
+        if (msg.attachedFiles && Array.isArray(msg.attachedFiles)) {
+            for (const file of msg.attachedFiles) await addImage(file);
+        }
+    }
+
+    const formattedHistory = [];
+    for (const h of history || []) {
+        let textContent = "";
+        let reasoningContent = "";
+        if (h.parts && Array.isArray(h.parts)) {
+            for (const part of h.parts) {
+                if (part.type === 'text') textContent += part.content;
+                if (part.type === 'reasoning') reasoningContent += part.content;
+            }
+        }
+        if (h.role === 'user') {
+            formattedHistory.push({ role: 'user', content: h.content || textContent });
+        } else if (h.role === 'assistant') {
+            let content = textContent;
+            if (reasoningContent) {
+                content = `<think>\n${reasoningContent}\n</think>\n${content}`;
+            }
+            formattedHistory.push({ role: 'assistant', content: content });
+        }
+    }
+
+    const chatPrompt = `## Role
+${persona}
+
+## Conversation History:
+${formattedHistory.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}`).join('\n')}
+
+## Current Task:
+User message: ${message}`;
+
+    let assistantResponse = "";
+    let assistantReasoning = "";
+    
+    let streamedTextLength = 0;
+    let streamedReasoningLength = 0;
+
+    const handleStreamProgress = (content) => {
+        if (aborted) return;
+        assistantResponse += content;
+
+        const parsedThoughts = extractThoughtsAndText(assistantResponse);
+        
+        if (parsedThoughts.reasoning.length > streamedReasoningLength) {
+            const reasoningDelta = parsedThoughts.reasoning.substring(streamedReasoningLength);
+            streamedReasoningLength = parsedThoughts.reasoning.length;
+            if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ reasoning: reasoningDelta })}\n\n`);
+            }
+        }
+
+        let rawText = parsedThoughts.text;
+        const partialTagLen = getTrailingPartialTagLength(rawText);
+        if (partialTagLen > 0) {
+            rawText = rawText.substring(0, rawText.length - partialTagLen);
+        }
+
+        if (rawText.length > streamedTextLength) {
+            const textDelta = rawText.substring(streamedTextLength);
+            streamedTextLength = rawText.length;
+            if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ text: textDelta })}\n\n`);
+            }
+        }
+    };
+
+    const handleReasoningProgress = (content) => {
+        if (aborted) return;
+        const cleanContent = String(content || '').replace(/<\/?think>/gi, '');
+        if (!cleanContent) return;
+        assistantReasoning += cleanContent;
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ reasoning: cleanContent })}\n\n`);
+        }
+    };
+
+    try {
+        await callLLM(
+            provider,
+            model,
+            ollamaUrl,
+            chatPrompt,
+            config,
+            handleStreamProgress,
+            handleReasoningProgress
+        );
+
+        const finalThoughts = extractThoughtsAndText(assistantResponse);
+        const finalReasoning = finalThoughts.reasoning || assistantReasoning;
+        const finalChatText = finalThoughts.text;
+
+        const currentParts = [];
+        if (finalReasoning) {
+            currentParts.push({ type: 'reasoning', content: finalReasoning });
+        }
+        currentParts.push({ type: 'text', content: finalChatText });
+
+        const fullHistory = [...(history || [])];
+        const assistantMsg = { 
+            role: 'assistant', 
+            parts: currentParts, 
+            generatedFiles: [], 
+            id: assistantMsgId || Date.now(), 
+            todoList: null 
+        };
+        fullHistory.push(assistantMsg);
+
+        if (chatId) {
+            const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
+            const sessionData = await safeReadJsonFile(sessionFilePath, { messages: [] });
+            sessionData.messages = fullHistory;
+            await fs.writeJson(sessionFilePath, sessionData, { spaces: 2 });
+        }
+
+        sendDone();
+    } catch (err) {
+        console.error('[Chat] Call failed:', err);
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ text: `调用失败: ${err.message}` })}\n\n`);
+        }
+    }
+}
+
+async function handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config }) {
+    provider = normalizeChatProviderId(provider || config?.provider || 'ollama');
+    model = model || config?.model || 'llama3';
+    ollamaUrl = ollamaUrl || config?.ollamaUrl || 'http://localhost:11434';
+
+    let aborted = false;
+    let streamCompleted = false;
+    const heartbeatTimer = setInterval(() => {
+        if (aborted || res.writableEnded) {
+            clearInterval(heartbeatTimer);
+            return;
+        }
+        try {
+            res.write(': keepalive\n\n');
+        } catch {
+            clearInterval(heartbeatTimer);
+        }
+    }, 15000);
+
+    const sendDone = () => {
+        streamCompleted = true;
+        clearInterval(heartbeatTimer);
+        if (!res.writableEnded) {
+            res.write('data: [DONE]\n\n');
+            res.end();
+        }
+    };
+
+    res.on('close', () => {
+        clearInterval(heartbeatTimer);
+        if (streamCompleted) return;
+        aborted = true;
+    });
+
+    if (!history || history.length < 3) {
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ text: "Saki: 现在的对话历史还不够长，不需要压缩哦～" })}\n\n`);
+        }
+        sendDone();
+        return;
+    }
+
+    if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ text: "Saki: 收到指令！正在帮您压缩对话历史，整理上下文关系... [expression:think.png]\n\n" })}\n\n`);
+    }
+
+    try {
+        const formattedHistory = history.map(h => {
+            let text = "";
+            if (h.parts && Array.isArray(h.parts)) {
+                text = h.parts.map(p => p.content || '').join('\n');
+            } else {
+                text = h.content || "";
+            }
+            return `${h.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+        }).join('\n\n').slice(0, 30000);
+
+        const summaryPrompt = `Analyze the following conversation history between a User and an AI Assistant.
+Create a concise summary of the conversation. Your summary MUST include:
+- A brief description of the main task.
+- List of files that were read, created, or modified (with paths).
+- Major terminal commands run and their status (success/failure).
+- Current status of the task and next steps.
+
+Conversation History:
+${formattedHistory}
+
+Respond only with the summary.`;
+
+        const summaryText = await callLLM(
+            provider,
+            model,
+            ollamaUrl,
+            summaryPrompt,
+            { ...config, temperature: 0 }
+        );
+
+        const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
+        if (await fs.exists(sessionFilePath)) {
+            const sessionData = await safeReadJsonFile(sessionFilePath, { messages: [] });
+            
+            const newHistory = [
+                {
+                    role: 'system',
+                    parts: [{ type: 'text', content: `[COMPACTED CONVERSATION BACKGROUND]\n\n${summaryText}` }],
+                    id: Date.now() - 1000,
+                    timestamp: Date.now() - 1000
+                },
+                {
+                    role: 'user',
+                    content: message,
+                    id: Date.now(),
+                    timestamp: Date.now()
+                }
+            ];
+            
+            sessionData.messages = newHistory;
+            sessionData.contextCompression = {
+                summary: summaryText,
+                updatedAt: new Date().toISOString()
+            };
+            await fs.writeJson(sessionFilePath, sessionData, { spaces: 2 });
+        }
+
+        const reply = `**历史上下文已成功压缩！**\n\n已释放前面轮次的历史消息所占用的 Token 额度。以下是保留的背景摘要：\n\n${summaryText}`;
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ text: reply })}\n\n`);
+        }
+        sendDone();
+    } catch (e) {
+        console.error('[Compaction] Failed:', e);
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ text: `压缩历史失败: ${e.message}` })}\n\n`);
+        }
+        sendDone();
+    }
+}
+
 
 // Update chat route
 const PptxGenJS = require('pptxgenjs');
@@ -12622,6 +13549,11 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
+    if (chatId && String(message || '').trim().startsWith('/compact')) {
+        await handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config });
+        return;
+    }
+
     let context = "";
 
     if (uploadedFiles && uploadedFiles.length > 0) {
@@ -12644,7 +13576,27 @@ app.post('/api/chat', async (req, res) => {
     } else if (useStoryGlass) {
         await runStoryGlassLoop(res, { message, history, provider, model, ollamaUrl, config, chatId, assistantMsgId, resumeState, storyGlassPreferences });
     } else {
-        await runAgentLoop(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState, approvalDecision });
+        let mode = 'AGENT';
+        const hasTextFiles = uploadedFiles && uploadedFiles.length > 0 && uploadedFiles.some(f => !f.isImage && !(f.path && isImageFile(f.path)));
+        const forceAgent = resumeState || approvalDecision || useSd || hasTextFiles || useMemory;
+        
+        if (forceAgent) {
+            mode = 'AGENT';
+        } else if (isDeveloperAction(message)) {
+            mode = 'AGENT';
+            console.log(`[Router] Developer action/command query detected, fast routing to AGENT mode: "${message}"`);
+        } else if (isGreetingOrSimple(message)) {
+            mode = 'CHAT';
+            console.log(`[Router] Greeting/Simple query detected, fast routing to CHAT mode: "${message}"`);
+        } else {
+            mode = await classifyIntent({ message, provider, model, ollamaUrl, config });
+        }
+
+        if (mode === 'CHAT') {
+            await runChatLoop(res, { message, history, provider, model, ollamaUrl, chatId, assistantMsgId, uploadedFiles, config });
+        } else {
+            await runAgentLoop(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState, approvalDecision });
+        }
     }
 });
 
