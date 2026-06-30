@@ -55,7 +55,7 @@ const {
 } = require('./services/credibility');
 
 const app = express();
-const port = 5431;
+const port = 5480;
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
@@ -430,11 +430,10 @@ function evaluateTerminalPermission(command, permissionMode) {
     }
 
     const sandboxEscapePatterns = [
-        /(^|[\s("'`])\.\.[\\/]/i,
-        /(^|[\s("'`])[a-z]:[\\/]/i,
-        /(^|[\s("'`])\\\\/i,
-        /\bset-location\b.*(?:\.\.[\\/]|[a-z]:[\\/]|\\\\)/i,
-        /\bcd\b\s+(?:\.\.[\\/]|[a-z]:[\\/]|\\\\)/i,
+        /(^|[\s("'`])\.\.([\\/]|$|[\s"'`])/i,  // block any relative path traversal (e.g. .., ..\, ../)
+        /(^|[\s("'`])[a-z]:([\\/]|$|[\s"'`])/i, // block any drive letter path (e.g. c:, c:\, c:/)
+        /(^|[\s("'`])\\\\/i,                   // block UNC network paths
+        /\b(cd|set-location|sl)\b\s*(?:[\\/]|[a-z]:|~)/i, // block cd to root, drive, or home (e.g., cd/, cd \, cd ~)
     ];
 
     if (sandboxEscapePatterns.some(pattern => pattern.test(raw))) {
@@ -464,8 +463,18 @@ function evaluateTerminalPermission(command, permissionMode) {
         },
         {
             reasonKey: 'sandbox-terminal-script',
-            reason: 'This terminal command runs an inline script that may perform sensitive changes.',
-            pattern: /\b(node|python|python3|perl|ruby|php|powershell|pwsh)\b\s+(?:-e|--eval|-c|-command|-encodedcommand)\b/i,
+            reason: 'This terminal command runs a script or compiler that may perform sensitive changes.',
+            pattern: /\b(node|python|python3|perl|ruby|php|powershell|pwsh|cmd|sh|bash|zsh|gcc|g\+\+|clang|dotnet|csc|vbc)\b/i,
+        },
+        {
+            reasonKey: 'sandbox-terminal-env',
+            reason: 'This terminal command accesses environment variables which may expose sensitive user profile paths or credentials.',
+            pattern: /(\$home|\$env:[a-zA-Z_0-9]+)/i,
+        },
+        {
+            reasonKey: 'sandbox-terminal-dotnet',
+            reason: 'This terminal command uses .NET framework APIs which can bypass standard command restrictions.',
+            pattern: /\[[a-zA-Z0-9_.]*\b(io|net|reflection|directory|file|path|process|webclient|webrequest|httpclient)\b/i,
         },
     ];
 
@@ -8216,7 +8225,7 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
         platform: process.platform,
         cpu: `${sysDetails.cpuInfo.model} (${sysDetails.cpuInfo.cores} Cores)`,
         gpu: sysDetails.gpuInfo,
-        memory: `${sysDetails.memInfo.free} free / ${sysDetails.memInfo.total} total`,
+        memory: `${sysDetails.memInfo.total} total`,
         username: sysDetails.userInfo.username,
         paths: {
             desktop: sysDetails.userInfo.desktopPath,
@@ -8774,6 +8783,35 @@ ${partialAssistantText || '(empty partial output)'}`;
 
         if (toolMatches.length > 0) {
             invalidStructuredReplyCount = 0;
+
+            // Speculative parallel pre-fetching for slow network tools (search & browse)
+            const slowToolCache = new Map();
+            for (const match of toolMatches) {
+                const name = match.name.toLowerCase().trim();
+                if (name === 'search' || name === 'browse') {
+                    const cleanArg = (raw) => {
+                        let str = raw.trim();
+                        if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+                            str = str.slice(1, -1);
+                        }
+                        return str.replace(/\\(.)/g, '$1');
+                    };
+                    const arg = cleanArg(match.rawArgs);
+                    const cacheKey = `${name}:${arg}`;
+                    if (arg && !slowToolCache.has(cacheKey)) {
+                        if (name === 'search') {
+                            console.log(`[Agent] Speculatively pre-fetching search query: "${arg}"`);
+                            slowToolCache.set(cacheKey, searchWeb(arg).then(results => 
+                                results.length > 0 ? results.map(r => `### [${r.title}](${r.url})\n${r.content}`).join('\n\n') : "No search results found."
+                            ).catch(e => `Error: ${e.message}`));
+                        } else if (name === 'browse') {
+                            console.log(`[Agent] Speculatively pre-fetching browse URL: "${arg}"`);
+                            slowToolCache.set(cacheKey, crawlUrl(arg).catch(e => `Error: ${e.message}`));
+                        }
+                    }
+                }
+            }
+
             for (const match of toolMatches) {
                 if (aborted) return;
                 const toolNameRaw = match.name;
@@ -9020,11 +9058,23 @@ ${partialAssistantText || '(empty partial output)'}`;
                 let generatedFile = null;
                 try {
                     if (toolName === 'search') {
-                        const results = await searchWeb(args[0]);
-                        observation = results.length > 0 ? results.map(r => `### [${r.title}](${r.url})\n${r.content}`).join('\n\n') : "No search results found.";
+                        const cacheKey = `search:${args[0]}`;
+                        if (slowToolCache.has(cacheKey)) {
+                            console.log(`[Agent] Resolving search query "${args[0]}" from speculative pre-fetch cache`);
+                            observation = await slowToolCache.get(cacheKey);
+                        } else {
+                            const results = await searchWeb(args[0]);
+                            observation = results.length > 0 ? results.map(r => `### [${r.title}](${r.url})\n${r.content}`).join('\n\n') : "No search results found.";
+                        }
                     } else if (toolName === 'browse') {
                         const url = args[0];
-                        observation = await crawlUrl(url);
+                        const cacheKey = `browse:${url}`;
+                        if (slowToolCache.has(cacheKey)) {
+                            console.log(`[Agent] Resolving browse URL "${url}" from speculative pre-fetch cache`);
+                            observation = await slowToolCache.get(cacheKey);
+                        } else {
+                            observation = await crawlUrl(url);
+                        }
                     } else if (toolName === 'draw') {
                         const prompt = args[0];
                         const drawResult = await generateImageWithConfiguredProvider({
@@ -9775,78 +9825,6 @@ ${partialAssistantText || '(empty partial output)'}`;
                             if (!observation) observation = "(Knowledge base is currently empty)";
                         } catch (e) {
                             observation = `Error accessing knowledge base: ${e.message}`;
-                        }
-                    } else if (toolName === 'searchmemories') {
-                        try {
-                            const query = (args[0] || "").toLowerCase();
-                            if (!query) {
-                                observation = "Error: Please specify a search query.";
-                            } else {
-                                const files = await fs.readdir(MEMORIES_DIR);
-                                const results = [];
-                                for (const f of files) {
-                                    if (f.endsWith('.txt')) {
-                                        const content = await fs.readFile(path.join(MEMORIES_DIR, f), 'utf8');
-                                        const filename = f.replace('.txt', '').toLowerCase();
-                                        
-                                        // 检查文件名或内容是否匹配
-                                        if (filename.includes(query) || content.toLowerCase().includes(query)) {
-                                            const lines = content.split('\n');
-                                            const matches = lines.filter(l => l.toLowerCase().includes(query));
-                                            
-                                            if (matches.length > 0) {
-                                                results.push(`--- ${f} (Content Matches) ---\n${matches.join('\n')}`);
-                                            } else {
-                                                // 仅文件名匹配，提供预览
-                                                const preview = content.length > 200 ? content.substring(0, 200) + '...' : content;
-                                                results.push(`--- ${f} (Filename Match) ---\n${preview}`);
-                                            }
-                                        }
-                                    }
-                                }
-                                observation = results.length > 0 ? results.join('\n\n') : "No matches found in knowledge base.";
-                            }
-                        } catch (e) {
-                            observation = `Error searching knowledge base: ${e.message}`;
-                        }
-                    } else if (toolName === 'readmemory') {
-                        try {
-                            const filename = args[0];
-                            if (!filename) {
-                                observation = "Error: Please specify the filename to read.";
-                            } else {
-                                const filePath = path.join(MEMORIES_DIR, filename.endsWith('.txt') ? filename : `${filename}.txt`);
-                                if (await fs.exists(filePath)) {
-                                    observation = await fs.readFile(filePath, 'utf8');
-                                } else {
-                                    observation = `Error: Memory item '${filename}' not found.`;
-                                }
-                            }
-                        } catch (e) {
-                            observation = `Error reading memory: ${e.message}`;
-                        }
-                    } else if (toolName === 'savememory') {
-                        try {
-                            const name = args[0];
-                            const content = args[1];
-                            if (!name || !content) {
-                                observation = "Error: 'name' and 'content' are required for saving memory.";
-                            } else {
-                                const fileName = `${name.replace(/[\\/:*?"<>|]/g, '_')}.txt`;
-                                const filePath = path.join(MEMORIES_DIR, fileName);
-                                const exists = await fs.exists(filePath);
-                                if (exists) {
-                                    // Append mode
-                                    const oldContent = await fs.readFile(filePath, 'utf8');
-                                    await fs.writeFile(filePath, `${oldContent}\n\n[Updated ${new Date().toLocaleString()}]\n${content}`, 'utf8');
-                                    observation = `Success: Memory '${name}' updated.`;
-                                } else {
-                                    await fs.writeFile(filePath, content, 'utf8');
-                                    observation = `Success: Memory '${name}' saved.`;
-                                }
-                            }
-                        } catch (e) {
-                            observation = `Error saving memory: ${e.message}`;
                         }
                     } else if (toolName.startsWith('mcp_')) {
                         // Protocol: mcp_serverName_toolName

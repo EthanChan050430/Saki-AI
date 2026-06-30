@@ -17,6 +17,39 @@ function getLocalBrowserPath() {
     return null;
 }
 
+let sharedBrowser = null;
+let launchingPromise = null;
+
+async function getSharedBrowser(browserPath) {
+    if (sharedBrowser) return sharedBrowser;
+    if (launchingPromise) return launchingPromise;
+
+    launchingPromise = (async () => {
+        try {
+            console.log(`[Crawler] Launching shared browser: ${browserPath}`);
+            const browser = await puppeteer.launch({
+                executablePath: browserPath,
+                headless: "new",
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
+            });
+            sharedBrowser = browser;
+            
+            browser.on('disconnected', () => {
+                console.log('[Crawler] Shared browser disconnected.');
+                sharedBrowser = null;
+                launchingPromise = null;
+            });
+            
+            return browser;
+        } catch (e) {
+            launchingPromise = null;
+            throw e;
+        }
+    })();
+    
+    return launchingPromise;
+}
+
 /**
  * Universal crawler using Puppeteer-core for JS rendering.
  */
@@ -33,29 +66,24 @@ async function crawlUrl(url) {
     // If no local browser found, fallback to simple axios (old logic)
     if (!browserPath) {
         console.warn("[Crawler] No local Chrome/Edge found. Falling back to static crawler.");
-        return await crawlUrlStatic(url);
+        return await crawlUrlStatic(targetUrl);
     }
 
-    let browser;
+    let page = null;
     try {
-        console.log(`[Crawler] Fetching (JS Render): ${url}`);
-        browser = await puppeteer.launch({
-            executablePath: browserPath,
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
-        });
-
-        const page = await browser.newPage();
+        console.log(`[Crawler] Fetching (JS Render): ${targetUrl}`);
+        const browser = await getSharedBrowser(browserPath);
+        page = await browser.newPage();
         
         // Set user agent to avoid bot detection
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
         // Wait for network to be idle (max 45s, fall back to domcontentloaded if needed)
         try {
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
         } catch (e) {
-            console.warn(`[Crawler] networkidle2 timeout, trying domcontentloaded: ${url}`);
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(e2 => {
+            console.warn(`[Crawler] networkidle2 timeout, trying domcontentloaded: ${targetUrl}`);
+            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(e2 => {
                 console.error(`[Crawler] Second attempt failed: ${e2.message}`);
                 throw e2; // Bubble up to trigger static fallback
             });
@@ -107,9 +135,15 @@ async function crawlUrl(url) {
     } catch (error) {
         console.error(`[Crawler] Puppeteer error: ${error.message}`);
         // Attempt static fallback on browser failure
-        return await crawlUrlStatic(url);
+        return await crawlUrlStatic(targetUrl);
     } finally {
-        if (browser) await browser.close();
+        if (page) {
+            try {
+                await page.close();
+            } catch (e) {
+                console.error(`[Crawler] Failed to close page: ${e.message}`);
+            }
+        }
     }
 }
 

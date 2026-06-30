@@ -98,15 +98,15 @@ function resolveHttpsConfig() {
 const httpsConfig = resolveHttpsConfig()
 const proxyConfig = {
   '/api': {
-    target: 'http://127.0.0.1:5431',
+    target: 'http://127.0.0.1:5480',
     changeOrigin: true,
   },
   '/uploads': {
-    target: 'http://127.0.0.1:5431',
+    target: 'http://127.0.0.1:5480',
     changeOrigin: true,
   },
   '/files': {
-    target: 'http://127.0.0.1:5431',
+    target: 'http://127.0.0.1:5480',
     changeOrigin: true,
   },
 }
@@ -116,14 +116,14 @@ export default defineConfig({
   server: {
     https: httpsConfig,
     host: '0.0.0.0',
-    port: 5432,
+    port: 5482,
     strictPort: false,
     proxy: proxyConfig,
   },
   preview: {
     https: httpsConfig,
     host: '0.0.0.0',
-    port: 5432,
+    port: 5482,
     proxy: proxyConfig,
   },
 })

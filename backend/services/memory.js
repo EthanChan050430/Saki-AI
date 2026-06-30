@@ -718,6 +718,12 @@ class MemoryService {
         }
         await this.ensureWorkspaceMemoryFiles();
         await this.importLegacyTxtMemories();
+        
+        // Pre-warm the embedding model asynchronously in the background so it is ready
+        this.getEmbeddingExtractor().catch(err => {
+            console.warn('[Memory] Failed to pre-warm embedding model:', err.message);
+        });
+
         this.initialized = true;
     }
 
