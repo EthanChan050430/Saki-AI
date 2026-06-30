@@ -8308,13 +8308,13 @@ ${persona}
 - OS: ${envInfo.os} | CWD: ${envInfo.cwd} | Shell: ${envInfo.shell}
 - Workspace Files Dir: ${FILES_DIR}
 
-## Tool Usage
+## Tool Usage & Output Contract
+- Use respond(...) to reply to the user. Do NOT write files (e.g. writeFile) unless the user explicitly asks to save to a file.
+- NEVER use placeholders (like "content...", "[code]", "TODO") in tool calls; write the actual final content.
 - You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
 - Tool calls MUST start with \`Tool:\` on a new line. Do not mention them in conversational text.
-- Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
-
-## Output Contract
 - Every turn MUST end with either a \`Tool:\` call or a final \`Tool: respond("...")\`. Never answer in plain text outside \`Tool: respond(...)\`.
+- Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
 
 ## Available tools:
 ${searchEnabled ? '- search(query): Search the web.' : ''}
