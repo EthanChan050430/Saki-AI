@@ -8588,6 +8588,10 @@ ${partialAssistantText || '(empty partial output)'}`;
                                         // "Tool:" is standard, "工具:" is sometimes output by multilingual models.
                                         if (assistantResponse.match(/(?:Tool|工具)[:：]/i)) {
                                             hasHitTool = true;
+                                        } else {
+                                            if (!res.writableEnded) {
+                                                res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
+                                            }
                                         }
                                     }
                                 }
