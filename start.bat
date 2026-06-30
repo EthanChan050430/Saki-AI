@@ -16,7 +16,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [1/1] Starting Saki AI (backend + normal web[5432])...
+echo [1/1] Starting Saki AI (backend + normal web[5482])...
 echo Tip: First startup may take longer while dependencies are installed.
 echo.
 
@@ -55,8 +55,8 @@ if not exist "frontend\node_modules" (
 echo.
 echo ==========================================
 echo    Starting normal web mode only
-echo    Backend:    http://localhost:5431
-echo    Normal web: http://localhost:5432
+echo    Backend:    http://localhost:5480
+echo    Normal web: http://localhost:5482
 echo ==========================================
 echo.
 

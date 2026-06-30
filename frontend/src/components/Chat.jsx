@@ -14,6 +14,7 @@ import StoryGlassView from './StoryGlassView';
 import StoryGlassOverlay from './StoryGlassOverlay';
 import Mermaid from './Mermaid';
 import DiffModal from './DiffModal';
+import AiCustomizationModal from './AiCustomizationModal';
 import botAvatar from '../head.png';
 
 const FEATURE_TOOLTIP_THEMES = {
@@ -1653,6 +1654,7 @@ export default function Chat({
   onDeleteMessage,
   onDeleteStoryGlassRecord,
   onEditMessage,
+  onUpdateMessageText,
   onOpenFileManager,
   onOpenSettings,
   externalFile,
@@ -1679,6 +1681,9 @@ export default function Chat({
   const recognitionRef = useRef(null);
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [readingIdx, setReadingIdx] = useState(null);
+  const [editingMsgIdx, setEditingMsgIdx] = useState(null);
+  const [editingMsgText, setEditingMsgText] = useState('');
+  const [diagnosticsMsg, setDiagnosticsMsg] = useState(null);
   const [files, setFiles] = useState([]);
   const [useWeb, setUseWeb] = useState(false);
   const [useMcp, setUseMcp] = useState(false);
@@ -1868,6 +1873,7 @@ export default function Chat({
   const [showSovitsStatus, setShowSovitsStatus] = useState(false);
   const [diffModalFile, setDiffModalFile] = useState(null);
   const [isDiffModalOpen, setIsDiffModalOpen] = useState(false);
+  const [isAiCustomizationOpen, setIsAiCustomizationOpen] = useState(false);
   const [isTodoCollapsed, setIsTodoCollapsed] = useState(false);
   const prevMessageCountRef = useRef(0);
   const activeTodo = getActiveTaskTodo(messages, isGenerating, currentPendingRequest);
@@ -2674,7 +2680,11 @@ export default function Chat({
         {messages.length === 0 && (
           <div className="h-full flex items-center justify-center">
             <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4 border border-gray-100">
+              <div 
+                onClick={() => setIsAiCustomizationOpen(true)}
+                className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4 border border-gray-100 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-md flex items-center justify-center bg-white"
+                title={t('edit_ai_settings', '编辑 AI 设定')}
+              >
                 <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
               </div>
               <h2 className="text-xl font-semibold text-gray-800">{t('welcome_title')}</h2>
@@ -2703,7 +2713,11 @@ export default function Chat({
           if (isStoryGlassOverlayAssistant) {
             return (
               <div key={m.id || idx} className="flex gap-4">
-                <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200">
+                <div 
+                  onClick={() => setIsAiCustomizationOpen(true)}
+                  className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white"
+                  title={t('edit_ai_settings', '编辑 AI 设定')}
+                >
                   <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
                 </div>
                 <StoryGlassArchiveCard
@@ -2733,143 +2747,204 @@ export default function Chat({
           return (
             <div key={m.id || idx} className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : ''}`}>
               {isAssistant && (
-                <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200">
+                <div 
+                  onClick={() => setIsAiCustomizationOpen(true)}
+                  className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white"
+                  title={t('edit_ai_settings', '编辑 AI 设定')}
+                >
                   <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
                 </div>
               )}
-              <div className={`relative max-w-[85%] group/message ${m.role === 'user' ? 'order-1' : ''}`}>
-                {!hideToolbar && (
+              <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : 'max-w-[85%]'} group/message ${m.role === 'user' ? 'order-1' : ''}`}>
+                {!(hideToolbar || editingMsgIdx === idx) && (
                   <MessageBubbleToolbar
                     align={m.role === 'user' ? 'end' : 'start'}
+                    isAssistant={isAssistant}
+                    message={m}
                     canRedo={isAssistant}
-                    canEdit={m.role === 'user'}
+                    canEdit={true}
                     copied={copiedIdx === idx}
                     speaking={readingIdx === idx}
                     onCopy={() => copyToClipboard(idx, m)}
                     onSpeak={() => speakText(idx, m)}
                     onRedo={() => handleRedoAction(idx)}
-                    onEdit={() => onEditMessage?.(idx)}
+                    onEdit={() => {
+                      if (m.role === 'user') {
+                        onEditMessage?.(idx);
+                      } else {
+                        setEditingMsgIdx(idx);
+                        const getMessageEditText = (msg) => {
+                          if (msg.content) return msg.content;
+                          if (Array.isArray(msg.parts)) {
+                            return msg.parts
+                              .filter(p => p.type === 'text')
+                              .map(p => p.content)
+                              .join('\n');
+                          }
+                          return '';
+                        };
+                        setEditingMsgText(getMessageEditText(m));
+                      }
+                    }}
                     onDelete={() => onDeleteMessage?.(idx)}
+                    onOpenDiagnostics={() => setDiagnosticsMsg(m)}
                     labels={{
                       copy: copiedIdx === idx ? t('copied') : t('copy'),
                       read: readingIdx === idx ? t('listening') : t('listen'),
                       redo: t('redo'),
                       edit: getLocalText('编辑', 'Edit'),
-                      delete: t('delete')
+                      delete: t('delete'),
+                      diagnostics: getLocalText('查看诊断详情', 'View Diagnostics')
                     }}
                   />
                 )}
 
-                <div className={`rounded-2xl p-4 transition-all hover:translate-y-[-1px] hover:shadow-lg ${
+                <div className={`rounded-2xl p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
                   m.role === 'user'
                     ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-md rounded-tr-none rounded-2xl p-4'
                     : showPendingState
                       ? ''
                       : 'bg-white/95 border border-gray-100 shadow-sm backdrop-blur-md rounded-tl-none rounded-2xl p-4'
                 }`}>
-                  {isAssistant && (
-                    <div className="flex flex-col">
-                      {showPendingState ? (
-                        <AssistantPendingCard
-                          mode={m.placeholderMode}
-                          status={m.status}
-                          isGenerating={isGenerating && idx === messages.length - 1}
-                          getLocalText={getLocalText}
+                  {editingMsgIdx === idx ? (
+                    <div className="flex flex-col gap-4 pointer-events-auto w-full animate-in fade-in duration-200">
+                      <div className="relative rounded-2xl border border-slate-200/80 bg-slate-50/50 p-1 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)] backdrop-blur-sm focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+                        <textarea
+                          value={editingMsgText}
+                          onChange={(e) => setEditingMsgText(e.target.value)}
+                          className="w-full min-h-[160px] resize-y rounded-xl bg-transparent px-4 py-3 pb-8 text-sm font-normal leading-relaxed text-slate-700 placeholder-slate-400 focus:outline-none"
+                          placeholder={getLocalText("编辑消息内容...", "Edit message content...")}
+                          autoFocus
                         />
-                      ) : (
-                        <>
-                          {(m.parts || []).map((part, i) => (
-                            <React.Fragment key={i}>
-                              {part.type === 'action' && (
-                                <TerminalBlock
-                                  action={part.data}
-                                  observation={part.observation}
-                                  fileMetadata={part.fileMetadata}
-                                  onViewChanges={(data) => {
-                                    setDiffModalFile(data);
-                                    setIsDiffModalOpen(true);
-                                  }}
-                                  onRollback={handleRollback}
-                                  onSkipAction={onSkipAction}
-                                />
-                              )}
-                              {part.type === 'text' && (
-                                <MessageContent
-                                  content={part.content}
-                                  isGenerating={isGenerating}
-                                  onOpenSettings={onOpenSettings}
-                                />
-                              )}
-                            </React.Fragment>
-                          ))}
-                          {m.deepReadingData && (
-                            <div className="mt-4 w-full">
-                              <DeepReadingView data={m.deepReadingData} isEmbedded={true} />
-                            </div>
-                          )}
-                          {m.pptData && (
-                            <div className="mt-4 w-full">
-                              <PPTView data={m.pptData} isEmbedded={true} />
-                            </div>
-                          )}
-                          {m.credibilityCheckData && (
-                            <div className="mt-4 w-full">
-                              <CredibilityCheckView data={m.credibilityCheckData} isEmbedded={true} />
-                            </div>
-                          )}
-                          {m.storyGlassData && (
-                            <div className="mt-4 w-full">
-                              <StoryGlassView
-                                data={m.storyGlassData}
-                                isEmbedded={true}
-                                onRemix={(action) => handleStoryGlassRemix(m.storyGlassData, action)}
-                                remixActions={STORY_GLASS_REMIX_ACTIONS}
-                              />
-                            </div>
-                          )}
-                          {visibleGeneratedFiles.length > 0 && (
-                            <div className="mt-4 flex flex-col gap-2">
-                              {visibleGeneratedFiles.map((file, fileIdx) => (
-                                file.kind === 'music-composition' ? (
-                                  <MusicFileCard
-                                    key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
-                                    file={file}
-                                    onDownload={handleGeneratedFileDownload}
-                                  />
-                                ) : (
-                                  <button
-                                    key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
-                                    onClick={() => handleGeneratedFileDownload(file)}
-                                    className="w-full flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/80 px-3 py-3 text-left transition-all hover:bg-blue-100/80 hover:border-blue-200"
-                                    title={file.filePath || file.relativePath || file.name}
-                                  >
-                                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm shrink-0">
-                                      <FileText size={18} />
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="truncate text-sm font-semibold text-gray-800">
-                                        {file.name || file.relativePath || file.filePath}
-                                      </div>
-                                      <div className="truncate text-[11px] text-gray-500">
-                                        {file.relativePath || file.filePath}
-                                      </div>
-                                    </div>
-                                    <div className="shrink-0 flex items-center gap-2 text-blue-600">
-                                      {file.sizeLabel && (
-                                        <span className="text-[11px] font-semibold text-blue-500">{file.sizeLabel}</span>
-                                      )}
-                                      <Download size={16} />
-                                    </div>
-                                  </button>
-                                )
-                              ))}
-                            </div>
-                          )}
-                        </>
-                      )}
+                        <div className="absolute bottom-2.5 right-4 text-[9px] font-semibold text-slate-400 font-mono pointer-events-none select-none">
+                          {estimateMessageTokens({ content: editingMsgText })} tokens
+                        </div>
+                      </div>
+                      <div className="flex justify-end items-center gap-2.5">
+                        <button
+                          onClick={() => setEditingMsgIdx(null)}
+                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 active:scale-98 transition-all shadow-sm"
+                        >
+                          {getLocalText("取消", "Cancel")}
+                        </button>
+                        <button
+                          onClick={() => {
+                            onUpdateMessageText?.(idx, editingMsgText);
+                            setEditingMsgIdx(null);
+                          }}
+                          className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:from-blue-600 hover:to-indigo-700 active:scale-98 transition-all shadow-md shadow-blue-500/10"
+                        >
+                          {getLocalText("保存修改", "Save Changes")}
+                        </button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {isAssistant && (
+                        <div className="flex flex-col">
+                          {showPendingState ? (
+                            <AssistantPendingCard
+                              mode={m.placeholderMode}
+                              status={m.status}
+                              isGenerating={isGenerating && idx === messages.length - 1}
+                              getLocalText={getLocalText}
+                            />
+                          ) : (
+                            <>
+                              {(m.parts || []).map((part, i) => (
+                                <React.Fragment key={i}>
+                                  {part.type === 'action' && (
+                                    <TerminalBlock
+                                      action={part.data}
+                                      observation={part.observation}
+                                      fileMetadata={part.fileMetadata}
+                                      onViewChanges={(data) => {
+                                        setDiffModalFile(data);
+                                        setIsDiffModalOpen(true);
+                                      }}
+                                      onRollback={handleRollback}
+                                      onSkipAction={onSkipAction}
+                                    />
+                                  )}
+                                  {part.type === 'text' && (
+                                    <MessageContent
+                                      content={part.content}
+                                      isGenerating={isGenerating}
+                                      onOpenSettings={onOpenSettings}
+                                    />
+                                  )}
+                                </React.Fragment>
+                              ))}
+                              {m.deepReadingData && (
+                                <div className="mt-4 w-full">
+                                  <DeepReadingView data={m.deepReadingData} isEmbedded={true} />
+                                </div>
+                              )}
+                              {m.pptData && (
+                                <div className="mt-4 w-full">
+                                  <PPTView data={m.pptData} isEmbedded={true} />
+                                </div>
+                              )}
+                              {m.credibilityCheckData && (
+                                <div className="mt-4 w-full">
+                                  <CredibilityCheckView data={m.credibilityCheckData} isEmbedded={true} />
+                                </div>
+                              )}
+                              {m.storyGlassData && (
+                                <div className="mt-4 w-full">
+                                  <StoryGlassView
+                                    data={m.storyGlassData}
+                                    isEmbedded={true}
+                                    onRemix={(action) => handleStoryGlassRemix(m.storyGlassData, action)}
+                                    remixActions={STORY_GLASS_REMIX_ACTIONS}
+                                  />
+                                </div>
+                              )}
+                              {visibleGeneratedFiles.length > 0 && (
+                                <div className="mt-4 flex flex-col gap-2">
+                                  {visibleGeneratedFiles.map((file, fileIdx) => (
+                                    file.kind === 'music-composition' ? (
+                                      <MusicFileCard
+                                        key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
+                                        file={file}
+                                        onDownload={handleGeneratedFileDownload}
+                                      />
+                                    ) : (
+                                      <button
+                                        key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
+                                        onClick={() => handleGeneratedFileDownload(file)}
+                                        className="w-full flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/80 px-3 py-3 text-left transition-all hover:bg-blue-100/80 hover:border-blue-200"
+                                        title={file.filePath || file.relativePath || file.name}
+                                      >
+                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm shrink-0">
+                                          <FileText size={18} />
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate text-sm font-semibold text-gray-800">
+                                            {file.name || file.relativePath || file.filePath}
+                                          </div>
+                                          <div className="truncate text-[11px] text-gray-500">
+                                            {file.relativePath || file.filePath}
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0 flex items-center gap-2 text-blue-600">
+                                          {file.sizeLabel && (
+                                            <span className="text-[11px] font-semibold text-blue-500">{file.sizeLabel}</span>
+                                          )}
+                                          <Download size={16} />
+                                        </div>
+                                      </button>
+                                    )
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {m.role === 'user' && <div className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</div>}
+                    </>
                   )}
-                  {m.role === 'user' && <div className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</div>}
                   {m.files && m.files.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {m.files.map((f, i) => (
@@ -3535,6 +3610,21 @@ export default function Chat({
         fileMetadata={diffModalFile}
         onRollback={handleRollback}
       />
+
+      <AiCustomizationModal
+        isOpen={isAiCustomizationOpen}
+        onClose={() => setIsAiCustomizationOpen(false)}
+        config={config}
+        setConfig={setConfig}
+        backendUrl={backendUrl}
+      />
+
+      <MessageDiagnosticsModal
+        isOpen={Boolean(diagnosticsMsg)}
+        onClose={() => setDiagnosticsMsg(null)}
+        message={diagnosticsMsg}
+        getLocalText={getLocalText}
+      />
     </div>
   );
 }
@@ -3629,8 +3719,38 @@ function TaskTodoPanel({ todo, collapsed, onToggle, getLocalText }) {
   );
 }
 
+function estimateMessageTokens(message) {
+  if (!message) return 0;
+  let text = '';
+  if (Array.isArray(message.parts)) {
+    message.parts.forEach(part => {
+      if (part.type === 'text') {
+        text += part.content || '';
+      } else if (part.type === 'action') {
+        text += JSON.stringify(part.data || '') + (part.observation || '');
+      }
+    });
+  } else if (message.content) {
+    text = message.content;
+  }
+  
+  if (!text) return 0;
+
+  const englishWords = text.match(/[a-zA-Z0-9_]+/g) || [];
+  const chineseChars = text.match(/[\u4e00-\u9fa5]/g) || [];
+  const otherChars = text.length - (englishWords.join('').length + chineseChars.length);
+
+  return Math.ceil(
+    (chineseChars.length * 1.2) + 
+    (englishWords.length * 1.3) + 
+    (otherChars * 0.5)
+  ) || 1;
+}
+
 function MessageBubbleToolbar({
   align = 'start',
+  isAssistant,
+  message,
   canRedo,
   canEdit,
   copied,
@@ -3640,15 +3760,225 @@ function MessageBubbleToolbar({
   onRedo,
   onEdit,
   onDelete,
-  labels
+  labels,
+  onOpenDiagnostics
 }) {
+  const tokens = isAssistant ? estimateMessageTokens(message) : 0;
+
   return (
     <div className={`pointer-events-none absolute -top-4 z-10 flex w-max max-w-[calc(100vw-5rem)] gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-3' : 'left-3'}`}>
+      {isAssistant && tokens > 0 && (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDiagnostics?.();
+          }}
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded-xl px-2 py-1.5 text-[10px] font-semibold text-gray-500 hover:bg-gray-100 hover:text-slate-800 transition-all active:scale-95 cursor-pointer"
+          title={labels.diagnostics || "查看消息诊断详细日志"}
+        >
+          <svg width="14" height="14" className="transform -rotate-90">
+            {/* Background Circle */}
+            <circle cx="7" cy="7" r="5.5" fill="transparent" stroke="#e2e8f0" strokeWidth="1.5" />
+            {/* Foreground Circle */}
+            <circle 
+              cx="7" 
+              cy="7" 
+              r="5.5" 
+              fill="transparent" 
+              stroke={tokens > 1500 ? "#f43f5e" : tokens > 500 ? "#eab308" : "#0d9488"} 
+              strokeWidth="1.5" 
+              strokeDasharray="34.5"
+              strokeDashoffset={34.5 - (34.5 * Math.min(1, tokens / 2000))}
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="text-[10px] text-gray-500 font-mono">{tokens}</span>
+        </button>
+      )}
       <ToolbarButton onClick={onCopy} label={labels.copy} icon={copied ? Check : Copy} />
       <ToolbarButton onClick={onSpeak} label={labels.read} icon={Volume2} active={speaking} />
       {canRedo && <ToolbarButton onClick={onRedo} label={labels.redo} icon={RotateCcw} />}
       {canEdit && <ToolbarButton onClick={onEdit} label={labels.edit} icon={PencilLine} />}
       <ToolbarButton onClick={onDelete} label={labels.delete} icon={Trash2} destructive />
+    </div>
+  );
+}
+
+function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
+  if (!isOpen || !message) return null;
+
+  let timeStr = "";
+  if (Number.isFinite(message.id)) {
+    timeStr = new Date(message.id).toLocaleString();
+  } else {
+    timeStr = new Date().toLocaleString();
+  }
+
+  let text = '';
+  const actionParts = [];
+  if (Array.isArray(message.parts)) {
+    message.parts.forEach(part => {
+      if (part.type === 'text') {
+        text += part.content || '';
+      } else if (part.type === 'action') {
+        actionParts.push(part);
+      }
+    });
+  } else if (message.content) {
+    text = message.content;
+  }
+
+  const englishWords = text.match(/[a-zA-Z0-9_]+/g) || [];
+  const chineseChars = text.match(/[\u4e00-\u9fa5]/g) || [];
+  const otherChars = text.length - (englishWords.join('').length + chineseChars.length);
+  const estimatedTokens = Math.ceil(
+    (chineseChars.length * 1.2) + 
+    (englishWords.length * 1.3) + 
+    (otherChars * 0.5)
+  ) || 1;
+
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-auto">
+      <div className="bg-white border border-slate-100 rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+              <Brain size={18} />
+            </div>
+            <div>
+              <h3 className="text-slate-800 font-bold text-sm">{getLocalText('消息运行诊断', 'Message Diagnostics')}</h3>
+              <p className="text-[10px] text-slate-400 font-semibold">{getLocalText('查看该条回复的执行指标与工具日志', 'Execution stats and tool logs')}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6 space-y-6 custom-scrollbar text-left">
+          {/* Diagnostic Metrics Grid */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex flex-col justify-center">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{getLocalText('生成时间', 'Creation Time')}</span>
+              <span className="text-xs font-bold text-slate-700">{timeStr}</span>
+            </div>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex flex-col justify-center">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{getLocalText('生成总用时', 'Generation Duration')}</span>
+              <span className="text-xs font-bold text-slate-700">
+                {message.generationDurationMs 
+                  ? `${(message.generationDurationMs / 1000).toFixed(2)} 秒` 
+                  : getLocalText('未知 (历史消息)', 'N/A (Historical)')}
+              </span>
+            </div>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex items-center gap-3">
+              <div className="relative flex items-center justify-center shrink-0">
+                <svg width="36" height="36" className="transform -rotate-90">
+                  <circle cx="18" cy="18" r="14" fill="transparent" stroke="#f1f5f9" strokeWidth="2.5" />
+                  <circle 
+                    cx="18" 
+                    cy="18" 
+                    r="14" 
+                    fill="transparent" 
+                    stroke={estimatedTokens > 1500 ? "#f43f5e" : estimatedTokens > 500 ? "#eab308" : "#0d9488"} 
+                    strokeWidth="2.5" 
+                    strokeDasharray="87.9"
+                    strokeDashoffset={87.9 - (87.9 * Math.min(1, estimatedTokens / 2000))}
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span className="absolute text-[8px] font-bold text-slate-600">{estimatedTokens}</span>
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider truncate">{getLocalText('Token 估算', 'Est. Tokens')}</span>
+                <span className="text-[9px] font-semibold text-slate-500 mt-0.5 truncate">
+                  {getLocalText(`中 ${chineseChars.length} / 英 ${englishWords.length}`, `CN ${chineseChars.length} / EN ${englishWords.length}`)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Execution Logs */}
+          <div className="space-y-3">
+            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+              <Terminal size={12} className="text-slate-400" />
+              {getLocalText('运行状态与工具调用日志', 'Operation & Tool Invocation Logs')}
+            </h4>
+
+            {actionParts.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200/80 p-8 text-center bg-slate-50/20">
+                <p className="text-xs font-semibold text-slate-400">
+                  {getLocalText('纯文本回答，此阶段没有触发工具调用。', 'Pure text reply. No tools were invoked.')}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {actionParts.map((part, index) => {
+                  const action = part.data || {};
+                  const toolName = action.tool || action.action || 'unknown';
+                  const args = action.args || action.params || {};
+                  const hasError = String(part.observation || '').startsWith('Error:');
+
+                  return (
+                    <div key={index} className="rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-sm">
+                      {/* Log Entry Header */}
+                      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50/50 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono font-bold text-slate-400">#{index + 1}</span>
+                          <span className="font-mono text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+                            {toolName}
+                          </span>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold ${
+                          hasError ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'
+                        }`}>
+                          {hasError ? getLocalText('失败', 'Failed') : getLocalText('成功', 'Success')}
+                        </span>
+                      </div>
+
+                      {/* Log Details */}
+                      <div className="p-4 space-y-3 text-[11px] font-normal">
+                        {/* Arguments */}
+                        <div>
+                          <div className="text-[9px] font-semibold text-slate-400 mb-1">{getLocalText('调用参数：', 'Arguments:')}</div>
+                          <pre className="rounded-xl bg-slate-900 p-3 text-[10px] text-emerald-400 overflow-x-auto font-mono max-h-[100px] custom-scrollbar">
+                            {JSON.stringify(args, null, 2)}
+                          </pre>
+                        </div>
+
+                        {/* Observation */}
+                        {part.observation && (
+                          <div>
+                            <div className="text-[9px] font-semibold text-slate-400 mb-1">{getLocalText('输出结果 / 日志：', 'Observation / Output:')}</div>
+                            <pre className="rounded-xl bg-slate-950 p-3 text-[10px] text-slate-300 overflow-x-auto font-mono max-h-[140px] custom-scrollbar whitespace-pre-wrap">
+                              {String(part.observation).substring(0, 1500)}
+                              {String(part.observation).length > 1500 ? '\n... (truncated)' : ''}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-slate-100 flex justify-end bg-slate-50/30">
+          <button
+            onClick={onClose}
+            className="rounded-full bg-slate-800 text-white px-5 py-1.5 text-xs font-bold hover:bg-slate-700 active:scale-98 transition-all shadow-sm"
+          >
+            {getLocalText('关闭', 'Close')}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

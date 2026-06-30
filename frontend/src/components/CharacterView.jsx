@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useDragControls, AnimatePresence } from 'framer-motion';
 import { Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -44,6 +44,7 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
   const [isDesktopHovered, setIsDesktopHovered] = useState(false);
   const [displayedImageSrc, setDisplayedImageSrc] = useState(expressionUrl);
+  const [isCollapsedHovered, setIsCollapsedHovered] = useState(false);
   const clickTimerRef = useRef(null);
   const clickCountRef = useRef(0);
   const animationRequestRef = useRef(null);
@@ -52,6 +53,58 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
   const lastRenderedFrameRef = useRef(-1);
   const activeAnimationTypeRef = useRef(null);
   const idleVariantTimerRef = useRef(null);
+
+  // Long-press to drag logic for collapsed state
+  const dragControls = useDragControls();
+  const longPressTimerRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const hasMovedRef = useRef(false);
+  const startPointerRef = useRef({ x: 0, y: 0 });
+
+  const handlePointerDown = (event) => {
+    // Only handle primary click / touch
+    if (event.button !== 0 && event.button !== undefined) return;
+    
+    isDraggingRef.current = false;
+    hasMovedRef.current = false;
+    startPointerRef.current = { x: event.clientX, y: event.clientY };
+
+    longPressTimerRef.current = setTimeout(() => {
+      isDraggingRef.current = true;
+      dragControls.start(event);
+    }, 500);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!startPointerRef.current) return;
+    const dx = event.clientX - startPointerRef.current.x;
+    const dy = event.clientY - startPointerRef.current.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Cancel long press timer if the user moves their pointer significantly
+    if (distance > 10) {
+      hasMovedRef.current = true;
+      if (!isDraggingRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+    }
+  };
+
+  const handlePointerUp = () => {
+    clearTimeout(longPressTimerRef.current);
+    // Expand only if the user didn't drag and didn't swipe/move significantly
+    if (!isDraggingRef.current && !hasMovedRef.current) {
+      setIsOpen(true);
+    }
+    isDraggingRef.current = false;
+    hasMovedRef.current = false;
+  };
+
+  const handlePointerCancel = () => {
+    clearTimeout(longPressTimerRef.current);
+    isDraggingRef.current = false;
+    hasMovedRef.current = false;
+  };
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -83,6 +136,7 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
       if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
       if (idleVariantTimerRef.current) clearTimeout(idleVariantTimerRef.current);
       if (animationRequestRef.current) cancelAnimationFrame(animationRequestRef.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       animationRunIdRef.current += 1;
       releaseAllAnimationPlaybackFrames();
     };
@@ -242,7 +296,7 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
   const CharacterDisplay = ({ compact = false, mobile = false }) => (
     <div
       className={`relative ${
-        compact ? 'h-[94px] w-[94px]' : mobile ? 'h-[460px] w-full' : 'h-[590px] w-full'
+        compact ? 'h-[94px] w-[94px] pointer-events-none' : mobile ? 'h-[460px] w-full' : 'h-[590px] w-full'
       } bg-contain bg-center bg-no-repeat`}
       style={!compact ? { backgroundImage: `url(${phoneUrl})` } : undefined}
     >
@@ -251,22 +305,22 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
           <img src="/assets/angry_qipao.png" alt="Angry" className="h-16 w-16 object-contain" />
         </div>
       )}
-      <div className={`absolute inset-0 flex items-center justify-center overflow-hidden ${compact ? '' : 'pointer-events-none'}`}>
+      <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
         <img
           src={displayedImageSrc}
           alt="Character"
           className={
             compact
-              ? 'h-[86%] w-auto object-contain drop-shadow-xl'
+              ? 'h-[86%] w-auto object-contain drop-shadow-xl pointer-events-none'
               : mobile
-                ? 'pointer-events-auto max-h-[38%] w-auto scale-[1.1] transform object-contain'
-                : 'pointer-events-auto max-h-[46%] w-auto scale-[1.28] transform object-contain'
+                ? 'pointer-events-auto max-h-[38%] w-auto scale-[1.1] transform object-contain cursor-pointer'
+                : 'pointer-events-auto max-h-[46%] w-auto scale-[1.28] transform object-contain cursor-pointer'
           }
           decoding="sync"
           loading="eager"
           fetchpriority="high"
           draggable={false}
-          onClick={handleCharacterTap}
+          onClick={!compact ? handleCharacterTap : undefined}
           onError={(event) => {
             event.target.src = '/assets/expression/normal.png';
           }}
@@ -279,22 +333,48 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
     return (
       <motion.div
         drag
+        dragListener={isOpen}
+        dragControls={dragControls}
         dragMomentum={false}
+        onPointerDown={!isOpen ? handlePointerDown : undefined}
+        onPointerMove={!isOpen ? handlePointerMove : undefined}
+        onPointerUp={!isOpen ? handlePointerUp : undefined}
+        onPointerCancel={!isOpen ? handlePointerCancel : undefined}
+        onMouseEnter={!isOpen ? () => setIsCollapsedHovered(true) : undefined}
+        onMouseLeave={!isOpen ? () => setIsCollapsedHovered(false) : undefined}
         className={`fixed bottom-24 right-4 z-[100] ${isOpen ? 'w-40' : 'w-[94px]'} touch-none`}
         data-onboarding-id="character-view"
       >
         {isOpen ? (
-          <div className="relative w-full" onClick={() => setIsOpen(false)}>
+          <div className="relative w-full cursor-pointer" onClick={() => setIsOpen(false)}>
             <CharacterDisplay mobile />
           </div>
         ) : (
-          <button
-            onClick={() => setIsOpen(true)}
-            className="overflow-hidden rounded-full border border-white/30 bg-white/18 p-1 shadow-2xl backdrop-blur-md"
-            title={t('video_call')}
-          >
-            <CharacterDisplay compact />
-          </button>
+          <>
+            <AnimatePresence>
+              {isCollapsedHovered && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  exit={{ opacity: 0, x: 10, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                  className="absolute right-[110%] top-6 z-[100] w-40 rounded-xl border border-white/20 bg-slate-900/95 px-2.5 py-1.5 text-[11px] text-slate-100 shadow-2xl backdrop-blur-md cursor-default pointer-events-auto"
+                >
+                  <div className="flex items-center gap-1 font-medium select-none">
+                    <span>💡</span>
+                    <span>{t('drag_tip_mobile', '长按可拖动哦~')}</span>
+                  </div>
+                  <div className="absolute right-[-5px] top-1/2 -translate-y-1/2 w-0 h-0 border-y-[5px] border-y-transparent border-l-[5px] border-l-slate-900/95" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <div
+              className="overflow-hidden rounded-full border border-white/30 bg-white/18 p-1 shadow-2xl backdrop-blur-md cursor-pointer transition-all hover:scale-105 active:scale-95 select-none"
+              title={t('video_call')}
+            >
+              <CharacterDisplay compact />
+            </div>
+          </>
         )}
       </motion.div>
     );
@@ -302,16 +382,43 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
 
   if (!isOpen) {
     return (
-      <motion.button
+      <motion.div
         drag
+        dragListener={false}
+        dragControls={dragControls}
         dragMomentum={false}
-        onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-[95] overflow-hidden rounded-full border border-white/30 bg-white/20 p-1 shadow-2xl backdrop-blur-md"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onMouseEnter={() => setIsCollapsedHovered(true)}
+        onMouseLeave={() => setIsCollapsedHovered(false)}
+        style={{ touchAction: 'none' }}
+        className="fixed bottom-6 right-6 z-[95] cursor-pointer transition-all hover:scale-105 active:scale-95 select-none"
         data-onboarding-id="character-view"
         title={t('video_call')}
       >
-        <CharacterDisplay compact />
-      </motion.button>
+        <AnimatePresence>
+          {isCollapsedHovered && (
+            <motion.div
+              initial={{ opacity: 0, x: 10, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 10, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className="absolute right-[110%] top-6 z-[100] w-48 rounded-2xl border border-white/25 bg-slate-900/90 px-3 py-2 text-xs text-slate-100 shadow-2xl backdrop-blur-md cursor-default pointer-events-none"
+            >
+              <div className="flex items-start gap-1.5 font-medium leading-relaxed">
+                <span>💡</span>
+                <span>{t('drag_tip', '长按可拖动哦~')}</span>
+              </div>
+              <div className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-0 h-0 border-y-[6px] border-y-transparent border-l-[6px] border-l-slate-900/90" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <div className="overflow-hidden rounded-full border border-white/30 bg-white/20 p-1 shadow-2xl backdrop-blur-md">
+          <CharacterDisplay compact />
+        </div>
+      </motion.div>
     );
   }
 

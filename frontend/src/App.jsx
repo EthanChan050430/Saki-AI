@@ -2133,6 +2133,39 @@ function App() {
     });
   };
 
+  const handleUpdateMessageText = (idx, newText) => {
+    const nextMessages = [...(latestMessagesRef.current || messages)];
+    const msg = nextMessages[idx];
+    if (msg) {
+      let updatedMsg;
+      if (msg.content !== undefined) {
+        updatedMsg = { ...msg, content: newText };
+      } else if (Array.isArray(msg.parts)) {
+        const nextParts = [];
+        let textAdded = false;
+        msg.parts.forEach(p => {
+          if (p.type === 'action') {
+            nextParts.push(p);
+          } else if (p.type === 'text') {
+            if (!textAdded) {
+              nextParts.push({ type: 'text', content: newText });
+              textAdded = true;
+            }
+          }
+        });
+        if (!textAdded) {
+          nextParts.push({ type: 'text', content: newText });
+        }
+        updatedMsg = { ...msg, parts: nextParts };
+      } else {
+        updatedMsg = { ...msg, content: newText };
+      }
+      
+      nextMessages[idx] = updatedMsg;
+      syncChatState(nextMessages);
+    }
+  };
+
   const streamPendingAssistantResponse = async ({
     activeChatId,
     requestMessage,
@@ -2144,6 +2177,7 @@ function App() {
     resumeState = null,
     approvalDecision = null
   }) => {
+    const generationStartTime = Date.now();
     setCurrentPendingRequest(pendingRequest);
     setIsGenerating(true);
     const controller = new AbortController();
@@ -2440,6 +2474,7 @@ function App() {
       setDeepReadingData(null);
       abortControllerRef.current = null;
       const finalPendingRequest = completed ? null : nextPendingRequest;
+      const durationMs = Date.now() - generationStartTime;
       setMessages(prevMsgs => {
         const newMsgs = prevMsgs.map(message => (
           message.id === assistantMsgId
@@ -2447,9 +2482,10 @@ function App() {
                 const enhancedMessage = maybeAppendModelSettingsGuidance(message, uiLanguage);
                 return {
                   ...enhancedMessage,
-                status: completed
-                  ? (enhancedMessage.status === 'error' ? 'error' : 'done')
-                  : (enhancedMessage.status === 'error' ? 'error' : 'interrupted')
+                  generationDurationMs: durationMs,
+                  status: completed
+                    ? (enhancedMessage.status === 'error' ? 'error' : 'done')
+                    : (enhancedMessage.status === 'error' ? 'error' : 'interrupted')
                 };
               })()
             : message
@@ -3058,6 +3094,7 @@ function App() {
                onDeleteMessage={handleDeleteMessage}
                onDeleteStoryGlassRecord={handleDeleteStoryGlassRecord}
                onEditMessage={handleEditMessage}
+               onUpdateMessageText={handleUpdateMessageText}
                onOpenFileManager={() => openFileManagerModal('select')}
                onOpenSettings={openSettingsModal}
                externalFile={selectedWorkspaceFile}

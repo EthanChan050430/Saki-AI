@@ -14,8 +14,8 @@ FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
 BACKEND_LOG_FILE="$LOG_DIR/backend.log"
 FRONTEND_LOG_FILE="$LOG_DIR/frontend.log"
 
-BACKEND_PORT="${BACKEND_PORT:-5431}"
-FRONTEND_PORT="${FRONTEND_PORT:-5432}"
+BACKEND_PORT="${BACKEND_PORT:-5480}"
+FRONTEND_PORT="${FRONTEND_PORT:-5482}"
 SKIP_FRONTEND_BUILD="true"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
@@ -303,8 +303,8 @@ Usage:
   ./deploy.sh logs [target]  Tail logs; target: backend|frontend|all
 
 Notes:
-  - Backend runs on port 5431 by default.
-  - Frontend preview runs on port 5432 by default.
+  - Backend runs on port 5480 by default.
+  - Frontend preview runs on port 5482 by default.
   - If ./ssl contains a usable cert/key pair, health checks use HTTPS automatically.
   - Runtime files are stored in ./.deploy/
 EOF

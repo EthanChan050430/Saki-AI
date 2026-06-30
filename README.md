@@ -167,12 +167,22 @@ Drag and drop files directly into the chat to start a conversation. The underlyi
 *   **PPT Generation**: Quickly transforms a topic into a presentation structure, supporting focused viewing and export.
 *   **Chain of Thought Fact-Checking**: Suitable for verifying explicit claims. Displays evidence sources, supporting/refuting relationships, and a final credibility judgment.
 
+### 8. 📊 🩺 Message Diagnostics & Token Calculator
+*   **Token Calculator**: Displays a beautiful visual circular chart representing token usage and color-coded status based on length (Teal/Amber/Rose) directly in the AI's reply toolbar.
+*   **Detailed Diagnostics Panel**: Click the token badge to open an in-depth execution console showing the generation timestamp, exact character counts (Chinese characters, English words, symbols), total generation duration, and a chronological log of all agent tool invocations including parameters and command outputs (like terminal stdout).
+*   **In-place AI Content Editor**: Enables editing Saki's final reply in place. Keeps action blocks (terminal inputs/outputs) intact while updating the text. Future user prompts in the conversation will automatically utilize the edited content as context for seamless steering.
+
 ---
 
 ## 🛠️ Technical Highlights
 
+### ⚡ Agent Performance Core
+*   **Prompt Cache Friendly Context**: Removed dynamic metrics from prompt headers to ensure 100% static prompt prefixes, enabling downstream LLMs to trigger prompt caching for faster TTFT and reduced costs.
+*   **Speculative Parallel Tool Execution**: Pre-fetches slow network operations (`search`, `browse`) in parallel before entering the serial tool matching loop, maximizing execution efficiency.
+*   **Asynchronous Embedding Pre-warming**: Initializes xenova transformers feature-extraction pipeline in the background during server boot, eliminating multi-second first-run vector search latency.
+
 ### 🚀 Hybrid-Powered Crawler Engine
-Built-in dual-mode crawler based on **Puppeteer** and **Cheerio**. Supports JS dynamic rendering, simulates real-user scrolling for loading, intelligent main text extraction (automatically filters ads and navigation), and aims to retrieve clean webpage information.
+Built-in dual-mode crawler based on **Puppeteer** and **Cheerio**. Employs a shared persistent browser instance using the singleton pattern; new crawls open and close separate Page instances instead of launching/stopping Chromium each time, saving **1-3 seconds of process spin-up overhead**.
 
 ### 📄 Deep Parsing for All Document Formats
 Integrated professional-grade parsing chain covering PDF, modern Office (`.docx`, `.xlsx`, `.pptx`), and legacy Word (`.doc`). Employs multi-layer text extraction technology to restore complex document structures.
@@ -207,9 +217,9 @@ For both initial installation and daily use, you only need to do this:
     *   The script will automatically check the environment.
     *   Automatically installs frontend (`frontend/`) and backend (`backend/`) dependencies.
     *   Automatically starts both the Web and API services simultaneously.
-3.  Open your browser to `http://localhost:5432`.
+3.  Open your browser to `http://localhost:5482`.
 
-> To access from other devices on the LAN or public internet, use `http://<Your-IP-Address>:5432` and ensure port 5432 is allowed through the firewall.
+> To access from other devices on the LAN or public internet, use `http://<Your-IP-Address>:5482` and ensure port 5482 is allowed through the firewall.
 
 ### 2. macOS/Linux Startup
 1.  Open a terminal, navigate to the project root directory.
@@ -335,7 +345,7 @@ This project uses a modern frontend-backend separated architecture with a clear 
 ## ❓ Frequently Asked Questions (FAQ)
 
 **Q: Why can't the browser connect after startup?**  
-A: Check the terminal window for errors. It's often because ports 5431 (backend) or 5432 (frontend) are occupied, or the firewall is blocking them. Try closing other processes or opening the firewall ports and try again.
+A: Check the terminal window for errors. It's often because ports 5480 (backend) or 5482 (frontend) are occupied, or the firewall is blocking them. Try closing other processes or opening the firewall ports and try again.
 
 **Q: How do I switch models?**  
 A: After configuring the corresponding model service, available models will automatically appear in the top selector. Select and save, Saki will switch automatically. If you have multiple cloud API keys configured, you can enable "Show all enabled API models" in the settings, and the top list will display models from all enabled channels.
