@@ -3902,6 +3902,30 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
             </div>
           </div>
 
+          {/* Raw LLM Output */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                <Brain size={12} className="text-slate-400" />
+                {getLocalText('模型原始输出内容 (含思维链与工具标签)', 'Raw Model Output (Including COT & Tool Tags)')}
+              </h4>
+              {message.rawText && (
+                <button
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(message.rawText);
+                    alert(getLocalText('已复制原始输出！', 'Raw output copied!'));
+                  }}
+                  className="pointer-events-auto text-[9px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100/75 px-2.5 py-1 rounded-lg active:scale-95 transition-all"
+                >
+                  {getLocalText('复制原始输出', 'Copy Raw')}
+                </button>
+              )}
+            </div>
+            <pre className="rounded-2xl border border-slate-100 bg-slate-950 p-4 text-[10px] text-slate-300 overflow-auto font-mono max-h-[200px] custom-scrollbar whitespace-pre-wrap leading-relaxed">
+              {message.rawText || message.content || getLocalText('暂无原始输出记录 (历史消息)', 'No raw output record (Historical)')}
+            </pre>
+          </div>
+
           {/* Execution Logs */}
           <div className="space-y-3">
             <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
