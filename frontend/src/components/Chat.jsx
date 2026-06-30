@@ -2374,7 +2374,7 @@ export default function Chat({
     if (!parts) return "";
     return parts
       .filter(p => p.type === 'text')
-      .map(p => p.content.replace(/\[expression:.*?\.png\]/g, '').replace(/```[\s\S]*?```/g, '').trim())
+      .map(p => p.content.replace(/\[expression[:=].*?\.png\]/g, '').replace(/```[\s\S]*?```/g, '').trim())
       .filter(t => t.length > 0)
       .join('\n\n')
       .trim();
@@ -2732,7 +2732,7 @@ export default function Chat({
             ? m.generatedFiles.filter((file) => !(file?.kind === 'story-glass-illustration' && m.storyGlassData?.coverImageUrl))
             : [];
           const hasAssistantText = Array.isArray(m.parts) && m.parts.some(
-            part => part.type === 'text' && part.content.replace(/\[expression:.*?\.png\]/g, '').trim()
+            part => (part.type === 'text' || part.type === 'reasoning') && part.content.replace(/\[expression[:=].*?\.png\]/g, '').trim()
           );
           const hasAssistantContent = hasAssistantText
             || (Array.isArray(m.parts) && m.parts.some(part => part.type === 'action'))
@@ -2866,6 +2866,12 @@ export default function Chat({
                                       onSkipAction={onSkipAction}
                                     />
                                   )}
+                                  {part.type === 'reasoning' && (
+                                    <ThinkingBlock
+                                      text={part.content}
+                                      defaultOpen={isGenerating && idx === messages.length - 1}
+                                    />
+                                  )}
                                   {part.type === 'text' && (
                                     <MessageContent
                                       content={part.content}
@@ -2874,6 +2880,22 @@ export default function Chat({
                                     />
                                   )}
                                 </React.Fragment>
+                              ))}
+                              {m.streamingActions && m.streamingActions.map((action, i) => (
+                                <TerminalBlock
+                                  key={`streaming-${i}`}
+                                  action={{
+                                    type: action.name,
+                                    args: action.args,
+                                    id: `streaming-${action.index}`,
+                                    isStreaming: true
+                                  }}
+                                  observation={null}
+                                  fileMetadata={null}
+                                  onViewChanges={null}
+                                  onRollback={null}
+                                  onSkipAction={null}
+                                />
                               ))}
                               {m.deepReadingData && (
                                 <div className="mt-4 w-full">
@@ -3724,7 +3746,7 @@ function estimateMessageTokens(message) {
   let text = '';
   if (Array.isArray(message.parts)) {
     message.parts.forEach(part => {
-      if (part.type === 'text') {
+      if (part.type === 'text' || part.type === 'reasoning') {
         text += part.content || '';
       } else if (part.type === 'action') {
         text += JSON.stringify(part.data || '') + (part.observation || '');
@@ -3818,7 +3840,7 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
   const actionParts = [];
   if (Array.isArray(message.parts)) {
     message.parts.forEach(part => {
-      if (part.type === 'text') {
+      if (part.type === 'text' || part.type === 'reasoning') {
         text += part.content || '';
       } else if (part.type === 'action') {
         actionParts.push(part);
@@ -4116,7 +4138,7 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
   let processedContent = content;
 
   // 1. 移除表情标记 [expression:...]，避免在聊天框显示
-  processedContent = processedContent.replace(/\[expression:.*?\]/g, '');
+  processedContent = processedContent.replace(/\[expression[:=].*?\]/g, '');
   processedContent = processedContent
     .replace(/<\s*(?:thinking|thought|reasoning|analysis)\s*>/gi, '<think>')
     .replace(/<\s*\/\s*(?:thinking|thought|reasoning|analysis)\s*>/gi, '</think>');
@@ -4177,7 +4199,7 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
             .replace(/^<think>/i, '')
             .replace(/<\/think>$/i, '')
             .trim();
-          return <ThinkingBlock key={i} text={thinkText} />;
+          return <ThinkingBlock key={i} text={thinkText} defaultOpen={isGenerating} />;
         }
         if (!trimmedPart) return null;
 
@@ -4319,13 +4341,23 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
   );
 }
 
-function ThinkingBlock({ text }) {
+function ThinkingBlock({ text, defaultOpen = false }) {
   const { t } = useTranslation();
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    setIsOpen(defaultOpen);
+  }, [defaultOpen]);
+
   if (!text) return null;
 
   // 移除可能在思考块内部出现的 Response: 标记（容错）
-  const cleanedText = text.replace(/(?:[`*]*)(?:Response|回答)[:：](?:[`*]*)\s*[\s\S]*$/i, '').trim();
+  let cleanedText = text.replace(/(?:[`*]*)(?:Response|回答)[:：](?:[`*]*)\s*[\s\S]*$/i, '').trim();
+  // 移除可能存在的包裹性 <think> / </think> 标签
+  cleanedText = cleanedText
+    .replace(/^<think>/i, '')
+    .replace(/<\/think>$/i, '')
+    .trim();
   if (!cleanedText) return null;
 
   return (
@@ -4503,6 +4535,11 @@ function MusicFileCard({ file, onDownload }) {
   );
 }
 
+const stripAnsi = (str) => {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+};
+
 function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, onRollback, onSkipAction }) {
   const { t, i18n } = useTranslation();
   const actionType = action.type;
@@ -4518,7 +4555,7 @@ function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, 
     if (!raw) return getLocalText('目标', 'target');
     return raw.split(/[\\/]/).filter(Boolean).pop() || raw;
   };
-  const [isExpanded, setIsExpanded] = useState(actionKind === 'draw' || actionKind === 'diagram' || actionKind === 'composemusic');
+  const [isExpanded, setIsExpanded] = useState(actionKind === 'draw' || actionKind === 'diagram' || actionKind === 'composemusic' || actionKind === 'terminal');
   const [isCodeExpanded, setIsCodeExpanded] = useState(() => {
     if (actionKind === 'writefile') return countTextLines(actionArgs[1] || '') <= AUTO_COLLAPSE_CODE_LINE_LIMIT;
     if (actionKind === 'editfile') return countTextLines(actionArgs[3] || '') <= AUTO_COLLAPSE_CODE_LINE_LIMIT;
@@ -4585,13 +4622,16 @@ function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, 
   }
   const codeLineCount = countTextLines(contentData.content);
   const shouldAutoCollapseCode = contentData.isCode && codeLineCount > AUTO_COLLAPSE_CODE_LINE_LIMIT;
+  const isStreaming = action.isStreaming;
   const isPending = !observation && !fileMetadata;
-  const pendingLabel = (actionKind === 'editfile' || actionKind === 'replaceinfile')
-    ? getLocalText(`正在编辑 ${getFileNameFromPath(actionArgs[0])} 文件...`, `Editing ${getFileNameFromPath(actionArgs[0])}...`)
-    : (actionKind === 'terminal'
-      ? getLocalText('正在执行终端指令...', 'Running terminal command...')
-      : '');
-  const canSkipAction = isPending && actionKind === 'terminal' && actionId && typeof onSkipAction === 'function';
+  const pendingLabel = isStreaming
+    ? getLocalText('正在生成工具参数...', 'Streaming tool arguments...')
+    : ((actionKind === 'editfile' || actionKind === 'replaceinfile')
+      ? getLocalText(`正在编辑 ${getFileNameFromPath(actionArgs[0])} 文件...`, `Editing ${getFileNameFromPath(actionArgs[0])}...`)
+      : (actionKind === 'terminal'
+        ? getLocalText('正在执行终端指令...', 'Running terminal command...')
+        : ''));
+  const canSkipAction = isPending && !isStreaming && actionKind === 'terminal' && actionId && typeof onSkipAction === 'function';
   const handleSkip = async () => {
     if (!canSkipAction || skipRequested) return;
     setSkipRequested(true);
@@ -4719,6 +4759,10 @@ function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, 
               <div className="prose prose-sm max-w-none">
                 {actionKind === 'diagram' ? (
                   <Mermaid chart={observation} />
+                ) : actionKind === 'terminal' ? (
+                  <pre className="font-mono bg-slate-950 text-slate-100 p-3.5 rounded-lg border border-slate-900 overflow-x-auto text-[11px] leading-relaxed whitespace-pre-wrap max-h-96 shadow-inner w-full">
+                    {stripAnsi(observation)}
+                  </pre>
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={markdownPlugins}
