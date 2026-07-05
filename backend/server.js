@@ -818,6 +818,8 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
             formattedHistory: fullFormattedHistory,
             status: baseStatus,
             summary: '',
+            recentMessages: rawHistory,
+            olderMessages: []
         };
     }
 
@@ -831,6 +833,8 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
     let formattedHistory = fullFormattedHistory;
     let compressedSummary = '';
     let compressedTokens = fullEstimateTokens;
+    let finalRecentMessages = rawHistory;
+    let finalOlderMessages = [];
 
     while (keepCount >= 2) {
         const olderMessages = rawHistory.slice(0, Math.max(0, rawHistory.length - keepCount));
@@ -846,6 +850,8 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
             formatMessagesForContext(recentMessages, { observationLimit: 700 }),
         ].filter(Boolean).join('\n\n');
         compressedTokens = estimateTokenCount(formattedHistory) + estimateTokenCount(fixedContextText) + 5500;
+        finalRecentMessages = recentMessages;
+        finalOlderMessages = olderMessages;
         if (compressedTokens <= targetPromptTokens || keepCount <= 3) break;
         keepCount -= 2;
     }
@@ -872,6 +878,8 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
         formattedHistory,
         status,
         summary: compressedSummary,
+        recentMessages: finalRecentMessages,
+        olderMessages: finalOlderMessages,
     };
 }
 
@@ -5357,8 +5365,66 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
     if (!baseUrl) throw new Error(`Base URL for ${provider} is not configured.`);
 
     // 2. Prepare Payload
+    let messages = [];
+    if (Array.isArray(prompt)) {
+        messages = prompt;
+    } else {
+        messages = [{ role: 'user', content: String(prompt || '') }];
+    }
+
     if (provider === 'anthropic') {
         const isClaude37 = String(model || '').toLowerCase().includes('claude-3-7') || String(model || '').toLowerCase().includes('claude-3.7');
+        
+        const anthropicMessages = messages.map((m, index) => {
+            const isLast = index === messages.length - 1;
+            if (m.role === 'user') {
+                let contentArray = [];
+                if (Array.isArray(m.content)) {
+                    contentArray = m.content.map(part => {
+                        if (part.type === 'text') {
+                            return {
+                                type: 'text',
+                                text: part.text
+                            };
+                        } else if (part.type === 'image_url') {
+                            const match = part.image_url?.url?.match(/^data:([^;]+);base64,(.+)$/);
+                            if (match) {
+                                return {
+                                    type: 'image',
+                                    source: {
+                                        type: 'base64',
+                                        media_type: match[1],
+                                        data: match[2]
+                                    }
+                                };
+                            }
+                        }
+                        return part;
+                    });
+                } else {
+                    contentArray = [
+                        {
+                            type: "text",
+                            text: m.content
+                        }
+                    ];
+                }
+
+                if (isLast && contentArray.length > 0) {
+                    contentArray[contentArray.length - 1].cache_control = { type: "ephemeral" };
+                }
+
+                return {
+                    role: 'user',
+                    content: contentArray
+                };
+            }
+            return {
+                role: m.role,
+                content: m.content
+            };
+        });
+
         payload = {
             model: model,
             max_tokens: isClaude37 ? 16000 : 4096,
@@ -5369,18 +5435,7 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                     cache_control: { type: "ephemeral" }
                 }
             ],
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: "text",
-                            text: prompt,
-                            cache_control: { type: "ephemeral" }
-                        }
-                    ]
-                }
-            ],
+            messages: anthropicMessages,
             stream: true
         };
         if (isClaude37) {
@@ -5393,11 +5448,11 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         payload = {
             model: provider === 'copilot' ? normalizeCopilotModelId(model) : model,
             messages: provider === 'copilot'
-                ? [{ role: 'user', content: prompt }]
+                ? messages
                 : [
                     { role: 'system', content: systemPrompt },
-                    { role: 'user', content: prompt }
-                ],
+                    ...messages
+                  ],
             stream: true
         };
     }
@@ -8931,6 +8986,90 @@ Existing partial assistant work:
 ${partialAssistantText || '(empty partial output)'}`;
     }
 
+    // Extract system instructions and build structured multi-turn messagesList
+    const historyDelimiter = '## Conversation History:';
+    const delimiterIndex = currentPrompt.indexOf(historyDelimiter);
+    let systemText = currentPrompt;
+    if (delimiterIndex !== -1) {
+        systemText = currentPrompt.substring(0, delimiterIndex).trim();
+    }
+
+    const messagesList = [];
+
+    // Add history messages
+    if (historyContext.recentMessages && historyContext.recentMessages.length > 0) {
+        if (historyContext.olderMessages && historyContext.olderMessages.length > 0) {
+            // Compressed history
+            messagesList.push({
+                role: 'user',
+                content: `System Background Compression:\n${historyContext.summary || ''}`
+            });
+            messagesList.push({
+                role: 'assistant',
+                content: 'Understood. I will keep this background context in mind for the current task.'
+            });
+            
+            for (const msg of historyContext.recentMessages) {
+                if (msg.role === 'user') {
+                    messagesList.push({ role: 'user', content: msg.content });
+                } else if (msg.role === 'assistant') {
+                    messagesList.push({ role: 'assistant', content: serializeMessageForContext(msg) });
+                }
+            }
+        } else {
+            // Uncompressed history
+            for (const msg of historyContext.recentMessages) {
+                if (msg.role === 'user') {
+                    messagesList.push({ role: 'user', content: msg.content });
+                } else if (msg.role === 'assistant') {
+                    messagesList.push({ role: 'assistant', content: serializeMessageForContext(msg) });
+                }
+            }
+        }
+    }
+
+    // Add current task
+    let activeTaskContent = `## Current Task:\nUser message: ${message}\n${context}`;
+    if (approvalDecision?.signature && approvalDecision?.toolName) {
+        const approvedArgs = Array.isArray(approvalDecision.args)
+            ? approvalDecision.args.map(arg => `"${String(arg ?? '').replace(/"/g, '\\"')}"`).join(', ')
+            : '';
+        activeTaskContent += `\n\nAPPROVAL UPDATE:\nThe user explicitly approved retrying exactly one sensitive action once:\nTool: ${approvalDecision.toolName}(${approvedArgs})\nDo not expand the scope of this approval. If you still need that exact action, repeat it exactly once.`;
+    }
+
+    if (resumeState && (resumeState.content || (Array.isArray(resumeState.parts) && resumeState.parts.length > 0))) {
+        const partialAssistantText = Array.isArray(resumeState.parts)
+            ? resumeState.parts.map(part => {
+                if (part.type === 'text') return part.content || '';
+                if (part.type === 'reasoning') return `<think>${part.content || ''}</think>\n`;
+                if (part.type === 'action') {
+                    const args = Array.isArray(part.data?.args) ? part.data.args.join(', ') : '';
+                    const observation = part.observation ? `\nObservation: ${String(part.observation).slice(0, 800)}` : '';
+                    return `Tool: ${part.data?.type || 'unknown'}(${args})${observation}`;
+                }
+                return '';
+            }).filter(Boolean).join('\n')
+            : String(resumeState.content || '');
+
+        activeTaskContent += `\n\nRESUME INSTRUCTION:\nThis turn was interrupted before completion.\nContinue from the existing partial work below instead of starting over.\nDo not repeat text the user has already seen.\nDo not repeat tool calls that already succeeded unless absolutely necessary.\nFinish the remaining work and end with exactly one respond(...) call.\n\nExisting partial assistant work:\n${partialAssistantText || '(empty partial output)'}`;
+    }
+
+    let userTaskPayload = activeTaskContent;
+    if (imageBase64s.length > 0) {
+        userTaskPayload = [
+            { type: 'text', text: activeTaskContent },
+            ...imageBase64s.map(img => ({
+                type: 'image_url',
+                image_url: { url: `data:${img.mime};base64,${img.b64}` }
+            }))
+        ];
+    }
+
+    messagesList.push({
+        role: 'user',
+        content: userTaskPayload
+    });
+
     let loopCount = 0;
     const maxLoops = 100;
     let invalidStructuredReplyCount = 0;
@@ -9020,11 +9159,17 @@ ${partialAssistantText || '(empty partial output)'}`;
                     const response = await axios.post(endpoint, {
                         model: model || 'llama3',
                         messages: [
-                            { 
-                                role: 'user', 
-                                content: currentPrompt,
-                                images: imageBase64s.length > 0 ? imageBase64s.map(img => img.b64) : undefined
-                            }
+                            { role: 'system', content: systemText },
+                            ...messagesList.map((m, idx) => {
+                                if (m.role === 'user' && idx === messagesList.length - 1 && imageBase64s.length > 0) {
+                                    return {
+                                        role: 'user',
+                                        content: Array.isArray(m.content) ? m.content.find(p => p.type === 'text')?.text || '' : m.content,
+                                        images: imageBase64s.map(img => img.b64)
+                                    };
+                                }
+                                return m;
+                            })
                         ],
                         stream: true,
                         options: { 
@@ -9087,20 +9232,12 @@ ${partialAssistantText || '(empty partial output)'}`;
                 const resolvedModel = normalizeCopilotModelId(model || 'gpt-4o');
                 console.log(`[Agent] Calling GitHub Copilot (Model: ${resolvedModel})`);
 
-                let userContent = currentPrompt;
-                if (imageBase64s.length > 0) {
-                    userContent = [
-                        { type: 'text', text: currentPrompt },
-                        ...imageBase64s.map(img => ({
-                            type: 'image_url',
-                            image_url: { url: `data:${img.mime};base64,${img.b64}` }
-                        }))
-                    ];
-                }
-
                 const copilotPayload = {
                     model: resolvedModel,
-                    messages: [{ role: 'user', content: userContent }],
+                    messages: [
+                        { role: 'system', content: systemText },
+                        ...messagesList
+                    ],
                     max_tokens: 16384
                 };
 
@@ -9144,8 +9281,8 @@ ${partialAssistantText || '(empty partial output)'}`;
                     provider,
                     model,
                     ollamaUrl,
-                    currentPrompt,
-                    config,
+                    messagesList,
+                    { ...config, systemPrompt: systemText },
                     (content) => {
                         handleStreamProgress(content);
                     },
@@ -9357,6 +9494,8 @@ ${partialAssistantText || '(empty partial output)'}`;
                     const nextTodoList = normalizeAgentTodoUpdate(args[0], currentTodoList);
                     if (nextTodoList.error) {
                         currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${rawArgs})\nObservation: Error: ${nextTodoList.error}\n`;
+                        messagesList.push({ role: 'assistant', content: `Tool: ${toolNameRaw}(${rawArgs})` });
+                        messagesList.push({ role: 'user', content: `Observation: Error: ${nextTodoList.error}` });
                     } else {
                         currentTodoList = nextTodoList;
                         assistantMsg.todoList = currentTodoList;
@@ -9365,7 +9504,10 @@ ${partialAssistantText || '(empty partial output)'}`;
                             res.write(`data: ${JSON.stringify({ type: 'todo', todo: currentTodoList })}\n\n`);
                         }
                         const completedCount = currentTodoList.items.filter(item => item.status === 'completed').length;
-                        currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${JSON.stringify(args[0]).slice(0, 1200)})\nObservation: Todo list updated (${completedCount}/${currentTodoList.items.length} completed).\n`;
+                        const obsText = `Todo list updated (${completedCount}/${currentTodoList.items.length} completed).`;
+                        currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${JSON.stringify(args[0]).slice(0, 1200)})\nObservation: ${obsText}\n`;
+                        messagesList.push({ role: 'assistant', content: `Tool: ${toolNameRaw}(${JSON.stringify(args[0]).slice(0, 1200)})` });
+                        messagesList.push({ role: 'user', content: `Observation: ${obsText}` });
                     }
                     continue;
                 }
@@ -10547,7 +10689,16 @@ ${partialAssistantText || '(empty partial output)'}`;
                     ? observation.slice(0, 1000) + `... [Truncated ${observation.length - 2000} chars] ...` + observation.slice(-1000)
                     : observation;
 
-                currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${args.map(a => `"${(a || "").toString().replace(/"/g, '\\"')}"`).join(', ')})\nObservation: ${logicObservation}\n`;
+                const toolArgsStr = args.map(a => `"${(a || "").toString().replace(/"/g, '\\"')}"`).join(', ');
+                currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${toolArgsStr})\nObservation: ${logicObservation}\n`;
+                messagesList.push({
+                    role: 'assistant',
+                    content: `Tool: ${toolNameRaw}(${toolArgsStr})`
+                });
+                messagesList.push({
+                    role: 'user',
+                    content: `Observation: ${logicObservation}`
+                });
             }
         } else {
             if (aborted) return;
@@ -10561,7 +10712,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     : '';
                 const invalidOutputPreview = (finalContent || assistantResponse || '').trim().slice(0, 600);
 
-                currentPrompt += `\n\nSystem Correction:
+                const systemCorrectionText = `System Correction:
 Your previous output was invalid for Agent mode because it did not contain any Tool call.
 Do not talk to the user directly and do not stop after a progress note.
 Continue the unfinished task using tools when more inspection is needed, or finish with Tool: respond("...") only when the task is actually complete.
@@ -10571,6 +10722,10 @@ On the next attempt, output only:
 ${realtimeReminder}
 Previous invalid output:
 ${invalidOutputPreview || '(empty output)'}`;
+
+                currentPrompt += `\n\n${systemCorrectionText}`;
+                messagesList.push({ role: 'assistant', content: assistantResponse });
+                messagesList.push({ role: 'user', content: systemCorrectionText });
                 continue;
             }
 
