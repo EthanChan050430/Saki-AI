@@ -908,6 +908,11 @@ function hashBuffer(buffer) {
 function normalizeExpectedFileHash(value) {
     const raw = String(value ?? '').trim();
     if (!raw) return '';
+    // Look for a 64-character hex string (SHA256) anywhere in the input
+    const match = raw.match(/[a-f0-9]{64}/i);
+    if (match) {
+        return match[0].toLowerCase();
+    }
     return raw.replace(/^sha256\s*[:=]\s*/i, '').trim().toLowerCase();
 }
 
@@ -8762,9 +8767,26 @@ ${persona}
 - Use respond(...) to reply to the user. Do NOT write files (e.g. writeFile) unless the user explicitly asks to save to a file.
 - NEVER use placeholders (like "content...", "[code]", "TODO") in tool calls; write the actual final content.
 - You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
-- Tool calls MUST start with \`Tool:\` on a new line. Do not mention them in conversational text.
-- Every turn MUST end with either a \`Tool:\` call or a final \`Tool: respond("...")\`. Never answer in plain text outside \`Tool: respond(...)\`.
+- Tool calls MUST start with \`Tool:\` on a new line, OR use XML-style tags. Do not mention tool calls in conversational text.
+- Every turn MUST end with either a \`Tool:\` call, an XML tool call tag, or a final \`Tool: respond("...")\`. Never answer in plain text outside respond.
 - Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
+- **XML Tool Calling (Highly Recommended for File Edits/Writes/Commands)**: To avoid syntax and quote escaping errors, you can invoke tools using XML-style tags. Arguments are passed as XML attributes, and the main content/code/command is passed as the tag body (without escaping).
+  Example 1 (replaceBlocks):
+  <replaceBlocks path="server.js" expectedHash="a1b2...">
+  <<<<<<< SEARCH
+  const a = 1;
+  =======
+  const a = 2;
+  >>>>>>> REPLACE
+  </replaceBlocks>
+  Example 2 (writeFile):
+  <writeFile path="server.js" expectedHash="a1b2...">
+  file content
+  </writeFile>
+  Example 3 (terminal):
+  <terminal timeoutSeconds="60">
+  npm run dev
+  </terminal>
 
 ## Available tools:
 ${searchEnabled ? '- search(query): Search the web.' : ''}
@@ -8904,9 +8926,26 @@ ${musicEnabled ? '- **Instrumental Music**: If the user asks you to create BGM, 
 - Use respond(...) to reply to the user. Do NOT write files (e.g. writeFile) unless the user explicitly asks to save to a file.
 - NEVER use placeholders (like "content...", "[code]", "TODO") in tool calls; write the actual final content.
 - You can call multiple tools at once. Example: \`Tool: listDir(".") Tool: readFile("package.json")\`.
-- Tool calls MUST start with \`Tool:\` on a new line. Do not mention them in conversational text.
-- Every turn MUST end with either a \`Tool:\` call or a final \`Tool: respond("...")\`. Never answer in plain text outside \`Tool: respond(...)\`.
+- Tool calls MUST start with \`Tool:\` on a new line, OR use XML-style tags. Do not mention tool calls in conversational text.
+- Every turn MUST end with either a \`Tool:\` call, an XML tool call tag, or a final \`Tool: respond("...")\`. Never answer in plain text outside respond.
 - Use relative paths under ${FILES_DIR} for user files unless an absolute path is requested.
+- **XML Tool Calling (Highly Recommended for File Edits/Writes/Commands)**: To avoid syntax and quote escaping errors, you can invoke tools using XML-style tags. Arguments are passed as XML attributes, and the main content/code/command is passed as the tag body (without escaping).
+  Example 1 (replaceBlocks):
+  <replaceBlocks path="server.js" expectedHash="a1b2...">
+  <<<<<<< SEARCH
+  const a = 1;
+  =======
+  const a = 2;
+  >>>>>>> REPLACE
+  </replaceBlocks>
+  Example 2 (writeFile):
+  <writeFile path="server.js" expectedHash="a1b2...">
+  file content
+  </writeFile>
+  Example 3 (terminal):
+  <terminal timeoutSeconds="60">
+  npm run dev
+  </terminal>
 
 ## Available tools:
 ${searchEnabled ? '- search(query): Search the web. Use this for up-to-date info or documentation.' : ''}
@@ -9337,70 +9376,167 @@ ${partialAssistantText || '(empty partial output)'}`;
 
         // --- Multi-Tool execution (Robust Parsing) ---
         const toolMatches = [];
-        let searchIndex = 0;
         
-        // Loop to find all tool calls, supporting both "Tool:" and "工具:"
-        // 改为只匹配行首的 Tool: 标识，避免误触对话中的描述文本
-        while (true) {
-            // 使用正则：必须是在字符串开头或者紧跟在换行符之后
-            const regex = /(?:^|\n)(?:[`*]*)(?:Tool|工具)[:：]\s*/i;
-            const match = assistantResponse.substring(searchIndex).match(regex);
-            if (!match) break;
-
-            const toolMatchText = match[0];
-            const startOfTool = searchIndex + match.index + toolMatchText.length;
-            const openParenIndex = assistantResponse.indexOf('(', startOfTool);
-            
-            if (openParenIndex === -1) {
-                // False alarm or malformed, skip this header
-                searchIndex = startOfTool;
-                continue;
+        // Helper to parse XML attributes
+        const parseXmlAttributes = (attrStr) => {
+            const attrs = {};
+            if (!attrStr) return attrs;
+            const regex = /([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+            let match;
+            while ((match = regex.exec(attrStr)) !== null) {
+                const key = match[1];
+                const val = match[2] ?? match[3] ?? match[4];
+                attrs[key] = val;
             }
+            return attrs;
+        };
 
-            const toolName = assistantResponse.substring(startOfTool, openParenIndex).trim();
-            
-            // Find balanced closing parenthesis
-            let balance = 0;
-            let closingParenIndex = -1;
-            let inStr = false;
-            let strChar = "";
-            let escaped = false;
+        const TOOL_PARAM_MAPPING = {
+            readfile: ['path', 'startLine', 'endLine'],
+            planfileread: ['path', 'chunkLines'],
+            readfilechunk: ['path', 'chunkIndex', 'chunkLines'],
+            writefile: ['path', 'content', 'expectedHash'],
+            editfile: ['path', 'startLine', 'endLine', 'content', 'expectedHash'],
+            replaceinfile: ['path', 'oldText', 'newText', 'expectedHash', 'occurrence'],
+            replaceblocks: ['path', 'blocks', 'expectedHash'],
+            deletefile: ['path', 'expectedHash'],
+            listdir: ['path', 'limit', 'offset', 'includeIgnored'],
+            getrepomap: ['path'],
+            createprojectfolder: ['name'],
+            ensuredir: ['path'],
+            diagram: ['mermaidCode'],
+            updatetodo: ['json'],
+            todo: ['json'],
+            respond: ['text'],
+            terminal: ['command', 'timeoutSeconds'],
+            search: ['query'],
+            browse: ['url'],
+            draw: ['prompt', 'width', 'height'],
+            composemusic: ['prompt', 'bars']
+        };
 
-            for (let i = openParenIndex; i < assistantResponse.length; i++) {
-                const char = assistantResponse[i];
-                if (escaped) {
-                    escaped = false;
-                    continue;
-                }
-                if (char === '\\') {
-                    escaped = true;
-                    continue;
-                }
-                if ((char === '"' || char === "'") && !escaped) {
-                    if (!inStr) {
-                        inStr = true;
-                        strChar = char;
-                    } else if (char === strChar) {
-                        inStr = false;
+        const TOOL_BODY_PARAMS = {
+            writefile: 'content',
+            editfile: 'content',
+            replaceblocks: 'blocks',
+            diagram: 'mermaidCode',
+            updatetodo: 'json',
+            todo: 'json',
+            respond: 'text',
+            terminal: 'command',
+            search: 'query',
+            draw: 'prompt',
+            composemusic: 'prompt'
+        };
+
+        let scanIndex = 0;
+        while (scanIndex < assistantResponse.length) {
+            // 1. Try matching XML-style tool call (e.g. <replaceBlocks path="xxx" expectedHash="yyy">...)
+            if (assistantResponse[scanIndex] === '<') {
+                const xmlStartRegex = /^<([a-zA-Z0-9_:-]+)(?:\s+([^>]*))?>/;
+                const startMatch = assistantResponse.substring(scanIndex).match(xmlStartRegex);
+                if (startMatch) {
+                    const fullStartTag = startMatch[0];
+                    let tagName = startMatch[1];
+                    const attrStr = startMatch[2] || "";
+                    
+                    if (tagName.includes(':') && !tagName.startsWith('call:')) {
+                        tagName = tagName.split(':').slice(1).join(':');
+                    }
+
+                    const isKnownTool = TOOL_PARAM_MAPPING[tagName.toLowerCase()];
+                    const isToolCallTag = (tagName.toLowerCase() === 'tool_call' || tagName.toLowerCase() === 'call' || tagName.startsWith('call:'));
+
+                    if (isKnownTool || isToolCallTag) {
+                        const closingTag = `</${startMatch[1]}>`;
+                        const closingIndex = assistantResponse.indexOf(closingTag, scanIndex + fullStartTag.length);
+                        if (closingIndex !== -1) {
+                            const body = assistantResponse.substring(scanIndex + fullStartTag.length, closingIndex);
+                            const attributes = parseXmlAttributes(attrStr);
+                            
+                            let toolNameRaw = isToolCallTag ? (attributes.name || tagName.substring(tagName.indexOf(':') + 1)) : tagName;
+                            const toolName = toolNameRaw.toLowerCase().trim();
+
+                            if (TOOL_PARAM_MAPPING[toolName]) {
+                                const paramNames = TOOL_PARAM_MAPPING[toolName];
+                                const bodyParam = TOOL_BODY_PARAMS[toolName];
+                                const parsedArgs = [];
+                                for (const paramName of paramNames) {
+                                    let val = attributes[paramName];
+                                    if (val === undefined && paramName === bodyParam) {
+                                        val = body; // Preserve exact body content/newlines
+                                    }
+                                    parsedArgs.push(val !== undefined ? val : "");
+                                }
+                                toolMatches.push({
+                                    name: toolNameRaw,
+                                    rawArgs: "",
+                                    parsedArgs: parsedArgs
+                                });
+                                scanIndex = closingIndex + closingTag.length;
+                                continue;
+                            }
+                        }
                     }
                 }
-                if (!inStr) {
-                    if (char === '(') balance++;
-                    if (char === ')') balance--;
-                    if (balance === 0) {
-                        closingParenIndex = i;
-                        break;
+            }
+
+            // 2. Try matching traditional tool call starting at scanIndex (Tool: name(...) or 工具: name(...))
+            const traditionalRegex = /^(?:Tool|工具)[:：]\s*([a-zA-Z0-9_-]+)\s*\(/i;
+            const tradMatch = assistantResponse.substring(scanIndex).match(traditionalRegex);
+            if (tradMatch) {
+                const toolNameRaw = tradMatch[1];
+                const toolName = toolNameRaw.toLowerCase().trim();
+                if (TOOL_PARAM_MAPPING[toolName]) {
+                    const startOfArgs = scanIndex + tradMatch[0].length - 1; // Index of the '('
+                    
+                    let balance = 0;
+                    let closingParenIndex = -1;
+                    let inStr = false;
+                    let strChar = "";
+                    let escaped = false;
+
+                    for (let j = startOfArgs; j < assistantResponse.length; j++) {
+                        const char = assistantResponse[j];
+                        if (escaped) {
+                            escaped = false;
+                            continue;
+                        }
+                        if (char === '\\') {
+                            escaped = true;
+                            continue;
+                        }
+                        if ((char === '"' || char === "'") && !escaped) {
+                            if (!inStr) {
+                                inStr = true;
+                                strChar = char;
+                            } else if (char === strChar) {
+                                inStr = false;
+                            }
+                        }
+                        if (!inStr) {
+                            if (char === '(') balance++;
+                            if (char === ')') balance--;
+                            if (balance === 0) {
+                                closingParenIndex = j;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (closingParenIndex !== -1) {
+                        const rawArgs = assistantResponse.substring(startOfArgs + 1, closingParenIndex);
+                        toolMatches.push({
+                            name: toolNameRaw,
+                            rawArgs: rawArgs
+                        });
+                        scanIndex = closingParenIndex + 1;
+                        continue;
                     }
                 }
             }
 
-            if (closingParenIndex !== -1) {
-                const rawArgs = assistantResponse.substring(openParenIndex + 1, closingParenIndex);
-                toolMatches.push({ name: toolName, rawArgs });
-                searchIndex = closingParenIndex + 1;
-            } else {
-                searchIndex = startOfTool;
-            }
+            scanIndex++;
         }
 
         if (aborted) return;
@@ -9414,13 +9550,13 @@ ${partialAssistantText || '(empty partial output)'}`;
                 const name = match.name.toLowerCase().trim();
                 if (name === 'search' || name === 'browse') {
                     const cleanArg = (raw) => {
-                        let str = raw.trim();
+                        let str = (raw || "").trim();
                         if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
                             str = str.slice(1, -1);
                         }
                         return str.replace(/\\(.)/g, '$1');
                     };
-                    const arg = cleanArg(match.rawArgs);
+                    const arg = match.parsedArgs ? match.parsedArgs[0] : cleanArg(match.rawArgs);
                     const cacheKey = `${name}:${arg}`;
                     if (arg && !slowToolCache.has(cacheKey)) {
                         if (name === 'search') {
@@ -9440,10 +9576,12 @@ ${partialAssistantText || '(empty partial output)'}`;
                 if (aborted) return;
                 const toolNameRaw = match.name;
                 const toolName = toolNameRaw.toLowerCase().trim();
-                const rawArgs = match.rawArgs.trim();
+                const rawArgs = (match.rawArgs || "").trim();
 
                 let args = [];
-                if (toolName === 'updatetodo' || toolName === 'todo') {
+                if (match.parsedArgs) {
+                    args = match.parsedArgs;
+                } else if (toolName === 'updatetodo' || toolName === 'todo') {
                     args = [decodeStructuredToolArgument(rawArgs)];
                 } else {
                     // Robust tool argument parser
