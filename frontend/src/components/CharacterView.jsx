@@ -34,7 +34,7 @@ const getAnimationFrameDuration = (type) => {
   return 1000 / fps;
 };
 
-const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation }) => {
+const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation, lowResourceMode = false }) => {
   const { t } = useTranslation();
   const expressionUrl = `/assets/expression/${currentExpression || 'normal.png'}`;
   const phoneUrl = '/assets/Phone.png';
@@ -119,8 +119,8 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
   }, [expressionUrl, isAnimating]);
 
   useEffect(() => {
-    schedulePersistentAnimationWarmup();
-  }, []);
+    if (!lowResourceMode && isOpen) schedulePersistentAnimationWarmup();
+  }, [lowResourceMode, isOpen]);
 
   useEffect(() => {
     if (!triggerAnimation) return;
@@ -223,6 +223,7 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation 
   };
 
   const startSequenceAnimation = async (type = 'chuo', loop = false, options = {}) => {
+    if (lowResourceMode || document.hidden) return;
     const normalizedType = type || 'hello';
     const shouldResumeIdle = options.resumeIdle !== false && !loop;
     const isIdleLoop = options.idleLoop || normalizedType === IDLE_ANIMATION_TYPE;

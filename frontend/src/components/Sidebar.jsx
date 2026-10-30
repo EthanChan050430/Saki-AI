@@ -31,6 +31,7 @@ export default function Sidebar({
   onDeleteChat,
   onNewChat,
   onContinueChat,
+  onCancelPendingChat,
   onToggleGuide,
   onToggleSettings,
   onToggleFileManager,
@@ -234,34 +235,35 @@ export default function Sidebar({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 ${isUtilityLayerActive ? 'z-[120]' : 'z-50'} flex h-full w-[18rem] max-w-[88vw] flex-col overflow-hidden border-white/10 bg-black/55 text-white shadow-2xl backdrop-blur-xl transition-all duration-300 ${
+        className={`saki-navigation fixed inset-y-0 left-0 z-40 flex h-full w-[18rem] max-w-[88vw] flex-col overflow-hidden border-[var(--nav-border)] bg-[var(--nav-bg)] text-[var(--nav-text)] shadow-2xl backdrop-blur-2xl transition-all duration-300 ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         } ${desktopWidthClass} md:relative md:translate-x-0 md:shadow-none`}
       >
-        <div className="flex h-full flex-col overflow-hidden bg-black/15 px-4 py-4">
+        <div className="flex h-full flex-col overflow-hidden bg-transparent px-4 py-4">
           <button
             onClick={handleNewChat}
-            className="mb-4 flex w-full items-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-3 py-3 text-left text-sm font-semibold text-white transition-colors hover:bg-white/15"
+            className="saki-new-conversation mb-4 flex w-full items-center gap-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-surface)] px-3 py-3 text-left text-sm font-semibold text-[var(--nav-text)] transition-colors hover:border-[#ff75ac]/40 hover:bg-[#ff75ac]/20 hover:shadow-[0_4px_16px_rgba(255,117,172,0.2)]"
           >
-            <Plus size={18} />
+            <Plus size={18} className="text-[var(--accent-text)]" />
             <span>{t('new_chat')}</span>
           </button>
 
-          <div className="mb-4 rounded-2xl border border-white/10 bg-white/8 px-3 py-2.5" data-onboarding-id="sidebar-history-search">
-            <div className="flex items-center gap-2 text-white/70">
+          <div className="saki-nav-search mb-4 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-surface)] px-3 py-2.5 transition-colors focus-within:border-[#ff75ac]/45" data-onboarding-id="sidebar-history-search">
+            <div className="flex items-center gap-2 text-[var(--nav-muted)]">
               <Search size={15} />
               <input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={getLocalText('实时搜索历史...', 'Filter history...')}
-                className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/35"
+                aria-label={getLocalText('搜索历史对话', 'Search chat history')}
+                className="w-full bg-transparent text-sm text-[var(--nav-text)] outline-none placeholder:text-[var(--nav-tertiary)]"
               />
             </div>
           </div>
 
-          <div className="flex-1 space-y-1 overflow-y-auto py-1 text-white/85 scrollbar-hide">
+          <div className="flex-1 space-y-1 overflow-y-auto py-1 text-[var(--nav-text)] scrollbar-hide">
             {filteredHistory.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-4 text-center text-sm text-white/45">
+              <div className="rounded-2xl border border-dashed border-[var(--nav-border)] bg-[var(--nav-surface)] p-4 text-center text-sm text-[var(--nav-muted)]">
                 {normalizedQuery ? getLocalText('没有匹配的对话', 'No matching chats') : t('no_history')}
               </div>
             ) : (
@@ -269,24 +271,24 @@ export default function Sidebar({
                 <div
                   key={item.id}
                   className={`group relative flex cursor-pointer items-start gap-3 rounded-2xl px-3 py-3 text-sm transition-all ${
-                    currentChatId === item.id ? 'bg-white/18 text-white shadow-inner' : 'hover:bg-white/10'
+                    currentChatId === item.id ? 'border border-[#ff75ac]/40 bg-gradient-to-r from-[#ff75ac]/25 to-[#ff75ac]/10 text-[var(--nav-text)] shadow-[0_4px_16px_rgba(255,117,172,0.18)]' : 'border border-transparent hover:bg-[var(--nav-hover)]'
                   }`}
                   onClick={() => handleSelectChat(item.id)}
                 >
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${currentChatId === item.id ? 'bg-blue-500/30 text-blue-200' : 'bg-white/10 text-white/60'}`}>
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${currentChatId === item.id ? 'bg-[#ff75ac]/25 text-[var(--accent-text)]' : 'bg-[var(--nav-surface)] text-[var(--nav-text)]'}`}>
                     <MessageSquare size={16} />
                   </div>
                   <div className="min-w-0 flex-1 pr-8">
                     <div className={`truncate leading-5 ${currentChatId === item.id ? 'font-semibold' : 'font-medium'}`}>
                       {item.title}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-white/35">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[var(--nav-tertiary)]">
                       <span>{formatTimestamp(item.updatedAt)}</span>
                       {item.source === 'qqbot' && <span>QQ</span>}
                     </div>
                     {item.isPending && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-amber-200">
+                        <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-[var(--nav-pending-text)]">
                           {getLocalText('进行中', 'Pending')}
                         </span>
                         <button
@@ -294,17 +296,27 @@ export default function Sidebar({
                             event.stopPropagation();
                             onContinueChat?.(item.id);
                           }}
-                          className="rounded-full bg-blue-500/15 px-3 py-1 text-[10px] font-semibold text-blue-200 transition-colors hover:bg-blue-500/25"
+                          className="rounded-full bg-[#ff75ac]/20 px-3 py-1 text-[10px] font-semibold text-[var(--accent-text)] transition-colors hover:bg-[#ff75ac]/30"
                           title="Continue"
                         >
                           {getLocalText('继续', 'Continue')}
+                        </button>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCancelPendingChat?.(item.id);
+                          }}
+                          className="rounded-full bg-slate-500/15 px-3 py-1 text-[10px] font-semibold text-[var(--nav-muted)] transition-colors hover:bg-red-500/15 hover:text-red-300"
+                          title={getLocalText('结束生成', 'Stop generation')}
+                        >
+                          {getLocalText('结束', 'Stop')}
                         </button>
                       </div>
                     )}
                   </div>
                   <button
                     onClick={(event) => onDeleteChat(event, item.id)}
-                    className="absolute right-3 top-3 rounded-full p-1 text-white/30 transition-all hover:bg-white/10 hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
+                    className="absolute right-3 top-3 rounded-full p-1 text-[var(--nav-text)] transition-all hover:bg-[var(--nav-hover)] hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                     title={t('delete')}
                   >
                     <Trash2 size={14} />
@@ -314,10 +326,10 @@ export default function Sidebar({
             )}
           </div>
 
-          <div className="mt-4 space-y-3 border-t border-white/10 pt-4">
+          <div className="mt-4 space-y-3 border-t border-[var(--nav-border)] pt-4">
             <div
               data-onboarding-id="sidebar-utilities-dock"
-              className="overflow-hidden rounded-[1.5rem] border border-white/10 bg-white/[0.07] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-[padding] duration-200 ease-out"
+              className="saki-dock overflow-hidden rounded-[1.5rem] border border-[var(--nav-border)] bg-[var(--nav-surface)] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-[padding] duration-200 ease-out"
               onMouseLeave={() => setHoveredUtilityKey(null)}
             >
               <div className="flex items-end justify-center gap-0.5">
@@ -337,10 +349,10 @@ export default function Sidebar({
                         onMouseEnter={() => setHoveredUtilityKey(action.key)}
                         onFocus={() => setHoveredUtilityKey(action.key)}
                         onBlur={() => setHoveredUtilityKey(null)}
-                        className={`relative flex shrink-0 items-center justify-center rounded-xl border transition-[width,height,background-color,border-color,color,box-shadow,transform] duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-white/20 ${
+                        className={`saki-dock-button relative flex shrink-0 items-center justify-center rounded-xl border transition-[width,height,background-color,border-color,color,box-shadow,transform] duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-white/20 ${
                           isOpen
-                            ? 'border-amber-300/75 bg-amber-300/[0.16] text-amber-50 shadow-[0_0_0_1px_rgba(252,211,77,0.35),0_0_24px_rgba(251,191,36,0.28),inset_0_1px_0_rgba(255,255,255,0.22)]'
-                            : 'border-transparent bg-white/[0.06] text-white/70 hover:bg-white/[0.12] hover:text-white'
+                            ? 'border-[#ff75ac]/80 bg-[#ff75ac]/25 text-[var(--nav-text)] shadow-[0_0_0_1px_rgba(255,117,172,0.4),0_0_20px_rgba(255,117,172,0.35),inset_0_1px_0_rgba(255,255,255,0.3)]'
+                            : 'border-transparent bg-[var(--nav-surface)] text-[var(--nav-text)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text)]'
                         }`}
                         style={{
                           height: `${dockMetrics.buttonSize}px`,
@@ -349,12 +361,14 @@ export default function Sidebar({
                           zIndex: dockMetrics.zIndex,
                         }}
                         title={action.label}
+                        aria-label={action.label}
+                        aria-pressed={isOpen}
                       >
                         <Icon size={dockMetrics.iconSize} />
                         {action.badge && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,0.15)]" />}
                       </button>
                       <span
-                        className={`pointer-events-none absolute left-1/2 top-[2.05rem] z-10 w-max max-w-[5.75rem] -translate-x-1/2 whitespace-nowrap text-center text-[10px] font-medium tracking-[0.12em] text-white/78 transition-all duration-200 ease-out ${
+                        className={`pointer-events-none absolute left-1/2 top-[2.05rem] z-10 w-max max-w-[5.75rem] -translate-x-1/2 whitespace-nowrap text-center text-[10px] font-medium tracking-[0.12em] text-[var(--nav-muted)] transition-all duration-200 ease-out ${
                           isLabelVisible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'
                         }`}
                         style={{ top: `${dockMetrics.labelTop}px` }}
@@ -376,7 +390,7 @@ export default function Sidebar({
                   handleMobileClose();
                 }}
                 active={activeUtilityKeySet.has('guide')}
-                className="justify-center bg-white/[0.08] text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:bg-white/[0.14]"
+                className="justify-center bg-[var(--nav-surface)] text-[var(--nav-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:bg-[var(--nav-hover)]"
               />
               <SidebarAction
                 label={t('settings')}
@@ -386,7 +400,7 @@ export default function Sidebar({
                   handleMobileClose();
                 }}
                 active={activeUtilityKeySet.has('settings')}
-                className="justify-center bg-white/[0.08] text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:bg-white/[0.14]"
+                className="justify-center bg-[var(--nav-surface)] text-[var(--nav-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:bg-[var(--nav-hover)]"
               />
             </div>
           </div>
@@ -400,10 +414,11 @@ function SidebarAction({ label, icon: Icon, onClick, badge = false, active = fal
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={`relative flex w-full items-center gap-3 rounded-2xl border px-3 py-2.5 text-left text-sm font-medium transition-[border-color,background-color,color,box-shadow] ${className} ${
         active
-          ? 'border-amber-300/75 bg-amber-300/[0.14] text-amber-50 shadow-[0_0_0_1px_rgba(252,211,77,0.28),0_0_24px_rgba(251,191,36,0.22)]'
-          : 'border-transparent text-white/70 hover:bg-white/10 hover:text-white'
+          ? 'border-[#ff75ac]/75 bg-[#ff75ac]/20 text-[var(--nav-text)] shadow-[0_0_0_1px_rgba(255,117,172,0.35),0_0_20px_rgba(255,117,172,0.25)]'
+          : 'border-transparent text-[var(--nav-text)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text)]'
       }`}
     >
       <Icon size={18} />

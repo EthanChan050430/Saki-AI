@@ -1,6 +1,3 @@
-const officeParser = require('officeparser');
-const pdf = require('pdf-parse');
-const WordExtractor = require("word-extractor");
 const fs = require('fs-extra');
 const path = require('path');
 
@@ -9,7 +6,7 @@ const path = require('path');
  */
 async function parseOldDoc(filePath) {
     try {
-        const extractor = new WordExtractor();
+        const extractor = new (require("word-extractor"))();
         const extracted = await extractor.extract(filePath);
         return extracted.getBody();
     } catch (e) {
@@ -23,7 +20,7 @@ async function parseOldDoc(filePath) {
 async function parsePdf(filePath) {
     const dataBuffer = await fs.readFile(filePath);
     try {
-        const data = await pdf(dataBuffer);
+        const data = await require('pdf-parse')(dataBuffer);
         return data.text || "PDF content is empty.";
     } catch (e) {
         return `PDF Parsing Error: ${e.message}`;
@@ -58,7 +55,7 @@ async function parseFile(filePath, mimeType) {
 
             // officeparser 能够处理大多数现代二进制 office 格式 (.docx, .pptx, .xlsx)
             return new Promise((resolve, reject) => {
-                officeParser.parseOffice(filePath, (data, err) => {
+                require('officeparser').parseOffice(filePath, (data, err) => {
                     if (err) return reject(err);
                     resolve(data || "Document is empty.");
                 });

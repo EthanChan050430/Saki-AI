@@ -2,47 +2,363 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   DreamStarryRobot Unified Design Tokens & Liquid Glass Aesthetic System
+   ========================================================================== */
+
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Inter, system-ui, sans-serif;
+  color: #1d1d1f;
+  background-color: #f0f4f9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+
+  /* Primary Palette */
+  --primary: #ff75ac;
+  --primary-hover: #ff5b9a;
+  --primary-light: rgba(255, 117, 172, 0.14);
+  --primary-glow: rgba(255, 117, 172, 0.28);
+
+  /* Glassmorphism Tokens (Light Mode) */
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.70);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --input-bg: rgba(255, 255, 255, 0.6);
+  --text-dark: #1d1d1f;
+  --text-secondary: #86868b;
+  --text-tertiary: #aeaeb2;
+  --surface-bg: rgba(255, 255, 255, 0.62);
+  --surface-bg-hover: rgba(255, 255, 255, 0.82);
+  --surface-bg-strong: rgba(255, 255, 255, 0.92);
+  --surface-border: rgba(255, 255, 255, 0.65);
+  --surface-border-subtle: rgba(226, 232, 240, 0.8);
+  --scrollbar-thumb: rgba(255, 117, 172, 0.3);
+  --scrollbar-thumb-hover: rgba(255, 117, 172, 0.5);
+
+  /* Easing and transitions */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-normal: 0.25s;
+  --duration-theme: 0.45s;
+}
+
+[data-theme="dark"] {
+  color: #f5f5f7;
+  background-color: #0b0c10;
+
+  /* Primary Palette (Dark Mode) */
+  --primary: #ff75ac;
+  --primary-hover: #ff9bc8;
+  --primary-light: rgba(255, 117, 172, 0.18);
+  --primary-glow: rgba(255, 117, 172, 0.35);
+
+  /* Glassmorphism Tokens (Dark Mode: Liquid Obsidian) */
+  --glass-bg: rgba(36, 37, 46, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --input-bg: rgba(255, 255, 255, 0.06);
+  --text-dark: #f5f5f7;
+  --text-secondary: #98989d;
+  --text-tertiary: #636366;
+  --surface-bg: rgba(36, 37, 46, 0.55);
+  --surface-bg-hover: rgba(50, 52, 65, 0.75);
+  --surface-bg-strong: rgba(40, 42, 54, 0.88);
+  --surface-border: rgba(255, 255, 255, 0.10);
+  --surface-border-subtle: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb: rgba(255, 117, 172, 0.35);
+  --scrollbar-thumb-hover: rgba(255, 117, 172, 0.6);
+}
+
 @layer base {
   body {
-    @apply antialiased text-gray-900;
+    @apply antialiased transition-colors duration-300;
+    color: var(--text-dark);
+    background-color: var(--background, transparent);
+  }
+
+  ::selection {
+    background: #f6ccdd;
+    color: #6a2140;
+  }
+
+  [data-theme="dark"] ::selection {
+    background: rgba(255, 117, 172, 0.45);
+    color: #ffffff;
   }
 }
 
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
+/* ==========================================================================
+   Celestial Circular Theme Switch Animation (VitePress/Antfu style)
+   ========================================================================== */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }
 
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+::view-transition-old(root) {
+  z-index: 1;
 }
 
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+[data-theme="dark"]::view-transition-old(root) {
+  z-index: 9999;
+}
+
+[data-theme="dark"]::view-transition-new(root) {
+  z-index: 1;
+}
+
+/* ==========================================================================
+   Scrollbars - Saki Pink Aesthetic
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.scrollbar-hide::-webkit-scrollbar,
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 
+.scrollbar-hide,
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
 
-/* Custom Scrollbar for Chat Messages */
-#chat-messages-container::-webkit-scrollbar {
-  width: 6px;
+/* ==========================================================================
+   Liquid Glass System Classes
+   ========================================================================== */
+.liquid-glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
 }
 
-#chat-messages-container::-webkit-scrollbar-track {
-  background: transparent;
+.liquid-glass-card {
+  background: var(--surface-bg);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
 }
 
-#chat-messages-container::-webkit-scrollbar-thumb {
-  background: rgba(236, 72, 153, 0.3);
-  /* Pink-500 with transparency */
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(8px);
+.liquid-glass-card:hover {
+  background: var(--surface-bg-hover);
+  border-color: rgba(255, 117, 172, 0.35);
 }
 
-#chat-messages-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(236, 72, 153, 0.5);
+.saki-pink-gradient {
+  background: linear-gradient(135deg, #ff75ac 0%, #ff5b9a 100%);
+}
+
+.saki-pink-glow {
+  box-shadow: 0 8px 24px rgba(255, 117, 172, 0.28);
+}
+
+/* Micro-animations */
+@keyframes saki-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-saki-fade-in {
+  animation: saki-fade-in 0.3s var(--ease-out-expo) forwards;
+}
+
+/* ==========================================================================
+   Saki Pill Action Chips (Unified Mode Bar Button Styles)
+   ========================================================================== */
+.saki-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.85), 0 2px 6px rgba(0, 0, 0, 0.04);
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.saki-chip-btn:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 117, 172, 0.45);
+  color: #0f172a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 117, 172, 0.16), inset 0 1px 1px #ffffff;
+}
+
+.saki-chip-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.saki-chip-btn.is-active,
+.saki-chip-icon-btn.is-active {
+  background: linear-gradient(135deg, rgba(255, 117, 172, 0.22) 0%, rgba(255, 91, 154, 0.14) 100%);
+  border-color: rgba(255, 117, 172, 0.65);
+  color: #e0327a;
+  box-shadow: 0 0 14px rgba(255, 117, 172, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.9);
+}
+
+.saki-chip-btn:disabled,
+.saki-chip-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.saki-chip-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.85), 0 2px 6px rgba(0, 0, 0, 0.04);
+  font-size: 11px;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.saki-chip-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 117, 172, 0.45);
+  color: #0f172a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 117, 172, 0.16), inset 0 1px 1px #ffffff;
+}
+
+.saki-chip-icon-btn:active {
+  transform: translateY(0) scale(0.96);
+}
+
+/* Dark Mode Overrides */
+[data-theme="dark"] .saki-chip-btn,
+[data-theme="dark"] .saki-chip-icon-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.14), 0 2px 6px rgba(0, 0, 0, 0.25);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .saki-chip-btn:hover,
+[data-theme="dark"] .saki-chip-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 117, 172, 0.45);
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(255, 117, 172, 0.22), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="dark"] .saki-chip-btn.is-active,
+[data-theme="dark"] .saki-chip-icon-btn.is-active {
+  background: linear-gradient(135deg, rgba(255, 117, 172, 0.26) 0%, rgba(255, 91, 154, 0.16) 100%);
+  border-color: rgba(255, 117, 172, 0.65);
+  color: #ff9bc8;
+  box-shadow: 0 0 16px rgba(255, 117, 172, 0.32), inset 0 1px 1px rgba(255, 255, 255, 0.25);
+}
+
+/* ==========================================================================
+   Chat Turn Navigator Jump Target Highlight - Saki Pink Aesthetic
+   ========================================================================== */
+@keyframes sakiMessageHighlight {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 117, 172, 0);
+    background-color: transparent;
+  }
+  20% {
+    box-shadow: 0 0 0 3px rgba(255, 117, 172, 0.45);
+    background-color: rgba(255, 117, 172, 0.1);
+  }
+  60% {
+    box-shadow: 0 0 0 3px rgba(255, 117, 172, 0.25);
+    background-color: rgba(255, 117, 172, 0.05);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 117, 172, 0);
+    background-color: transparent;
+  }
+}
+
+@keyframes sakiMessageHighlightDark {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 117, 172, 0);
+    background-color: transparent;
+  }
+  20% {
+    box-shadow: 0 0 0 3px rgba(255, 117, 172, 0.55);
+    background-color: rgba(255, 117, 172, 0.15);
+  }
+  60% {
+    box-shadow: 0 0 0 3px rgba(255, 117, 172, 0.3);
+    background-color: rgba(255, 117, 172, 0.07);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 117, 172, 0);
+    background-color: transparent;
+  }
+}
+
+.saki-message-highlight {
+  animation: sakiMessageHighlight 1.8s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  border-radius: 1.25rem;
+}
+
+[data-theme="dark"] .saki-message-highlight {
+  animation-name: sakiMessageHighlightDark !important;
 }

@@ -1,0 +1,29 @@
+.saki-code-changes { display: flex; align-items: center; margin: 0 0 8px 2px; }
+.saki-code-changes-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 7px; background: var(--surface-bg-medium); color: var(--text-secondary); font: inherit; font-size: 11px; line-height: 1.4; cursor: pointer; transition: background .15s ease, border-color .15s ease; font-variant-numeric: tabular-nums; }
+.saki-code-changes-chip:hover, .saki-code-changes-chip[aria-expanded='true'] { background: var(--control-hover); border-color: var(--accent-border); color: var(--text-dark); }
+.saki-code-added { color: #238153; font-variant-numeric: tabular-nums; }
+.saki-code-removed { color: #c84a59; font-variant-numeric: tabular-nums; }
+[data-theme='dark'] .saki-code-added { color: #6bce9a; }
+[data-theme='dark'] .saki-code-removed { color: #f28898; }
+.saki-diff-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.saki-diff-files { width: 240px; flex-shrink: 0; padding: 10px 8px; overflow-y: auto; border-right: 1px solid rgba(255,255,255,.09); background: #202020; }
+.saki-diff-files-heading { padding: 3px 9px 11px; color: #96969e; font-size: 11px; }
+.saki-diff-file-button { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 9px; border-radius: 6px; border: 1px solid transparent; text-align: left; color: #c4c4cc; font-size: 11px; background: transparent; cursor: pointer; }
+.saki-diff-file-button:hover { background: rgba(255,255,255,.045); }
+.saki-diff-file-button[aria-current='true'] { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.1); color: #fafafa; }
+.saki-diff-file-button > svg { flex-shrink: 0; margin-top: 2px; color: #96969e; }
+.saki-diff-file-info { min-width: 0; flex: 1; }
+.saki-diff-file-name { display: block; overflow-wrap: anywhere; line-height: 1.55; }
+.saki-diff-file-directory { display: block; margin-top: 2px; color: #85858e; font-size: 10px; overflow-wrap: anywhere; }
+.saki-diff-file-stats { display: inline-flex; gap: 5px; margin-top: 5px; font-size: 10px; }
+.saki-diff-files .saki-code-added { color: #6bce9a; }
+.saki-diff-files .saki-code-removed { color: #f28898; }
+.saki-diff-operation { display: inline-flex; padding: 1px 5px; margin-left: 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; color: #aaaab2; font-size: 10px; vertical-align: middle; }
+.saki-diff-editor { min-width: 0; min-height: 0; }
+@media (max-width: 640px) {
+  .saki-diff-layout { flex-direction: column; }
+  .saki-diff-files { display: flex; width: 100%; max-height: 128px; overflow: auto; padding: 6px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.09); }
+  .saki-diff-files-heading { display: none; }
+  .saki-diff-file-button { min-width: 165px; width: 165px; }
+  .saki-diff-editor { max-height: 52vh; }
+}

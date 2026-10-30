@@ -10,6 +10,8 @@ yarn-error.log*
 dist/
 build/
 frontend/dist.zip
+release/
+.deploy/
 backend/qqbot/dist/
 backend/qqbot/bin/
 
@@ -50,3 +52,4 @@ __pycache__/
 .idea/
 .DS_Store
 
+.playwright-mcp/

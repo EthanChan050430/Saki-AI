@@ -1,0 +1,177 @@
+/* Shared colors and dialog controls; keep Saki AI's original shell and Dock. */
+:root {
+  --surface-bg-medium: rgba(255, 255, 255, .72);
+  --surface-bg-light: rgba(255, 255, 255, .48);
+  --surface-inset: rgba(242, 242, 247, .65);
+  --text-secondary: #686872;
+  --text-tertiary: #84848e;
+  --accent-text: #b92761;
+  --dialog-bg: rgba(255, 255, 255, .88);
+  --code-bg: #171923;
+  --control-bg: rgba(255, 255, 255, .58);
+  --control-hover: rgba(255, 255, 255, .86);
+  --control-border: rgba(137, 115, 139, .18);
+  --popup-bg: rgba(255, 253, 255, .96);
+  --popup-shadow: 0 14px 44px rgba(48, 28, 53, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
+  --nav-bg: rgba(255, 248, 252, .9);
+  --nav-text: #403448;
+  --nav-muted: #706477;
+  --nav-tertiary: #887b90;
+  --nav-border: rgba(133, 97, 124, .17);
+  --nav-surface: rgba(255, 255, 255, .58);
+  --nav-inset: rgba(244, 229, 239, .48);
+  --nav-hover: rgba(255, 117, 172, .1);
+  --nav-pending-text: #8a5b0d;
+  --nav-dock-bg: linear-gradient(155deg, rgba(255, 255, 255, .9), rgba(255, 237, 246, .65));
+  --nav-dock-shadow: inset 0 1px 0 rgba(255, 255, 255, .95), 0 6px 20px rgba(100, 58, 86, .07);
+  --accent-border: rgba(255, 117, 172, .32);
+  --control-radius: 12px;
+  --panel-radius: 24px;
+  --dialog-header-bg: linear-gradient(120deg, rgba(255, 117, 172, .08), rgba(255, 255, 255, .12));
+}
+
+[data-theme='dark'] {
+  --surface-bg-medium: rgba(36, 37, 46, .76);
+  --surface-bg-light: rgba(36, 37, 46, .48);
+  --surface-inset: rgba(18, 19, 27, .45);
+  --text-secondary: #b0afbc;
+  --text-tertiary: #92909e;
+  --accent-text: #ff9bc8;
+  --dialog-bg: rgba(30, 31, 42, .92);
+  --control-bg: rgba(255, 255, 255, .065);
+  --control-hover: rgba(255, 255, 255, .11);
+  --control-border: rgba(223, 204, 225, .15);
+  --popup-bg: rgba(30, 29, 41, .98);
+  --popup-shadow: 0 16px 48px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .09);
+  --nav-bg: rgba(14, 13, 22, .88);
+  --nav-text: #f4edf6;
+  --nav-muted: #c2b8ca;
+  --nav-tertiary: #9a8fa5;
+  --nav-border: rgba(255, 209, 230, .14);
+  --nav-surface: rgba(255, 255, 255, .07);
+  --nav-inset: rgba(0, 0, 0, .09);
+  --nav-hover: rgba(255, 255, 255, .12);
+  --nav-pending-text: #fde68a;
+  --nav-dock-bg: linear-gradient(155deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, .04));
+  --nav-dock-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 8px 24px rgba(7, 5, 18, .14);
+  --accent-border: rgba(255, 117, 172, .36);
+  --dialog-header-bg: linear-gradient(120deg, rgba(255, 117, 172, .07), rgba(255, 255, 255, .015));
+}
+
+.saki-dialog, [data-saki-dialog] { background: var(--dialog-bg); color: var(--text-dark); border: 1px solid var(--glass-border); backdrop-filter: blur(32px) saturate(170%); }
+:where([data-saki-dialog]) :where(.border, .border-t, .border-b, .border-l, .border-r) { border-color: var(--surface-border-subtle); }
+:is(.saki-dialog, [data-saki-dialog]) > :first-child { border-color: var(--surface-border-subtle); }
+:is(.saki-dialog, [data-saki-dialog]) :is(input:not([type='checkbox']):not([type='range']):not([type='color']), textarea, select) { background-color: var(--input-bg); color: var(--text-dark); border-color: var(--surface-border-subtle); }
+:is(.saki-dialog, [data-saki-dialog]) :is(input, textarea, select)::placeholder { color: var(--text-tertiary); }
+:is(.saki-dialog, [data-saki-dialog]) :is(input, textarea, select):focus { border-color: var(--primary); }
+
+
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+/* Theme-aware sidebar colors; the magnifying Dock keeps its original geometry. */
+.saki-navigation {
+  background: var(--nav-bg);
+  border-right-color: var(--nav-border);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, .025);
+}
+.saki-navigation .saki-new-conversation {
+  border-color: rgba(255, 174, 208, .25);
+  background: linear-gradient(120deg, rgba(255, 117, 172, .13), rgba(255, 255, 255, .05));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07);
+}
+.saki-navigation .saki-new-conversation:hover {
+  background: rgba(255, 117, 172, .22);
+  border-color: rgba(255, 174, 208, .5);
+}
+.saki-nav-search { background: var(--nav-inset); }
+.saki-nav-search:focus-within { box-shadow: 0 0 0 3px rgba(255, 117, 172, .09); }
+.saki-navigation .saki-dock {
+  background: var(--nav-dock-bg);
+  border-color: var(--nav-border);
+  box-shadow: var(--nav-dock-shadow);
+}
+.saki-dock-button { background-image: linear-gradient(150deg, rgba(255, 255, 255, .055), transparent); }
+.saki-dock-button[aria-pressed='true'] { border-color: var(--accent-border); color: var(--accent-text); }
+.saki-dock-button[aria-pressed='true']::after {
+  content: ''; position: absolute; bottom: 3px; width: 3px; height: 3px;
+  border-radius: 50%; background: #ffb3d3; box-shadow: 0 0 6px rgba(255, 117, 172, .7);
+}
+
+/* Shared control materials, without turning the chat canvas into a card. */
+.saki-topbar { border-bottom-color: var(--control-border); }
+.saki-topbar button { border-radius: var(--control-radius); }
+.saki-input-shell {
+  background: var(--surface-bg-medium);
+  border-color: var(--control-border);
+  box-shadow: 0 8px 30px rgba(45, 26, 48, .08), inset 0 1px 0 rgba(255, 255, 255, .45);
+}
+[data-theme='dark'] .saki-input-shell {
+  background: rgba(23, 22, 33, .82);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.saki-input-shell:focus-within { border-color: var(--accent-border); box-shadow: 0 8px 30px rgba(45, 26, 48, .08), 0 0 0 3px var(--primary-light); }
+.saki-input-shell textarea { caret-color: var(--primary); }
+.saki-input-shell textarea::placeholder { color: var(--text-secondary); }
+.saki-input-shell > button:disabled { cursor: default; opacity: .45; }
+.saki-chat-messages {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 5.5rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 5.5rem), transparent 100%);
+}
+.saki-popup, .saki-workspace-popup, .saki-message-toolbar {
+  background: var(--popup-bg);
+  border-color: var(--control-border);
+  box-shadow: var(--popup-shadow);
+  color: var(--text-dark);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+}
+.saki-workspace-popup input { background: var(--control-bg); color: var(--text-dark); }
+.saki-message-toolbar :is(button, span) { color: var(--text-secondary); }
+.saki-message-toolbar button:hover { background: var(--primary-light); color: var(--accent-text); }
+.saki-message-toolbar button[data-destructive='true'] { color: #e85d7b; }
+.saki-message-toolbar button[data-destructive='true']:hover { background: rgba(244, 63, 94, .1); color: #f43f5e; }
+.saki-markdown {
+  color: var(--text-dark);
+  --tw-prose-body: var(--text-dark);
+  --tw-prose-headings: var(--text-dark);
+  --tw-prose-bold: var(--text-dark);
+  --tw-prose-links: var(--accent-text);
+  --tw-prose-counters: var(--text-secondary);
+  --tw-prose-bullets: var(--accent-text);
+  --tw-prose-quotes: var(--text-secondary);
+  --tw-prose-quote-borders: var(--accent-border);
+  --tw-prose-code: var(--accent-text);
+  --tw-prose-hr: var(--control-border);
+  --tw-prose-th-borders: var(--control-border);
+  --tw-prose-td-borders: var(--control-border);
+}
+.saki-markdown :not(pre) > code::before, .saki-markdown :not(pre) > code::after { content: none; }
+
+/* Keep the existing sections and tiled window sizing; share their finishes. */
+[data-saki-dialog] > :first-child { background: var(--dialog-header-bg); }
+[data-saki-dialog] > :first-child h3 { font-weight: 600; letter-spacing: -.02em; }
+[data-saki-dialog] :is(input:not([type='checkbox']):not([type='range']):not([type='color']), select, textarea) {
+  border-radius: 10px;
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+[data-saki-dialog] :is(input, select, textarea):focus-visible { outline-offset: 1px; }
+[data-saki-dialog] [role='switch'] { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--control-border); }
+[data-saki-dialog] [role='switch'][aria-checked='true'] { background: var(--primary); }
+[data-saki-dialog] [role='switch'] > div { background: #fff; box-shadow: 0 1px 3px rgba(40, 15, 30, .18); }
+.saki-background-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.saki-background-choice { position: relative; overflow: hidden; padding: 3px; border: 1px solid var(--control-border); border-radius: 12px; background: var(--control-bg); text-align: left; }
+.saki-background-choice img { width: 100%; height: 54px; border-radius: 8px; object-fit: cover; }
+.saki-background-pair { display: flex; overflow: hidden; border-radius: 8px; }
+.saki-background-pair img { width: 50%; border-radius: 0; }
+.saki-background-choice > span { display: block; padding: 6px 5px 3px; font-size: 10px; color: var(--text-secondary); }
+.saki-background-choice[aria-pressed='true'] { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-light); }
+.saki-background-choice[aria-pressed='true'] > span { color: var(--accent-text); }
+.saki-background-choice:hover { border-color: var(--primary); }
+.saki-background-choice svg { position: absolute; top: 8px; right: 8px; color: #fff; background: #d44b83; border-radius: 50%; padding: 2px; }
+
+@media (max-width: 767px) {
+  .saki-popup[data-saki-popup='features'], .saki-popup[data-saki-popup='permissions'] { position: fixed; left: 12px; right: 12px; width: auto; bottom: calc(145px + env(safe-area-inset-bottom)); max-height: min(60dvh, 28rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .saki-navigation, .saki-navigation *, .saki-input-shell, .saki-topbar *, [data-saki-dialog] * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}

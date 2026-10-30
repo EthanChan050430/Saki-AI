@@ -33,10 +33,10 @@ export default function ImageCropperModal({ image, onCropComplete, onClose }) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl">
-        <div className="p-4 border-b flex items-center justify-between">
-          <h3 className="font-bold text-gray-800">{t('crop_image')}</h3>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-            <X size={20} className="text-gray-500" />
+        <div className="px-4 py-2.5 border-b flex items-center justify-between shrink-0">
+          <h3 className="text-sm font-bold text-gray-800">{t('crop_image')}</h3>
+          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+            <X size={16} className="text-gray-500" />
           </button>
         </div>
 

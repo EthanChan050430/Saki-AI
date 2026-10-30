@@ -16,24 +16,24 @@ import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 
 function GuideEntry({ entry }) {
   return (
-    <article className="rounded-[1.35rem] border border-slate-200/80 bg-white/90 p-4 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+    <article className="rounded-[1.35rem] border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)]  p-4 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h4 className="text-base font-semibold text-slate-900">{entry.title}</h4>
-          <p className="mt-1 text-sm leading-6 text-slate-600">{entry.summary}</p>
+          <h4 className="text-base font-semibold text-[var(--text-dark)]">{entry.title}</h4>
+          <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">{entry.summary}</p>
         </div>
-        <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+        <span className="shrink-0 rounded-full border border-saki-pink/25 bg-saki-pink/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent-text)]">
           {entry.badge}
         </span>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-2xl bg-slate-50 px-3.5 py-3">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">{entry.entryLabel}</div>
-          <div className="mt-1 text-sm font-medium leading-6 text-slate-700">{entry.entry}</div>
+        <div className="rounded-2xl bg-[var(--surface-bg-light)] px-3.5 py-3">
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">{entry.entryLabel}</div>
+          <div className="mt-1 text-sm font-medium leading-6 text-[var(--text-dark)]">{entry.entry}</div>
         </div>
         <div className="rounded-2xl bg-amber-50/80 px-3.5 py-3">
           <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-amber-500">{entry.howLabel}</div>
-          <div className="mt-1 text-sm font-medium leading-6 text-slate-700">{entry.how}</div>
+          <div className="mt-1 text-sm font-medium leading-6 text-[var(--text-dark)]">{entry.how}</div>
         </div>
       </div>
       {entry.tip ? (
@@ -361,58 +361,58 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
-      <motion.div
+      <motion.div data-saki-dialog="true"
         className={
           windowed
-            ? 'flex h-full w-full flex-col overflow-hidden rounded-[28px] bg-white shadow-none'
-            : 'flex h-full w-full max-w-6xl flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-[2rem]'
+            ? 'flex h-full w-full flex-col overflow-hidden rounded-[28px] bg-[var(--surface-bg)]  shadow-none'
+            : 'flex h-full w-full max-w-6xl flex-col overflow-hidden bg-[var(--surface-bg)]  shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-[2rem]'
         }
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="relative overflow-hidden border-b border-slate-200 bg-[linear-gradient(135deg,rgba(14,165,233,0.12),rgba(251,191,36,0.1),rgba(255,255,255,0.96))] px-5 py-5 sm:px-6">
-          <div className="absolute inset-y-0 right-0 w-48 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.18),transparent_72%)]" />
-          <div className="relative flex items-start justify-between gap-4">
-            <div className="max-w-3xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-700 shadow-sm">
-                <BookOpen size={14} />
-                <span>{getLocalText('功能 Wiki', 'Feature Wiki')}</span>
+        <div className="relative overflow-hidden border-b border-[var(--surface-border-subtle)] bg-[linear-gradient(135deg,rgba(255,117,172,0.12),rgba(255,155,200,0.06),rgba(255,255,255,0.96))] px-4 py-2.5 sm:px-5 sm:py-3 shrink-0">
+          <div className="absolute inset-y-0 right-0 w-48 bg-[radial-gradient(circle_at_top_right,rgba(255,117,172,0.15),transparent_72%)]" />
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-saki-pink/25 bg-[var(--surface-bg)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--accent-text)] shadow-sm">
+                  <BookOpen size={12} />
+                  <span>{getLocalText('功能 Wiki', 'Feature Wiki')}</span>
+                </div>
+                <h2 className="text-sm sm:text-base font-bold tracking-tight text-[var(--text-dark)] truncate">
+                  {getLocalText('功能导航与使用手册', 'Feature guide and usage manual')}
+                </h2>
               </div>
-              <h2 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
-                {getLocalText('功能导航与使用手册', 'Feature guide and usage manual')}
-              </h2>
-              <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-600">
+              <p className="mt-0.5 max-w-2xl text-[11px] leading-5 text-[var(--text-secondary)] truncate">
                 {getLocalText(
                   '这里直接展示各个模块的入口、用法和高频提示，适合快速扫一眼后直接上手。',
                   'This view presents each module directly so you can scan entry points, usage patterns, and high-frequency tips at a glance.'
                 )}
               </p>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => onStartOnboarding?.()}
-                  className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!onStartOnboarding}
-                >
-                  <Sparkles size={15} />
-                  <span>{getLocalText('开启新手引导', 'Start onboarding')}</span>
-                </button>
-                <p className="text-xs leading-6 text-slate-500">
-                  {getLocalText('想重新认识各个入口时，可以随时从这里重新播放引导。', 'Replay the guided tour anytime to revisit the main entry points.')}
-                </p>
-              </div>
             </div>
-            <button onClick={onClose} className="relative z-10 rounded-full p-2 text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-700">
-              <X size={20} />
-            </button>
+            <div className="relative z-10 flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => onStartOnboarding?.()}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--code-bg)] px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-[var(--code-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!onStartOnboarding}
+                title={getLocalText('想重新认识各个入口时，可以随时从这里重新播放引导。', 'Replay the guided tour anytime to revisit the main entry points.')}
+              >
+                <Sparkles size={13} />
+                <span className="hidden sm:inline">{getLocalText('开启新手引导', 'Start onboarding')}</span>
+              </button>
+              <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-bg)] hover:text-[var(--text-dark)]">
+                <X size={16} />
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="max-h-[38vh] overflow-y-auto border-b border-slate-200 bg-slate-50/80 md:max-h-none md:w-[270px] md:min-h-0 md:border-b-0 md:border-r">
+          <aside className="max-h-[38vh] overflow-y-auto border-b border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] md:max-h-none md:w-[270px] md:min-h-0 md:border-b-0 md:border-r">
             <div className="space-y-3 p-4 sm:p-5">
-              <div className="rounded-[1.3rem] border border-slate-200 bg-white p-4 shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
-                <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-400">
+              <div className="rounded-[1.3rem] border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)]  p-4 shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
+                <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-[var(--text-tertiary)]">
                   {getLocalText('功能一览', 'Quick Map')}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -423,8 +423,8 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
                       onClick={() => scrollToSection(directoryFeatureTargets[item])}
                       className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
                         activeSection === directoryFeatureTargets[item]
-                          ? 'border-sky-300 bg-sky-50 text-sky-700'
-                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white'
+                          ? 'border-saki-pink/40 bg-saki-pink/10 text-[var(--accent-text)]'
+                          : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] text-[var(--text-secondary)] hover:border-[var(--surface-border-subtle)] hover:bg-[var(--surface-bg)] '
                       }`}
                     >
                       {item}
@@ -434,7 +434,7 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
               </div>
 
               <div>
-                <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-400">
+                <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.22em] text-[var(--text-tertiary)]">
                   {getLocalText('目录索引', 'Directory')}
                 </div>
                 <div className="space-y-2">
@@ -448,12 +448,12 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
                         onClick={() => scrollToSection(section.id)}
                         className={`w-full rounded-[1.2rem] border px-3 py-3 text-left transition-all ${
                           isActive
-                            ? 'border-sky-300 bg-sky-50 text-sky-900 shadow-[0_10px_30px_rgba(14,165,233,0.12)]'
-                            : 'border-slate-200/70 bg-white/80 text-slate-600 hover:border-slate-300 hover:bg-white'
+                            ? 'border-saki-pink/40 bg-saki-pink/10 text-[var(--accent-text)] shadow-[0_10px_30px_rgba(255,117,172,0.12)]'
+                            : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg)]  text-[var(--text-secondary)] hover:border-[var(--surface-border-subtle)] hover:bg-[var(--surface-bg)] '
                         }`}
                       >
                         <div className="flex items-center gap-2.5">
-                          <div className={`rounded-xl p-2 ${isActive ? 'bg-sky-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                          <div className={`rounded-xl p-2 ${isActive ? 'bg-saki-pink text-white' : 'bg-[var(--surface-bg-light)] text-[var(--text-secondary)]'}`}>
                             <Icon size={15} />
                           </div>
                           <div className="min-w-0 flex-1">
@@ -465,7 +465,7 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
                             <span
                               key={`${section.id}-${item}`}
                               className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                isActive ? 'bg-white text-sky-700' : 'bg-slate-100 text-slate-500'
+                                isActive ? 'bg-[var(--surface-bg)]  text-[var(--accent-text)]' : 'bg-[var(--surface-bg-light)] text-[var(--text-secondary)]'
                               }`}
                             >
                               {item}
@@ -490,15 +490,15 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
                     ref={(node) => {
                       sectionRefs.current[section.id] = node;
                     }}
-                    className="scroll-mt-6 rounded-[1.75rem] border border-slate-200/80 bg-white/88 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.06)] sm:p-6"
+                    className="scroll-mt-6 rounded-[1.75rem] border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)]  p-5 shadow-[0_24px_60px_rgba(15,23,42,0.06)] sm:p-6"
                   >
                     <div className="flex items-start gap-4">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-900 to-slate-700 text-white shadow-lg shadow-slate-200">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--surface-bg-medium)] to-[var(--surface-bg-medium)] text-white shadow-lg shadow-slate-200">
                         <Icon size={20} />
                       </div>
                       <div>
-                        <h3 className="text-xl font-bold tracking-tight text-slate-900">{section.title}</h3>
-                        <p className="mt-2 text-sm leading-7 text-slate-600">{section.summary}</p>
+                        <h3 className="text-xl font-bold tracking-tight text-[var(--text-dark)]">{section.title}</h3>
+                        <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{section.summary}</p>
                       </div>
                     </div>
                     <div className="mt-5 space-y-4">

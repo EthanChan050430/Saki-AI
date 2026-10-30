@@ -1,18 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import mermaid from 'mermaid';
+import { loadMermaid } from '../utils/mermaid';
 import { ZoomIn, X } from 'lucide-react';
-
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: 'inherit',
-  suppressErrorNotifications: true,
-  errorHandler: () => {},
-  parseError: () => {},
-});
 
 const Mermaid = ({ chart }) => {
   const { t } = useTranslation();
@@ -41,6 +31,8 @@ const Mermaid = ({ chart }) => {
       const renderChart = async () => {
         try {
           // 语法检查：只有通过了 mermaid.parse 才会更新状态，从而实现“生成完毕再渲染”的效果
+          const mermaid = await loadMermaid();
+          if (!isMounted) return;
           await mermaid.parse(cleanedChart);
           
           const id = `mermaid-svg-${Math.random().toString(36).substr(2, 9)}`;

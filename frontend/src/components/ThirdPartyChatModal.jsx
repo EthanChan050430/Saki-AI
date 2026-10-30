@@ -27,7 +27,7 @@ function StatusPill({ status, ui }) {
     ? 'text-green-700 bg-green-50 border-green-200'
     : status?.configured
       ? 'text-amber-700 bg-amber-50 border-amber-200'
-      : 'text-gray-600 bg-gray-50 border-gray-200';
+      : 'text-[var(--text-secondary)] bg-[var(--surface-bg-light)] border-[var(--surface-border-subtle)]';
   const label = status?.ok
     ? ui.statusConnected
     : status?.configured
@@ -165,38 +165,38 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
-      <motion.div
-        className={windowed ? 'flex h-full w-full flex-col overflow-hidden bg-white rounded-[28px] shadow-none' : 'flex h-full w-full max-w-5xl flex-col overflow-hidden bg-white sm:h-auto sm:max-h-[88vh] sm:rounded-3xl shadow-2xl'}
+      <motion.div data-saki-dialog="true"
+        className={windowed ? 'flex h-full w-full flex-col overflow-hidden bg-[var(--surface-bg)]  rounded-[28px] shadow-none text-[var(--text-dark)] ' : 'flex h-full w-full max-w-5xl flex-col overflow-hidden bg-[var(--surface-bg)]  sm:h-auto sm:max-h-[88vh] sm:rounded-3xl shadow-2xl text-[var(--text-dark)] '}
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="flex items-center justify-between border-b bg-gray-50 px-5 py-4">
-          <div>
-            <div className="text-lg font-semibold text-gray-900">{ui.title}</div>
-            <div className="text-xs text-gray-500 mt-1">{ui.subtitle}</div>
+        <div className="flex items-center justify-between border-b bg-[var(--surface-bg-light)] px-4 py-2.5 shrink-0">
+          <div className="min-w-0">
+            <div className="text-sm sm:text-base font-semibold text-[var(--text-dark)] leading-tight truncate">{ui.title}</div>
+            <div className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-tight truncate">{ui.subtitle}</div>
           </div>
-          <button onClick={onClose} className="rounded-full p-2 text-gray-500 hover:bg-gray-200">
-            <X size={20} />
+          <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-inset)] shrink-0">
+            <X size={16} />
           </button>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <div className="border-b bg-gray-50/80 p-4 md:w-72 md:border-b-0 md:border-r">
-            <div className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">{ui.availableApps}</div>
+          <div className="border-b bg-[var(--surface-bg-light)] p-4 md:w-72 md:border-b-0 md:border-r">
+            <div className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--text-tertiary)]">{ui.availableApps}</div>
             <div className="space-y-2">
               {apps.map(app => (
                 <button
                   key={app.id}
                   onClick={() => setSelectedApp(app.id)}
-                  className={`w-full rounded-2xl border p-3 text-left transition-all ${selectedApp === app.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                  className={`w-full rounded-2xl border p-3 text-left transition-all ${selectedApp === app.id ? 'border-saki-pink bg-saki-pink/10 shadow-sm' : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] hover:border-[var(--surface-border-subtle)]'}`}
                 >
                   <div className="flex items-center gap-2">
-                    <div className={`rounded-xl p-2 ${selectedApp === app.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                    <div className={`rounded-xl p-2 ${selectedApp === app.id ? 'bg-[#ff75ac] text-white' : 'bg-[var(--surface-bg-light)] text-[var(--text-secondary)]'}`}>
                       <MessageCircle size={16} />
                     </div>
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-gray-900">{app.name}</div>
-                      <div className="mt-1 text-[11px] leading-relaxed text-gray-500">{app.description}</div>
+                      <div className="text-sm font-semibold text-[var(--text-dark)]">{app.name}</div>
+                      <div className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{app.description}</div>
                     </div>
                   </div>
                 </button>
@@ -208,63 +208,63 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
             <div className="mx-auto max-w-2xl space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
+                  <div className="rounded-2xl bg-saki-pink/10 p-3 text-[var(--accent-text)]">
                     <Bot size={22} />
                   </div>
                   <div>
-                    <div className="text-base font-semibold text-gray-900">{ui.qqName}</div>
-                    <div className="text-sm text-gray-500">{ui.panelDesc}</div>
+                    <div className="text-base font-semibold text-[var(--text-dark)]">{ui.qqName}</div>
+                    <div className="text-sm text-[var(--text-secondary)]">{ui.panelDesc}</div>
                   </div>
                 </div>
                 <StatusPill status={status} ui={ui} />
               </div>
 
-              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
+              <div className="rounded-2xl border border-saki-pink/15 bg-saki-pink/10 px-4 py-3 text-sm text-[var(--accent-text)]">
                 <div className="font-semibold">{ui.modelSyncTitle}</div>
-                <div className="mt-1 text-xs text-blue-800/80">
+                <div className="mt-1 text-xs text-[var(--accent-text)]/80">
                   {ui.modelSyncDesc}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-white px-3 py-1 border border-blue-100">
+                  <span className="rounded-full bg-[var(--surface-bg)] px-3 py-1 border border-saki-pink/15">
                     Provider: {status?.activeProvider || config.provider || '-'}
                   </span>
-                  <span className="rounded-full bg-white px-3 py-1 border border-blue-100">
+                  <span className="rounded-full bg-[var(--surface-bg)] px-3 py-1 border border-saki-pink/15">
                     Model: {status?.activeModel || config.model || '-'}
                   </span>
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-gray-200 bg-gray-50 p-5 space-y-5">
+              <div className="rounded-3xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] p-5 space-y-5">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-semibold text-gray-900">{ui.enableTitle}</div>
-                    <div className="text-xs text-gray-500 mt-1">{ui.enableDesc}</div>
+                    <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.enableTitle}</div>
+                    <div className="text-xs text-[var(--text-secondary)] mt-1">{ui.enableDesc}</div>
                   </div>
                   <button
                     onClick={() => handleChange('enabled', !draft.enabled)}
-                    className={`relative h-6 w-11 rounded-full transition-all ${draft.enabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                    className={`relative h-6 w-11 rounded-full transition-all ${draft.enabled ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
                   >
-                    <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${draft.enabled ? 'left-6' : 'left-1'}`} />
+                    <span className={`absolute top-1 h-4 w-4 rounded-full bg-[var(--surface-bg)] transition-all ${draft.enabled ? 'left-6' : 'left-1'}`} />
                   </button>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="sm:col-span-2">
-                    <label className="mb-1.5 block text-xs font-medium text-gray-500">App ID</label>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">App ID</label>
                     <input
                       value={draft.appId}
                       onChange={(e) => handleChange('appId', e.target.value)}
-                      className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      className="w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none transition-all focus:border-saki-pink focus:ring-2 focus:ring-saki-pink/15"
                       placeholder={ui.appIdPlaceholder}
                     />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="mb-1.5 block text-xs font-medium text-gray-500">Client Secret</label>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Client Secret</label>
                     <input
                       type="password"
                       value={draft.clientSecret}
                       onChange={(e) => handleChange('clientSecret', e.target.value)}
-                      className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      className="w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none transition-all focus:border-saki-pink focus:ring-2 focus:ring-saki-pink/15"
                       placeholder={ui.clientSecretPlaceholder}
                     />
                   </div>
@@ -273,68 +273,68 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                 <div className="grid gap-3 sm:grid-cols-2">
                   <button
                     onClick={() => handleChange('sandbox', !draft.sandbox)}
-                    className={`rounded-2xl border p-4 text-left transition-all ${draft.sandbox ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                    className={`rounded-2xl border p-4 text-left transition-all ${draft.sandbox ? 'border-saki-pink bg-saki-pink/10' : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] hover:border-[var(--surface-border-subtle)]'}`}
                   >
-                    <div className="text-sm font-semibold text-gray-900">{ui.sandboxTitle}</div>
-                    <div className="mt-1 text-xs text-gray-500">{ui.sandboxDesc}</div>
+                    <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.sandboxTitle}</div>
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">{ui.sandboxDesc}</div>
                   </button>
                   <button
                     onClick={() => handleChange('markdownSupport', !draft.markdownSupport)}
-                    className={`rounded-2xl border p-4 text-left transition-all ${draft.markdownSupport ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                    className={`rounded-2xl border p-4 text-left transition-all ${draft.markdownSupport ? 'border-saki-pink bg-saki-pink/10' : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] hover:border-[var(--surface-border-subtle)]'}`}
                   >
-                    <div className="text-sm font-semibold text-gray-900">{ui.markdownTitle}</div>
-                    <div className="mt-1 text-xs text-gray-500">{ui.markdownDesc}</div>
+                    <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.markdownTitle}</div>
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">{ui.markdownDesc}</div>
                   </button>
                 </div>
 
-                <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4">
+                <div className="rounded-2xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] p-4 space-y-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-gray-900">{sttUi.title}</div>
-                      <div className="mt-1 text-xs text-gray-500">
+                      <div className="text-sm font-semibold text-[var(--text-dark)]">{sttUi.title}</div>
+                      <div className="mt-1 text-xs text-[var(--text-secondary)]">
                         {sttUi.desc}
                       </div>
                     </div>
                     <button
                       onClick={() => handleChange('sttEnabled', !draft.sttEnabled)}
-                      className={`relative h-6 w-11 rounded-full transition-all ${draft.sttEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                      className={`relative h-6 w-11 rounded-full transition-all ${draft.sttEnabled ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
                     >
-                      <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${draft.sttEnabled ? 'left-6' : 'left-1'}`} />
+                      <span className={`absolute top-1 h-4 w-4 rounded-full bg-[var(--surface-bg)] transition-all ${draft.sttEnabled ? 'left-6' : 'left-1'}`} />
                     </button>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="sm:col-span-2">
-                      <label className="mb-1.5 block text-xs font-medium text-gray-500">
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                         {sttUi.baseUrl}
                       </label>
                       <input
                         value={draft.sttBaseUrl}
                         onChange={(e) => handleChange('sttBaseUrl', e.target.value)}
-                        className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        className="w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none transition-all focus:border-saki-pink focus:ring-2 focus:ring-saki-pink/15"
                         placeholder={sttUi.baseUrlPlaceholder}
                       />
                     </div>
                     <div className="sm:col-span-2">
-                      <label className="mb-1.5 block text-xs font-medium text-gray-500">
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                         {isZh ? 'STT API Key' : 'STT API Key'}
                       </label>
                       <input
                         type="password"
                         value={draft.sttApiKey}
                         onChange={(e) => handleChange('sttApiKey', e.target.value)}
-                        className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        className="w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none transition-all focus:border-saki-pink focus:ring-2 focus:ring-saki-pink/15"
                         placeholder={sttUi.apiKeyPlaceholder}
                       />
                     </div>
                     <div className="sm:col-span-2">
-                      <label className="mb-1.5 block text-xs font-medium text-gray-500">
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                         {sttUi.model}
                       </label>
                       <input
                         value={draft.sttModel}
                         onChange={(e) => handleChange('sttModel', e.target.value)}
-                        className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        className="w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none transition-all focus:border-saki-pink focus:ring-2 focus:ring-saki-pink/15"
                         placeholder="whisper-1"
                       />
                     </div>
@@ -342,9 +342,9 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-dashed border-gray-200 bg-white p-5">
-                <div className="text-sm font-semibold text-gray-900">{ui.usageTitle}</div>
-                <div className="mt-2 space-y-2 text-sm text-gray-600">
+              <div className="rounded-3xl border border-dashed border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] p-5">
+                <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.usageTitle}</div>
+                <div className="mt-2 space-y-2 text-sm text-[var(--text-secondary)]">
                   <div>{ui.usageNew}</div>
                   <div>{ui.usageDeep}</div>
                   <div>{ui.usagePpt}</div>
@@ -361,21 +361,21 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t bg-gray-50 px-5 py-4">
+        <div className="flex items-center justify-between border-t bg-[var(--surface-bg-light)] px-4 py-2.5 shrink-0">
           <button
             onClick={refreshStatus}
             disabled={isChecking}
-            className="inline-flex items-center gap-2 rounded-xl border bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-xl border bg-[var(--surface-bg)] px-3.5 py-1.5 text-xs sm:text-sm font-medium text-[var(--text-dark)] hover:bg-[var(--surface-bg-light)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw size={15} className={isChecking ? 'animate-spin' : ''} />
+            <RefreshCw size={14} className={isChecking ? 'animate-spin' : ''} />
             {ui.checkConnection}
           </button>
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#ff75ac] px-4 py-1.5 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-blue-100 hover:bg-saki-pink disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSaving ? <RefreshCw size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+            {isSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
             {ui.saveApply}
           </button>
         </div>

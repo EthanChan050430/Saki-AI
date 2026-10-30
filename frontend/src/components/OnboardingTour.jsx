@@ -214,12 +214,12 @@ export default function OnboardingTour({
               width: `${layout.bubbleWidth}px`,
             }}
           >
-            <div className="border-b border-white/10 bg-white/[0.03] px-5 py-4">
-              <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-200/90">
-                <Sparkles size={14} />
+            <div className="border-b border-white/10 bg-white/[0.03] px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-sky-200/90">
+                <Sparkles size={13} />
                 <span>{labels.badge}</span>
               </div>
-              <h3 className="mt-3 text-lg font-semibold tracking-tight text-white">{step.title}</h3>
+              <h3 className="mt-1.5 text-base font-semibold tracking-tight text-white">{step.title}</h3>
             </div>
 
             <div className="px-5 py-4">

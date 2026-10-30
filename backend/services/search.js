@@ -2,7 +2,7 @@ const axios = require('axios');
 const fs = require('fs-extra');
 const path = require('path');
 
-const configPath = path.join(__dirname, '../../data/global_config.json');
+const configPath = path.join(require('./runtime').runtime.dataDir, 'global_config.json');
 
 async function getConfig() {
     try {

@@ -14,9 +14,12 @@ import {
   isApiProviderEnabled,
 } from '../utils/chatProviderConfig';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
+import { CHAT_BACKGROUNDS, getChatBackgroundPreset, getChatBackgroundSource, selectChatBackground } from '../utils/chatAppearance';
 
 export default function SettingsModal({ config, setConfig, onClose, models, windowed = false }) {
   const { t, i18n } = useTranslation();
+  const backgroundPreset = getChatBackgroundPreset(config);
+  const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
   const getLocalText = (zhText, enText) => (
     String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh') ? zhText : enText
   );
@@ -292,25 +295,25 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
-      <motion.div
-        className={windowed ? 'bg-white h-full w-full rounded-[28px] shadow-none overflow-hidden flex flex-col' : 'bg-white sm:rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]'}
+      <motion.div data-saki-dialog="true"
+        className={windowed ? 'bg-[var(--surface-bg)]  h-full w-full rounded-[28px] shadow-none overflow-hidden flex flex-col text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  sm:rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh] text-[var(--text-dark)] '}
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="p-4 border-b flex items-center justify-between bg-gray-50 shrink-0">
-          <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-            <Shield size={18} className="text-blue-500" />
+        <div className="px-4 py-2.5 border-b border-[var(--surface-border-subtle)] flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
+          <h3 className="text-sm sm:text-base font-semibold text-[var(--text-dark)] flex items-center gap-2">
+            <Shield size={16} className="text-[#ff75ac]" />
             {t('settings')}
           </h3>
-          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
-            <X size={20} />
+          <button onClick={onClose} className="p-1.5 hover:bg-[var(--surface-inset)] text-[var(--text-secondary)] rounded-lg transition-colors">
+            <X size={16} />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
           {/* AI Providers */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Cpu size={16} />
               {t('ai_provider')}
             </h4>
@@ -319,28 +322,28 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 <button 
                   key={p.id}
                   onClick={() => setConfig({...config, provider: p.id})}
-                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-blue-500 bg-blue-50' : 'hover:border-gray-300'}`}
+                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-[#ff75ac] bg-[#ff75ac]/10 dark:bg-[#ff75ac]/15' : 'border-[var(--surface-border-subtle)]  hover:border-[#ff75ac]/40 '}`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <div className="min-w-0 flex-1 font-bold text-gray-900 text-sm whitespace-nowrap overflow-hidden text-ellipsis">{p.name}</div>
+                    <div className="min-w-0 flex-1 font-bold text-[var(--text-dark)]  text-sm whitespace-nowrap overflow-hidden text-ellipsis">{p.name}</div>
                     {isApiProviderEnabled(config, p.id) && (
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
                     )}
                   </div>
-                  <div className="text-[10px] text-gray-500 mt-0.5 line-clamp-1">{getProviderSubText(p)}</div>
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 line-clamp-1">{getProviderSubText(p)}</div>
                 </button>
               ))}
             </div>
 
             {/* Config details based on provider */}
             {activeApiProvider && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 {activeApiProvider.id === 'custom' && (
                   <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Base URL</label>
+                    <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Base URL</label>
                     <input 
                       type="text"
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                       placeholder="https://api.openai.com/v1"
                       value={activeProviderBaseUrl}
                       onChange={(e) => updateActiveProviderBaseUrl(e.target.value)}
@@ -348,29 +351,29 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1.5">{activeApiProvider.name} API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{activeApiProvider.name} API Key</label>
                   <div className="relative">
                     <input 
                       type="password"
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none pr-10"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none pr-10"
                       placeholder="sk-..."
                       value={activeProviderApiKey}
                       onChange={(e) => updateActiveProviderApiKey(e.target.value)}
                     />
-                    <Shield className="absolute right-3 top-2.5 text-gray-400" size={16} />
+                    <Shield className="absolute right-3 top-2.5 text-[var(--text-tertiary)]" size={16} />
                   </div>
                 </div>
-                <p className="text-[10px] text-gray-400">
+                <p className="text-[10px] text-[var(--text-tertiary)]">
                   {getLocalText('这个 Key 只会保存到当前供应商，不会再和其它 API 共用。', 'This key is stored only for this provider and will not be reused by other APIs.')}
                 </p>
               </div>
             )}
-            <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border bg-gray-50 p-4">
+            <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border bg-[var(--surface-bg-light)] p-4">
               <div className="min-w-0 pr-2">
-                <div className="text-sm font-bold text-gray-800">
+                <div className="text-sm font-bold text-[var(--text-dark)]">
                   {getLocalText('主页列出全部已启用 API 模型', 'List all enabled API models on Home')}
                 </div>
-                <div className="mt-1 text-[10px] leading-relaxed text-gray-500">
+                <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">
                   {getLocalText(
                     `开启后，顶部模型列表会拉取所有已填写 Key 的 API 模型。当前已启用 ${configuredApiCount} 个 API。`,
                     `When enabled, the top model list fetches models from every API with a saved key. ${configuredApiCount} API(s) enabled.`
@@ -379,69 +382,70 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               </div>
               <button
                 onClick={() => setConfig({ ...config, showAllEnabledApiModels: !config.showAllEnabledApiModels })}
-                className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.showAllEnabledApiModels ? 'bg-blue-600' : 'bg-gray-300'}`}
+                  role="switch" aria-checked={Boolean(config.showAllEnabledApiModels)} aria-label={getLocalText('显示全部已启用模型', 'Show all enabled models')}
+                className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.showAllEnabledApiModels ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
                 title={getLocalText('切换全部 API 模型列表', 'Toggle all API model listing')}
               >
-                <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.showAllEnabledApiModels ? 'left-6' : 'left-1'}`} />
+                <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.showAllEnabledApiModels ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
             {config.provider === 'ollama' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl">
-                <label className="block text-xs font-medium text-gray-500 mb-2">{t('ollama_endpoint')}</label>
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl">
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">{t('ollama_endpoint')}</label>
                 <input 
                    type="text"
-                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                    placeholder="http://localhost:11434"
                    value={config.ollamaUrl || ''}
                    onChange={(e) => setConfig({...config, ollamaUrl: e.target.value})}
                 />
-                <p className="text-[10px] text-gray-400 mt-2">{t('ollama_tip')}</p>
+                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{t('ollama_tip')}</p>
               </div>
             )}
             {config.provider === 'lmstudio' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl">
-                <label className="block text-xs font-medium text-gray-500 mb-2">LMStudio Endpoint</label>
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl">
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">LMStudio Endpoint</label>
                 <input 
                    type="text"
-                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                    placeholder="http://localhost:1234"
                    value={config.lmstudioUrl || ''}
                    onChange={(e) => setConfig({...config, lmstudioUrl: e.target.value})}
                 />
-                <p className="text-[10px] text-gray-400 mt-2">Local LMStudio server endpoint (default: http://localhost:1234)</p>
+                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">Local LMStudio server endpoint (default: http://localhost:1234)</p>
               </div>
             )}
             {config.provider === 'copilot' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-4">
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-4">
                 {!config.copilotToken ? (
                   <>
-                    <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 p-3 rounded-lg leading-relaxed">
+                    <div className="text-xs text-[var(--text-secondary)] bg-saki-pink/10 border border-saki-pink/15 p-3 rounded-lg leading-relaxed">
                       {t('github_auth_desc')}
                     </div>
                     {!deviceFlow ? (
                       <button 
                         onClick={startGitHubLogin}
-                        className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
+                        className="w-full bg-[var(--code-bg)] text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-[var(--code-bg)] transition-all shadow-lg shadow-slate-200"
                       >
                         {t('github_login_btn')}
                         <ExternalLink size={16} />
                       </button>
                     ) : (
                       <div className="text-center space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{t('enter_code_browser')}</div>
-                        <div className="text-3xl font-mono font-bold tracking-[0.3em] bg-white border-2 border-dashed border-blue-200 py-4 rounded-2xl text-blue-600 shadow-inner">
+                        <div className="text-[10px] text-[var(--text-tertiary)] font-bold uppercase tracking-widest">{t('enter_code_browser')}</div>
+                        <div className="text-3xl font-mono font-bold tracking-[0.3em] bg-[var(--surface-bg)] border-2 border-dashed border-saki-pink/25 py-4 rounded-2xl text-[#ff75ac] shadow-inner">
                           {deviceFlow.user_code}
                         </div>
                         <a 
                           href={deviceFlow.verification_uri} 
                           target="_blank" 
                           rel="noreferrer"
-                          className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
+                          className="inline-flex items-center gap-2 bg-[#ff75ac] text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-saki-pink transition-all"
                         >
                           {t('jump_verify')}
                           <ExternalLink size={14} />
                         </a>
-                        <div className="flex items-center justify-center gap-2 text-[11px] text-blue-400">
+                        <div className="flex items-center justify-center gap-2 text-[11px] text-[var(--accent-text)]">
                           <RefreshCw size={12} className="animate-spin" />
                           {t('waiting_auth')}
                         </div>
@@ -449,14 +453,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-green-100 shadow-sm">
+                  <div className="flex items-center justify-between bg-[var(--surface-bg)] p-4 rounded-xl border border-green-100 shadow-sm">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center">
                         <CheckCircle2 size={24} className="text-green-500" />
                       </div>
                       <div>
-                        <div className="text-sm font-bold text-gray-800">{t('github_authorized')}</div>
-                        <div className="text-[10px] text-gray-500 truncate w-32">Token: {config.copilotToken.slice(0, 8)}...</div>
+                        <div className="text-sm font-bold text-[var(--text-dark)]">{t('github_authorized')}</div>
+                        <div className="text-[10px] text-[var(--text-secondary)] truncate w-32">Token: {config.copilotToken.slice(0, 8)}...</div>
                       </div>
                     </div>
                     <button 
@@ -473,7 +477,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
           {/* Search Engine Config */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Search size={16} />
               {t('search_engine_config')}
             </h4>
@@ -488,47 +492,47 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 <button 
                   key={s.id}
                   onClick={() => setConfig({...config, searchEngine: s.id})}
-                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.searchEngine === s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-gray-300'}`}
+                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.searchEngine === s.id ? 'border-saki-pink bg-saki-pink/10' : 'hover:border-[var(--surface-border-subtle)]'}`}
                 >
-                  <div className="font-bold text-gray-900 text-sm">{s.name}</div>
-                  <div className="text-[10px] text-gray-500 mt-0.5">{s.sub}</div>
+                  <div className="font-bold text-[var(--text-dark)] text-sm">{s.name}</div>
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">{s.sub}</div>
                 </button>
               ))}
             </div>
 
             {config.searchEngine === 'searxng' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('searxng_url')}</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{t('searxng_url')}</label>
                   <input 
                     type="text"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                     placeholder="http://127.0.0.1:8080"
                     value={config.searxngUrl || ''}
                     onChange={(e) => setConfig({...config, searxngUrl: e.target.value})}
                   />
-                  <p className="text-[10px] text-gray-400 mt-2">{t('searxng_url_tip')}</p>
+                  <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{t('searxng_url_tip')}</p>
                 </div>
               </div>
             )}
 
             {config.searchEngine === 'google' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Google API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google API Key</label>
                   <input 
                     type="password"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                     placeholder="AIza..."
                     value={config.googleApiKey || ''}
                     onChange={(e) => setConfig({...config, googleApiKey: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Google CX ID</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google CX ID</label>
                   <input 
                     type="text"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                     placeholder="Search Engine ID"
                     value={config.googleCxId || ''}
                     onChange={(e) => setConfig({...config, googleCxId: e.target.value})}
@@ -538,12 +542,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             )}
 
             {config.searchEngine === 'bing' && (
-              <div className="mt-4 p-4 bg-gray-50 border rounded-xl space-y-3">
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Bing API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Bing API Key</label>
                   <input 
                     type="password"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                     placeholder="Azure Key"
                     value={config.bingApiKey || ''}
                     onChange={(e) => setConfig({...config, bingApiKey: e.target.value})}
@@ -555,37 +559,38 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
           {/* Model Personality */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <UserCircle size={16} />
               {t('role_prompt_settings')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-3">
-              <label className="block text-xs font-medium text-gray-500">{t('personality_def')}</label>
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-3">
+              <label className="block text-xs font-medium text-[var(--text-secondary)]">{t('personality_def')}</label>
               <textarea 
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white min-h-[100px] resize-none"
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] min-h-[100px] resize-none"
                 placeholder={t('prompt_placeholder')}
                 value={config.systemPrompt || t('saki_personality')}
                 onChange={(e) => setConfig({...config, systemPrompt: e.target.value})}
               />
-              <p className="text-[10px] text-gray-400 leading-relaxed">
+              <p className="text-[10px] text-[var(--text-tertiary)] leading-relaxed">
                 {t('prompt_desc')}
               </p>
-              <div className="flex items-center justify-between border-t border-gray-200/60 pt-3 mt-2">
+              <div className="flex items-center justify-between border-t border-[var(--surface-border-subtle)] pt-3 mt-2">
                 <div className="pr-4">
-                  <label className="block text-xs font-bold text-gray-700">
+                  <label className="block text-xs font-bold text-[var(--text-dark)]">
                     {t('prompt_slimming_title', '极速模式 (本地模型提示词瘦身)')}
                   </label>
-                  <p className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">
+                  <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5 leading-relaxed">
                     {t('prompt_slimming_desc', '开启后大幅精简后台系统指令，降低本地大模型的首字延迟并提高响应速度。若遇到工具调用异常，请关闭此模式。')}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setConfig({...config, promptSlimming: !config.promptSlimming})}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${config.promptSlimming ? 'bg-blue-600' : 'bg-gray-200'}`}
+                  role="switch" aria-checked={Boolean(config.promptSlimming)} aria-label={getLocalText('精简提示词', 'Slim prompts')}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${config.promptSlimming ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${config.promptSlimming ? 'translate-x-4' : 'translate-x-0'}`}
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-[var(--surface-bg)] shadow ring-0 transition duration-200 ease-in-out ${config.promptSlimming ? 'translate-x-4' : 'translate-x-0'}`}
                   />
                 </button>
               </div>
@@ -594,102 +599,102 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
           {/* Drawing Model Settings */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Image size={16} />
               {t('drawing_model_settings')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
-               <div className="text-xs text-gray-500 mb-2">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
+               <div className="text-xs text-[var(--text-secondary)] mb-2">
                  {t('drawing_desc')}
                </div>
 
                <div className="space-y-4">
                  {/* 选项卡切换 */}
-                 <div className="flex p-1 bg-gray-200 rounded-lg w-fit">
+                 <div className="flex p-1 bg-[var(--surface-inset)] rounded-lg w-fit">
                     <button 
                       onClick={() => setConfig({...config, drawingProvider: 'none'})}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'none' ? 'bg-white shadow-sm text-gray-600' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'none' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--text-secondary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('none')}
                     </button>
                     <button 
                       onClick={() => setConfig({...config, drawingProvider: (config.drawingProvider === 'stable-diffusion' || config.drawingProvider === 'none') ? '' : config.drawingProvider})}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(config.drawingProvider !== 'stable-diffusion' && config.drawingProvider !== 'none') ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(config.drawingProvider !== 'stable-diffusion' && config.drawingProvider !== 'none') ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('llm_drawing')}
                     </button>
                     <button 
                       onClick={() => setConfig({...config, drawingProvider: 'stable-diffusion'})}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'stable-diffusion' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'stable-diffusion' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--accent-text)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('sd_drawing')}
                     </button>
                     <button 
                       onClick={() => setConfig({...config, drawingProvider: 'custom'})}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'custom' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'custom' ? 'bg-[var(--surface-bg)] shadow-sm text-orange-600' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('custom_drawing')}
                     </button>
                  </div>
 
                  {config.drawingProvider === 'none' ? (
-                   <div className="p-3 bg-white/50 rounded-lg border border-dashed border-gray-300 text-center">
-                     <p className="text-[10px] text-gray-400 italic">{t('disable_drawing')}</p>
+                   <div className="p-3 bg-[var(--surface-bg)] rounded-lg border border-dashed border-[var(--surface-border-subtle)] text-center">
+                     <p className="text-[10px] text-[var(--text-tertiary)] italic">{t('disable_drawing')}</p>
                    </div>
                  ) : config.drawingProvider === 'stable-diffusion' ? (
                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                      <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('sd_api_url')}</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('sd_api_url')}</label>
                         <input 
                           type="text"
-                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white font-mono"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="http://127.0.0.1:7860/sdapi/v1/txt2img"
                           value={config.sdUrl || 'http://127.0.0.1:7860/sdapi/v1/txt2img'}
                           onChange={(e) => setConfig({...config, sdUrl: e.target.value})}
                         />
-                        <p className="text-[10px] text-gray-400 mt-1">{t('sd_tip')}</p>
+                        <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{t('sd_tip')}</p>
                      </div>
                    </div>
                  ) : config.drawingProvider === 'custom' ? (
                     <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                       <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Base URL</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Base URL</label>
                         <input 
                           type="text"
-                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="https://api.openai.com/v1"
                           value={config.customDrawingUrl || ''}
                           onChange={(e) => setConfig({...config, customDrawingUrl: e.target.value})}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">API Key</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">API Key</label>
                         <input 
                           type="password"
-                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="sk-..."
                           value={config.customDrawingKey || ''}
                           onChange={(e) => setConfig({...config, customDrawingKey: e.target.value})}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Model ID</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Model ID</label>
                         <input 
                           type="text"
-                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white font-mono"
+                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="dall-e-3"
                           value={config.customDrawingModel || ''}
                           onChange={(e) => setConfig({...config, customDrawingModel: e.target.value})}
                         />
                       </div>
-                      <p className="text-[10px] text-gray-400 mt-1">{t('custom_drawing_tip')}</p>
+                      <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{t('custom_drawing_tip')}</p>
                     </div>
                  ) : (
                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                      <div className="relative">
-                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('select_drawing_model')}</label>
+                       <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('select_drawing_model')}</label>
                        <select 
-                         className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white appearance-none pr-10"
+                         className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] appearance-none pr-10"
                          value={config.drawingModel ? `${config.drawingProvider}:${config.drawingModel}` : ''}
                          onChange={(e) => {
                            const val = e.target.value;
@@ -710,7 +715,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                            </option>
                          ))}
                        </select>
-                       <div className="absolute right-3 top-8 pointer-events-none text-gray-400">
+                       <div className="absolute right-3 top-8 pointer-events-none text-[var(--text-tertiary)]">
                          <ChevronDown size={16} />
                        </div>
                      </div>
@@ -722,21 +727,21 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
           {/* TTS Settings */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Volume2 size={16} />
               {t('tts_settings')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
-              <div className="flex p-1 bg-gray-200 rounded-lg w-fit">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
+              <div className="flex p-1 bg-[var(--surface-inset)] rounded-lg w-fit">
                 <button 
                   onClick={() => setConfig({...config, ttsProvider: 'browser'})}
-                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(!config.ttsProvider || config.ttsProvider === 'browser') ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(!config.ttsProvider || config.ttsProvider === 'browser') ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                 >
                   {t('browser_tts')}
                 </button>
                 <button 
                   onClick={() => setConfig({...config, ttsProvider: 'gpt-sovits'})}
-                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'gpt-sovits' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'gpt-sovits' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--accent-text)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                 >
                   GPT-SoVITS
                 </button>
@@ -745,18 +750,18 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               {config.ttsProvider === 'gpt-sovits' && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">API URL</label>
+                    <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">API URL</label>
                     <div className="flex gap-2">
                       <input 
                         type="text"
-                        className="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white font-mono"
+                        className="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] font-mono"
                         placeholder="http://127.0.0.1:9880"
                         value={config.sovitsUrl || 'http://127.0.0.1:9880'}
                         onChange={(e) => setConfig({...config, sovitsUrl: e.target.value})}
                       />
                       <button 
                         onClick={refreshSovitsModels}
-                        className="p-2 bg-white border rounded-lg hover:bg-gray-50 text-purple-600 transition-all active:scale-95"
+                        className="p-2 bg-[var(--surface-bg)] border rounded-lg hover:bg-[var(--surface-bg-light)] text-[var(--accent-text)] transition-all active:scale-95"
                         title={t('refresh_models')}
                       >
                         <RefreshCw size={16} className={isRefreshingModels ? 'animate-spin' : ''} />
@@ -766,9 +771,9 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">GPT Model</label>
+                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">GPT Model</label>
                       <select 
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white focus:ring-2 focus:ring-purple-500 outline-none"
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsGptModel || ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -782,9 +787,9 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">SoVITS Model</label>
+                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">SoVITS Model</label>
                       <select 
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white focus:ring-2 focus:ring-purple-500 outline-none"
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsSovitsModel || ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -800,11 +805,11 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('refer_audio')}</label>
+                    <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('refer_audio')}</label>
                     <div className="flex items-center gap-3">
                       <button 
                         onClick={() => sovitsAudioInputRef.current?.click()}
-                        className={`flex-1 border-2 border-dashed rounded-xl p-3 text-xs transition-all flex items-center justify-center gap-2 ${config.sovitsRefAudio ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-purple-300 hover:bg-purple-50'}`}
+                        className={`flex-1 border-2 border-dashed rounded-xl p-3 text-xs transition-all flex items-center justify-center gap-2 ${config.sovitsRefAudio ? 'border-saki-pink/40 bg-saki-pink/10 text-[var(--accent-text)]' : 'border-[var(--surface-border-subtle)] text-[var(--text-secondary)] hover:border-saki-pink/40 hover:bg-saki-pink/10'}`}
                       >
                         <Mic size={14} />
                         {config.sovitsRefAudio ? config.sovitsRefAudio.split(/[\\\/]/).pop() : t('upload_refer_audio')}
@@ -814,9 +819,9 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{t('refer_text')}</label>
+                    <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('refer_text')}</label>
                     <textarea 
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white min-h-[60px] resize-none"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] min-h-[60px] resize-none"
                       value={config.sovitsRefText || ''}
                       onChange={(e) => setConfig({...config, sovitsRefText: e.target.value})}
                       placeholder={t('refer_text_placeholder')}
@@ -828,17 +833,17 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
           </section>
 
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Music2 size={16} />
               {getLocalText('音乐创作', 'Music Creation')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
               <div className="flex items-center justify-between">
                 <div className="pr-4">
-                  <div className="text-sm font-bold text-gray-800">
+                  <div className="text-sm font-bold text-[var(--text-dark)]">
                     {getLocalText('启用纯音乐生成', 'Enable Instrumental Generation')}
                   </div>
-                  <div className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed">
                     {getLocalText(
                       '关闭后，Agent 不会暴露 composeMusic 工具，也不会执行 MIDI 音乐生成，适合部署在低配设备上。',
                       'When disabled, the agent hides the composeMusic tool and skips MIDI music generation for low-spec devices.'
@@ -847,27 +852,28 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </div>
                 <button
                   onClick={() => setConfig({ ...config, musicEnabled: config.musicEnabled !== false ? false : true })}
-                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.musicEnabled !== false ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                  role="switch" aria-checked={config.musicEnabled !== false} aria-label={getLocalText('音乐生成', 'Music generation')}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.musicEnabled !== false ? 'bg-emerald-500' : 'bg-[var(--surface-inset)]'}`}
                   title={getLocalText('切换音乐生成开关', 'Toggle music generation')}
                 >
-                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.musicEnabled !== false ? 'left-6' : 'left-1'}`} />
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.musicEnabled !== false ? 'left-6' : 'left-1'}`} />
                 </button>
               </div>
             </div>
           </section>
 
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Brain size={16} />
               {getLocalText('离线反思', 'Offline Reflection')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
               <div className="flex items-center justify-between">
                 <div className="pr-4">
-                  <div className="text-sm font-bold text-gray-800">
+                  <div className="text-sm font-bold text-[var(--text-dark)]">
                     {getLocalText('用户离线时自动蒸馏当天上下文', 'Digest today\'s context when the user is offline')}
                   </div>
-                  <div className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed">
                     {getLocalText(
                       '当网页端无人在线一段时间后，Agent 会读取当天的对话和当天改动过的文本文件，用本地小模型提炼长期记忆，并抽取结构化实体关系，例如“某个项目当前进展到哪了”。',
                       'After the user has been offline for a while, the agent reads today\'s chats and today\'s changed text files, uses a small local model to distill long-term memory, and extracts structured entities and relations such as the latest project status.'
@@ -876,22 +882,23 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </div>
                 <button
                   onClick={() => setConfig({ ...config, offlineReflectionEnabled: config.offlineReflectionEnabled ? false : true })}
-                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.offlineReflectionEnabled ? 'bg-sky-500' : 'bg-gray-300'}`}
+                  role="switch" aria-checked={Boolean(config.offlineReflectionEnabled)} aria-label={getLocalText('离线反思', 'Offline reflection')}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.offlineReflectionEnabled ? 'bg-saki-pink' : 'bg-[var(--surface-inset)]'}`}
                   title={getLocalText('切换离线反思开关', 'Toggle offline reflection')}
                 >
-                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.offlineReflectionEnabled ? 'left-6' : 'left-1'}`} />
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.offlineReflectionEnabled ? 'left-6' : 'left-1'}`} />
                 </button>
               </div>
 
               <div className={`space-y-3 transition-opacity ${config.offlineReflectionEnabled ? 'opacity-100' : 'opacity-60'}`}>
                 <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">
                     {getLocalText('反思模型', 'Reflection Model')}
                   </label>
                   <div className="relative">
                     <select
                       disabled={!config.offlineReflectionEnabled}
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:text-gray-400"
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] appearance-none pr-10 disabled:bg-[var(--surface-bg-light)] disabled:text-[var(--text-tertiary)]"
                       value={config.offlineReflectionModel ? `${config.offlineReflectionProvider}:${config.offlineReflectionModel}` : ''}
                       onChange={(e) => {
                         const value = e.target.value;
@@ -921,13 +928,13 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         </option>
                       ))}
                     </select>
-                    <div className="absolute right-3 top-3 pointer-events-none text-gray-400">
+                    <div className="absolute right-3 top-3 pointer-events-none text-[var(--text-tertiary)]">
                       <ChevronDown size={16} />
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-sky-100 bg-sky-50/80 px-3 py-3 text-[11px] leading-relaxed text-sky-700">
+                <div className="rounded-xl border border-saki-pink/15 bg-saki-pink/10 px-3 py-3 text-[11px] leading-relaxed text-[var(--accent-text)]">
                   {offlineReflectionModels.length > 0
                     ? getLocalText(
                         '模型列表来自本地提供商（Ollama / LMStudio）。如果这里留空，系统会优先跟随当前已连接的本地聊天模型。',
@@ -944,23 +951,23 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
           {/* Interface Settings */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Palette size={16} />
               {t('interface_custom')}
             </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
               {/* Language Selector */}
-              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--surface-border-subtle)]">
                 <div className="flex items-center gap-2">
-                  <Globe size={16} className="text-gray-400" />
+                  <Globe size={16} className="text-[var(--text-tertiary)]" />
                   <div>
-                    <div className="text-sm font-bold text-gray-800">{t('language')}</div>
+                    <div className="text-sm font-bold text-[var(--text-dark)]">{t('language')}</div>
                   </div>
                 </div>
                 <select
                   value={i18n.language}
                   onChange={(e) => i18n.changeLanguage(e.target.value)}
-                  className="border rounded-lg px-2 py-1.5 text-xs outline-none bg-white min-w-[120px]"
+                  className="border rounded-lg px-2 py-1.5 text-xs outline-none bg-[var(--surface-bg)] min-w-[120px]"
                 >
                   <option value="zh-CN">简体中文</option>
                   <option value="zh-TW">繁體中文</option>
@@ -971,36 +978,37 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </select>
               </div>
 
-              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--surface-border-subtle)]">
                 <div>
-                  <div className="text-sm font-bold text-gray-800">{t('particles_effect')}</div>
-                  <div className="text-[10px] text-gray-500">{t('particles_desc')}</div>
+                  <div className="text-sm font-bold text-[var(--text-dark)]">{t('particles_effect')}</div>
+                  <div className="text-[10px] text-[var(--text-secondary)]">{t('particles_desc')}</div>
                 </div>
                 <button 
                   onClick={() => setConfig({...config, showParticles: !config.showParticles})}
-                  className={`w-10 h-5 rounded-full transition-all relative ${config.showParticles ? 'bg-pink-400' : 'bg-gray-300'}`}
+                  role="switch" aria-checked={Boolean(config.showParticles)} aria-label={getLocalText('樱花粒子', 'Sakura particles')}
+                  className={`w-10 h-5 rounded-full transition-all relative ${config.showParticles ? 'bg-pink-400' : 'bg-[var(--surface-inset)]'}`}
                 >
-                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${config.showParticles ? 'left-6' : 'left-1'}`} />
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.showParticles ? 'left-6' : 'left-1'}`} />
                 </button>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-4">{t('avatar_custom')}</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-4">{t('avatar_custom')}</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   {/* User Avatar */}
                   <div className="space-y-3">
-                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest flex items-center gap-1.5">
                       <UserCircle size={12} />
                       {t('user_avatar')}
                     </div>
                     <div className="flex items-center gap-4">
                       <div 
-                        className="w-16 h-16 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all shadow-sm shrink-0"
+                        className="w-16 h-16 rounded-full border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all shadow-sm shrink-0"
                         onClick={() => document.getElementById('avatar-upload').click()}
                       >
                         {config.userAvatar ? (
                           <img src={config.userAvatar} alt="Avatar Preview" className="w-full h-full object-cover" />
                         ) : (
-                          <Plus size={20} className="text-gray-400 group-hover:text-blue-500" />
+                          <Plus size={20} className="text-[var(--text-tertiary)] group-hover:text-[#ff75ac]" />
                         )}
                       </div>
                       <div className="flex-1 space-y-2">
@@ -1028,14 +1036,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         <div className="flex flex-wrap gap-2">
                           <button 
                             onClick={() => document.getElementById('avatar-upload').click()}
-                            className="text-[11px] bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-bold shadow-sm transition-all active:scale-95"
+                            className="text-[11px] bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-bold shadow-sm transition-all active:scale-95"
                           >
                             {t('change_avatar')}
                           </button>
                           {config.userAvatar && config.userAvatar !== '/assets/head_user.png' && (
                             <button 
                               onClick={() => setConfig({...config, userAvatar: '/assets/head_user.png'})}
-                              className="text-[11px] text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                              className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
                             >
                               {t('restore_default')}
                             </button>
@@ -1047,13 +1055,13 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
                   {/* AI Avatar */}
                   <div className="space-y-3">
-                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest flex items-center gap-1.5">
                       <Bot size={12} />
                       {t('ai_avatar')}
                     </div>
                     <div className="flex items-center gap-4">
                       <div 
-                        className="w-16 h-16 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all shadow-sm shrink-0"
+                        className="w-16 h-16 rounded-full border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all shadow-sm shrink-0"
                         onClick={() => document.getElementById('ai-avatar-upload').click()}
                       >
                         {config.aiAvatar ? (
@@ -1087,14 +1095,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         <div className="flex flex-wrap gap-2">
                           <button 
                             onClick={() => document.getElementById('ai-avatar-upload').click()}
-                            className="text-[11px] bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-bold shadow-sm transition-all active:scale-95"
+                            className="text-[11px] bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-bold shadow-sm transition-all active:scale-95"
                           >
                             {t('change_ai_avatar')}
                           </button>
                           {config.aiAvatar && (
                             <button 
                               onClick={() => setConfig({...config, aiAvatar: ''})}
-                              className="text-[11px] text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                              className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
                             >
                               {t('restore_default')}
                             </button>
@@ -1107,16 +1115,16 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-2">{t('background_image')}</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">{t('background_image')}</label>
                 <div className="flex items-center gap-4">
                   <div 
-                    className="w-24 h-16 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden bg-white group cursor-pointer hover:border-blue-400 transition-all"
+                    className="w-24 h-16 rounded-lg border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all"
                     onClick={() => document.getElementById('bg-upload').click()}
                   >
-                    {config.chatBackgroundImage ? (
-                      <img src={config.chatBackgroundImage} alt="Background Preview" className="w-full h-full object-cover" />
+                    {backgroundPreview ? (
+                      <img src={backgroundPreview} alt="Background Preview" className="w-full h-full object-cover" />
                     ) : (
-                      <Plus size={20} className="text-gray-400 group-hover:text-blue-500" />
+                      <Plus size={20} className="text-[var(--text-tertiary)] group-hover:text-[#ff75ac]" />
                     )}
                   </div>
                   <div className="flex-1">
@@ -1138,7 +1146,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                             const data = await res.json();
                             if (data.filename) {
                               const imageUrl = `${BACKEND_URL}/uploads/${data.filename}`;
-                              setConfig({...config, chatBackgroundImage: imageUrl});
+                              setConfig({...config, chatBackgroundImage: imageUrl, chatBackgroundPreset: 'custom'});
                             }
                           } catch (err) {
                             console.error('Failed to upload background:', err);
@@ -1150,38 +1158,61 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     <div className="flex gap-2">
                       <button 
                         onClick={() => document.getElementById('bg-upload').click()}
-                        className="text-xs bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50 font-medium"
+                        className="text-xs bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-medium"
                       >
                         {t('upload_image')}
                       </button>
-                      {config.chatBackgroundImage && config.chatBackgroundImage !== '/assets/background.png' && (
+                      {backgroundPreset !== 'auto' && (
                         <button 
-                          onClick={() => setConfig({...config, chatBackgroundImage: '/assets/background.png'})}
-                          className="text-xs text-red-500 bg-white border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-medium"
+                          onClick={() => setConfig(previous => selectChatBackground(previous, 'auto'))}
+                          className="text-xs text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-medium"
                         >
                           {t('restore_default')}
                         </button>
                       )}
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-2">{t('image_format_tip')}</p>
+                    <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{t('image_format_tip')}</p>
                   </div>
                 </div>
+                <div className="saki-background-choices" role="group" aria-label={getLocalText('内置背景', 'Built-in backgrounds')}>
+                  {[
+                    { id: 'auto', src: CHAT_BACKGROUNDS.day, label: getLocalText('昼夜随主题', 'Follow theme') },
+                    { id: 'original', src: CHAT_BACKGROUNDS.original, label: getLocalText('Saki 原景', 'Saki original') },
+                    { id: 'day', src: CHAT_BACKGROUNDS.day, label: getLocalText('樱花晴空', 'Sakura daylight') },
+                    { id: 'night', src: CHAT_BACKGROUNDS.night, label: getLocalText('月下樱花', 'Moonlit sakura') },
+                    { id: 'room', src: CHAT_BACKGROUNDS.room, label: getLocalText('午后小屋', 'Afternoon room') },
+                  ].map(background => (
+                    <button key={background.id} type="button" className="saki-background-choice"
+                      aria-pressed={backgroundPreset === background.id}
+                      onClick={() => setConfig(previous => selectChatBackground(previous, background.id))}>
+                      <div className={background.id === 'auto' ? 'saki-background-pair' : ''}>
+                        <img src={background.src} alt="" loading="lazy" />
+                        {background.id === 'auto' && <img src={CHAT_BACKGROUNDS.night} alt="" loading="lazy" />}
+                      </div>
+                      <span>{background.label}</span>
+                      {backgroundPreset === background.id && <CheckCircle2 size={17} aria-hidden="true" />}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                  {getLocalText('昼夜随主题会自动切换晴空与夜景；手机端使用专用竖版。上传图片后将固定使用你的自定义背景。', 'Follow theme switches between daylight and night, with portrait artwork on mobile. Uploaded images remain fixed.')}
+                </p>
               </div>
             </div>
           </section>
 
           {/* MCP Services */}
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Server size={16} />
               {t('mcp_config')}
 </h4>
-            <div className="bg-gray-50 rounded-xl p-4 border space-y-4">
-              <div className="text-xs text-gray-500 leading-relaxed">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
+              <div className="text-xs text-[var(--text-secondary)] leading-relaxed">
                 {t('mcp_config_desc')}
               </div>
               <textarea 
-                className="w-full border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none bg-white min-h-[200px] resize-none"
+                className="w-full border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] min-h-[200px] resize-none"
                 value={mcpConfigText}
                 onChange={(e) => {
                   setMcpConfigText(e.target.value);
@@ -1193,21 +1224,21 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   }
                 }}
               />
-              <p className="text-[10px] text-gray-400">{t('mcp_tip')}</p>
+              <p className="text-[10px] text-[var(--text-tertiary)]">{t('mcp_tip')}</p>
             </div>
           </section>
 
           <section>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Trash2 size={16} />
               {getLocalText('\u7f13\u5b58\u6e05\u7406', 'Cache Cleanup')}
             </h4>
             <div className="bg-red-50 rounded-xl p-4 border border-red-100 space-y-4">
               <div>
-                <div className="text-sm font-bold text-gray-800">
+                <div className="text-sm font-bold text-[var(--text-dark)]">
                   {getLocalText('\u6e05\u7a7a QQ \u673a\u5668\u4eba\u7f13\u5b58\u6587\u4ef6', 'Clear QQ Bot Cache Files')}
                 </div>
-                <div className="text-xs text-gray-600 mt-1 leading-relaxed">
+                <div className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
                   {getLocalText(
                     '\u4f1a\u6e05\u7406 QQ \u6536\u5230\u7684\u56fe\u7247\u3001\u6587\u4ef6\u3001\u8bed\u97f3\u7f13\u5b58\uff0c\u4ee5\u53ca\u751f\u6210\u7684 PDF/\u56fe\u7247\u62a5\u544a\u3002\u4e0d\u4f1a\u5220\u9664\u4f1a\u8bdd\u3001\u6a21\u578b\u914d\u7f6e\u3001\u5934\u50cf\u3001\u80cc\u666f\u56fe\u6216\u53c2\u8003\u97f3\u9891\u3002',
                     'Clears QQ image/file/voice caches and generated PDF or image reports. Sessions, model settings, avatars, background images, and reference audio are kept.'
@@ -1215,7 +1246,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </div>
               </div>
 
-              <div className="text-[11px] text-gray-500 leading-relaxed">
+              <div className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                 {getLocalText(
                   '\u63d0\u793a\uff1a\u6e05\u7406\u540e\uff0c\u5386\u53f2\u6d88\u606f\u91cc\u6307\u5411\u8fd9\u4e9b\u7f13\u5b58\u6587\u4ef6\u7684\u4e0b\u8f7d\u94fe\u63a5\u53ef\u80fd\u5931\u6548\u3002',
                   'Note: download links to these cached files in previous messages may stop working after cleanup.'
@@ -1223,7 +1254,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               </div>
 
               {cacheCleanupMessage && (
-                <div className={`rounded-lg border px-3 py-2 text-xs ${cacheCleanupError ? 'border-red-200 bg-white text-red-600' : 'border-emerald-200 bg-white text-emerald-700'}`}>
+                <div className={`rounded-lg border px-3 py-2 text-xs ${cacheCleanupError ? 'border-red-200 bg-[var(--surface-bg)] text-red-600' : 'border-emerald-200 bg-[var(--surface-bg)] text-emerald-700'}`}>
                   {cacheCleanupMessage}
                 </div>
               )}
@@ -1232,7 +1263,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 <button
                   onClick={clearQQBotCache}
                   disabled={isClearingCache}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${isClearingCache ? 'cursor-not-allowed bg-gray-200 text-gray-500' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-100'}`}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${isClearingCache ? 'cursor-not-allowed bg-[var(--surface-inset)] text-[var(--text-secondary)]' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-100'}`}
                 >
                   {isClearingCache ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
                   {isClearingCache ? getLocalText('\u6b63\u5728\u6e05\u7406...', 'Clearing...') : getLocalText('\u6e05\u9664\u7f13\u5b58', 'Clear Cache')}
@@ -1243,10 +1274,10 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
         </div>
 
 
-        <div className="p-4 border-t bg-gray-50 flex justify-end">
+        <div className="p-4 border-t bg-[var(--surface-bg-light)] flex justify-end">
           <button 
             onClick={onClose}
-            className="bg-blue-600 text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-blue-700 shadow-lg shadow-blue-100"
+            className="bg-[#ff75ac] text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-saki-pink shadow-lg shadow-blue-100"
           >
             {t('save')}
           </button>

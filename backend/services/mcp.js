@@ -1,23 +1,57 @@
-const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
-const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
 const path = require('path');
 
 class MCPManager {
     constructor() {
         this.clients = new Map(); // serverName -> { client, transport, tools }
         this.serverStatus = new Map(); // serverName -> { connected, error, toolCount }
+        this._operationQueue = Promise.resolve();
     }
 
     async initializeServers(config) {
         // config is the mcpServers object from the user config
         if (!config || typeof config !== 'object') return;
 
-        // Close existing connections first
-        await this.closeAll();
+        return this._enqueueOperation(() => this._initializeServers(config));
+    }
+
+    _enqueueOperation(operation) {
+        const result = this._operationQueue.then(operation, operation);
+        this._operationQueue = result.catch(() => {});
+        return result;
+    }
+
+    _configSignature(serverConfig) {
+        const sortObject = value => {
+            if (Array.isArray(value)) return value.map(sortObject);
+            if (!value || typeof value !== 'object') return value;
+            return Object.keys(value).sort().reduce((result, key) => {
+                result[key] = sortObject(value[key]);
+                return result;
+            }, {});
+        };
+        return JSON.stringify(sortObject(serverConfig || {}));
+    }
+
+    async _initializeServers(config) {
+        const configuredNames = new Set(Object.keys(config));
 
         for (const [name, serverConfig] of Object.entries(config)) {
+            const signature = this._configSignature(serverConfig);
+            const existing = this.clients.get(name);
+            if (existing && existing.signature === signature && !existing.retired) {
+                continue;
+            }
+            if (existing) {
+                this.clients.delete(name);
+                this._retireEntry(existing);
+            }
+
+            let transport;
             try {
-                this.serverStatus.set(name, { connected: false, error: 'Initializing...' });
+                this.serverStatus.set(name, {
+                    connected: false,
+                    error: 'Initializing...'
+                });
                 console.log(`[MCP] Initializing server: ${name}`);
 
                 let command = serverConfig.command;
@@ -33,7 +67,9 @@ class MCPManager {
                     }
                 }
 
-                const transport = new StdioClientTransport({
+                const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
+                const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
+                transport = new StdioClientTransport({
                     command: command,
                     args: args,
                     env: { ...process.env, ...(serverConfig.env || {}) }
@@ -58,11 +94,18 @@ class MCPManager {
                 
                 // List tools
                 const toolsResponse = await client.listTools();
-                this.clients.set(name, {
+                const entry = {
                     client,
                     transport,
-                    tools: toolsResponse.tools
-                });
+                    tools: toolsResponse.tools,
+                    signature,
+                    refCount: 0,
+                    retired: false,
+                    closed: false
+                };
+                const previous = this.clients.get(name);
+                this.clients.set(name, entry);
+                if (previous) this._retireEntry(previous);
                 this.serverStatus.set(name, { 
                     connected: true, 
                     toolCount: toolsResponse.tools.length 
@@ -84,20 +127,65 @@ class MCPManager {
                 
                 // 失败时释放资源
                 console.log(`[MCP] Cleaning up failed server ${name}...`);
+                try {
+                    await transport?.close();
+                } catch (closeError) {
+                    console.error(`[MCP] Error cleaning up server ${name}:`, closeError.message);
+                }
+            }
+        }
+
+        for (const [name, entry] of this.clients.entries()) {
+            if (!configuredNames.has(name)) {
+                this.clients.delete(name);
+                this.serverStatus.delete(name);
+                this._retireEntry(entry);
             }
         }
     }
 
-    async closeAll() {
-        for (const [name, { transport }] of this.clients.entries()) {
-            try {
-                await transport.close();
-            } catch (e) {
-                console.error(`[MCP] Error closing transport for ${name}:`, e.message);
-            }
+    _retireEntry(entry) {
+        if (!entry || entry.retired) return Promise.resolve();
+        entry.retired = true;
+        return entry.refCount === 0 ? this._closeEntry(entry) : Promise.resolve();
+    }
+
+    async _closeEntry(entry) {
+        if (!entry || entry.closed) return;
+        entry.closed = true;
+        try {
+            await entry.transport.close();
+        } catch (e) {
+            console.error(`[MCP] Error closing transport:`, e.message);
         }
-        this.clients.clear();
-        this.serverStatus.clear();
+    }
+
+    acquire(serverName) {
+        const entry = this.clients.get(serverName);
+        if (!entry || entry.retired) return null;
+        entry.refCount += 1;
+        return entry;
+    }
+
+    release(entryOrServerName) {
+        const entry = typeof entryOrServerName === 'string'
+            ? this.clients.get(entryOrServerName)
+            : entryOrServerName;
+        if (!entry || entry.refCount <= 0) return;
+        entry.refCount -= 1;
+        if (entry.refCount === 0 && entry.retired) this._closeEntry(entry);
+    }
+
+    async closeAll() {
+        return this._enqueueOperation(async () => {
+            const closeOperations = [];
+            for (const [name, entry] of this.clients.entries()) {
+                this.clients.delete(name);
+                this.serverStatus.delete(name);
+                closeOperations.push(this._retireEntry(entry));
+            }
+            await Promise.all(closeOperations);
+        });
     }
 
     getAllTools() {
@@ -128,14 +216,18 @@ class MCPManager {
     }
 
     async callTool(serverName, toolName, args) {
-        const clientInfo = this.clients.get(serverName);
+        const clientInfo = this.acquire(serverName);
         if (!clientInfo) {
             throw new Error(`MCP Server "${serverName}" not found or not initialized.`);
         }
-        return await clientInfo.client.callTool({
-            name: toolName,
-            arguments: args
-        });
+        try {
+            return await clientInfo.client.callTool({
+                name: toolName,
+                arguments: args
+            });
+        } finally {
+            this.release(clientInfo);
+        }
     }
 }
 

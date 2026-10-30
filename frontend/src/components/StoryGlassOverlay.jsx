@@ -2285,42 +2285,42 @@ export default function StoryGlassOverlay({
       ) : null}
 
       <div className="relative z-10 flex h-full flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200/28 bg-black/24 text-amber-100 shadow-[0_12px_30px_rgba(0,0,0,0.22)] backdrop-blur-md">
-              <Sparkles size={18} />
+        <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-2 sm:px-5 sm:py-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-200/28 bg-black/24 text-amber-100 shadow-[0_12px_30px_rgba(0,0,0,0.22)] backdrop-blur-md">
+              <Sparkles size={15} />
             </div>
             <div className="min-w-0">
-              <h2 className="truncate text-base font-semibold text-amber-50 sm:text-lg">
+              <h2 className="truncate text-sm font-semibold text-amber-50 sm:text-base leading-tight">
                 {getLocalText('给 Saki 讲故事', 'Tell Saki A Story')}
               </h2>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-white/62">
+              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-white/62 leading-tight">
                 <span className={`h-1.5 w-1.5 rounded-full ${isListening ? 'bg-emerald-300' : isMixing ? 'bg-amber-300' : 'bg-white/38'}`} />
                 <span className="truncate">{statusText}</span>
               </div>
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               onClick={() => setTtsEnabled(prev => !prev)}
-              className={`flex h-9 w-9 items-center justify-center rounded-lg border transition-all ${
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
                 ttsEnabled
                   ? 'border-amber-200/45 bg-amber-100 text-stone-950'
                   : 'border-white/18 bg-black/22 text-white/72 hover:bg-white/10'
               }`}
               title={getLocalText('TTS', 'TTS')}
             >
-              <Volume2 size={17} />
+              <Volume2 size={15} />
             </button>
             <button
               type="button"
               onClick={handleClose}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/18 bg-black/22 text-white/78 transition-all hover:bg-white/10 hover:text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/18 bg-black/22 text-white/78 transition-all hover:bg-white/10 hover:text-white"
               title={getLocalText('关闭', 'Close')}
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           </div>
         </header>
@@ -2331,7 +2331,7 @@ export default function StoryGlassOverlay({
               <button
                 type="button"
                 onClick={() => setIsControlsOpen(prev => !prev)}
-                className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left"
+                className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-[11px] font-semibold uppercase text-amber-100/64">

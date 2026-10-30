@@ -1,13 +1,6 @@
+// Vite proxies development requests; production serves UI and API on one origin.
 export function getBackendUrl() {
-  const { port, protocol, hostname } = window.location
-  if (port === '5482') {
-    return ''
-  }
-  const resolvedHost = hostname || '127.0.0.1'
-  if (protocol === 'http:') {
-    return `https://${resolvedHost}:5480`
-  }
-  return `${protocol}//${resolvedHost}:5480`
+  return String(import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '')
 }
 
 export const BACKEND_URL = getBackendUrl()

@@ -1,3 +1,7 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env'), quiet: true });
+require('dotenv').config({ path: require('path').join(__dirname, '.env'), quiet: true });
+const { runtime } = require('./services/runtime');
+const { mountFrontend } = require('./services/frontendHosting');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -10,7 +14,7 @@ const crypto = require('crypto');
 const cheerio = require('cheerio');
 const { parseFile } = require('./services/parser');
 const { getAvailableSearchEngines, searchAcrossEngines, searchWeb } = require('./services/search');
-const { crawlUrl } = require('./services/crawler');
+const { crawlUrl, closeCrawler } = require('./services/crawler');
 const mcpManager = require('./services/mcp');
 const taskScheduler = require('./services/taskScheduler');
 const { MemoryService, previewText } = require('./services/memory');
@@ -18,9 +22,16 @@ const { OfflineReflectionService } = require('./services/offlineReflection');
 const { SkillService } = require('./services/skills');
 const { QQBridgeManager } = require('./services/qqBridge');
 const { exec, spawn } = require('child_process');
+const { createLineBuffer } = require('./services/streamBuffer');
+const { postModelStream, summarizeModelError, modelFailureMessage } = require('./services/modelTransport');
+const { WorkspaceService } = require('./services/workspace');
+const { CheckpointService } = require('./services/checkpoints');
+const { prepareTurnCheckpoint, createCheckpointRestoreHandler } = require('./services/checkpointSessions');
+const { createToolRegistry, renderToolCatalog, parseToolCalls, parseMcpArguments } = require('./services/agentTools');
+const { estimateTokenCount, buildBackgroundDigest, truncateToolObservation, compactLoopMessages, createUsageTracker, contextStatusFromUsage } = require('./services/agentContext');
 const axios = require('axios');
 const { EventEmitter } = require('events');
-const puppeteer = require('puppeteer-core');
+const puppeteer = { launch: (...args) => require('puppeteer-core').launch(...args) };
 const {
     buildImageDataUri,
     downloadImageUrlAsDataUri,
@@ -55,27 +66,37 @@ const {
 } = require('./services/credibility');
 
 const app = express();
-const port = 5480;
+const port = runtime.port;
 
-app.use(cors());
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error('Untrusted browser origin.'));
+    },
+}));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-const DATA_DIR = path.join(__dirname, '../data');
+const DATA_DIR = runtime.dataDir;
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 const REPORTS_DIR = path.join(DATA_DIR, 'reports');
 const FILES_DIR = path.join(DATA_DIR, 'files');
+const workspaceService = new WorkspaceService(FILES_DIR, path.join(DATA_DIR, 'workspace_roots.json'));
 const MEMORIES_DIR = path.join(DATA_DIR, 'memories');
 const TRASH_DIR = path.join(DATA_DIR, 'Trash');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const MCP_CONFIG_FILE = path.join(DATA_DIR, 'mcp_config.json');
 const GLOBAL_CONFIG_FILE = path.join(DATA_DIR, 'global_config.json');
-const GLOBAL_CONFIG_TEMPLATE_FILE = path.join(DATA_DIR, 'global_config.example.json');
+const GLOBAL_CONFIG_TEMPLATE_FILE = fs.existsSync(path.join(__dirname, '../data/global_config.example.json'))
+    ? path.join(__dirname, '../data/global_config.example.json')
+    : path.join(__dirname, '../defaults/global_config.example.json');
 const QQBOT_SESSION_MAP_FILE = path.join(DATA_DIR, 'qqbot_session_map.json');
 const QQBOT_COMMAND_STATE_FILE = path.join(DATA_DIR, 'qqbot_command_state.json');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const WORKSPACE_ROOT = process.cwd();
+const WORKSPACE_ROOT = runtime.workspaceRoot;
 const SSL_DIR = path.join(PROJECT_ROOT, 'ssl');
 const AGENT_PERMISSION_MODE_DEFAULT = 'default';
 const AGENT_PERMISSION_MODE_FULL = 'full-access';
@@ -86,7 +107,17 @@ const QQBOT_DOWNLOADS_DIR = path.join(QQBOT_DATA_DIR, 'downloads');
 const QQBOT_IMAGES_DIR = path.join(QQBOT_DATA_DIR, 'images');
 const QQBOT_TTS_DIR = path.join(QQBOT_DATA_DIR, 'tts');
 const ACTIVE_AGENT_ACTIONS = new Map();
+const CONSUMED_APPROVALS = new Map();
+const PENDING_APPROVALS = new Map();
+const checkpointService = new CheckpointService({
+    storeDir: process.env.CHECKPOINT_STORE_DIR || path.join(os.homedir(), '.saki-ai', 'checkpoints'),
+    excludePaths: [SESSIONS_DIR, HISTORY_FILE],
+    maxFiles: Number(process.env.CHECKPOINT_MAX_FILES) || 100000,
+    maxBytes: Number(process.env.CHECKPOINT_MAX_BYTES) || 2 * 1024 ** 3,
+});
 const FILE_WRITE_LOCKS = new Map();
+const AGENT_AUTH_TOKEN = String(process.env.AGENT_AUTH_TOKEN || crypto.randomBytes(32).toString('hex'));
+const AGENT_HOST = runtime.host;
 
 // Serve uploads directory as static with caching
 app.use('/uploads', express.static(UPLOADS_DIR, {
@@ -234,7 +265,7 @@ function isPathInside(basePath, targetPath) {
 function getAllowedGeneratedFileRoots() {
     const homeDir = os.homedir();
     return [
-        FILES_DIR,
+        ...workspaceService.roots,
         UPLOADS_DIR,
         PROJECT_ROOT,
         WORKSPACE_ROOT,
@@ -250,7 +281,7 @@ function isAllowedGeneratedFilePath(filePath) {
 
 function isProtectedProjectCreationPath(filePath) {
     const resolvedPath = path.resolve(filePath || '');
-    return isPathInside(PROJECT_ROOT, resolvedPath) && !isPathInside(FILES_DIR, resolvedPath);
+    return isPathInside(PROJECT_ROOT, resolvedPath) && !isPathInside(workspaceService.currentRoot, resolvedPath);
 }
 
 function normalizeAgentPermissionMode(value) {
@@ -273,13 +304,47 @@ function createApprovalSignature(toolName, args = []) {
         .digest('hex');
 }
 
-function isApprovalGrantedForAction(approvalDecision, toolName, args = []) {
-    if (!approvalDecision?.signature) return false;
-    return approvalDecision.signature === createApprovalSignature(toolName, args);
+function isApprovalGrantedForAction(approvalDecision, toolName, args = [], chatId = '') {
+    if (!approvalDecision?.id || !approvalDecision?.signature) return false;
+    const signature = createApprovalSignature(toolName, args);
+    if (approvalDecision.signature !== signature) return false;
+    const now = Date.now();
+    const pending = PENDING_APPROVALS.get(approvalDecision.id);
+    if (!pending || pending.expiresAt < now || pending.chatId !== chatId || pending.signature !== signature) return false;
+    PENDING_APPROVALS.delete(approvalDecision.id);
+    for (const [key, consumedAt] of CONSUMED_APPROVALS.entries()) {
+        if (now - consumedAt > 10 * 60 * 1000) CONSUMED_APPROVALS.delete(key);
+    }
+    const consumptionKey = `${chatId}:${approvalDecision.id}`;
+    if (CONSUMED_APPROVALS.has(consumptionKey)) return false;
+    CONSUMED_APPROVALS.set(consumptionKey, now);
+    return true;
 }
 
-function buildApprovalRequest({ toolName, args = [], reasonKey, reason, summary = '', sandboxRoot = FILES_DIR }) {
-    return {
+function isLoopbackRequest(req) {
+    const address = String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+    return address === '127.0.0.1' || address === '::1' || address === 'localhost';
+}
+
+function isTrustedLocalOrigin(req) {
+    const origin = String(req.get('origin') || '').trim();
+    return !origin || /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin);
+}
+
+function requireAgentAuth(req, res, next) {
+    const token = String(req.get('x-agent-auth-token') || req.get('authorization') || '')
+        .replace(/^Bearer\s+/i, '')
+        .trim();
+    const tokenBuffer = Buffer.from(token);
+    const expectedBuffer = Buffer.from(AGENT_AUTH_TOKEN);
+    if (tokenBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(tokenBuffer, expectedBuffer)) {
+        return next();
+    }
+    return res.status(401).json({ error: 'Agent authentication required.' });
+}
+
+function buildApprovalRequest({ toolName, args = [], reasonKey, reason, summary = '', sandboxRoot = workspaceService.currentRoot, chatId = '' }) {
+    const request = {
         id: `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         signature: createApprovalSignature(toolName, args),
         toolName,
@@ -290,6 +355,12 @@ function buildApprovalRequest({ toolName, args = [], reasonKey, reason, summary 
         sandboxRoot,
         createdAt: new Date().toISOString(),
     };
+    PENDING_APPROVALS.set(request.id, {
+        chatId,
+        signature: request.signature,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+    return request;
 }
 
 function createAgentActionId() {
@@ -321,7 +392,17 @@ function requestSkipAgentAction(actionId, reason = 'user_skip') {
     if (typeof control.cancel === 'function') {
         control.cancel(reason);
     }
+
     return control;
+}
+
+function cancelAgentActionsForChat(chatId, reason = 'client_disconnected') {
+    if (!chatId) return;
+    for (const control of ACTIVE_AGENT_ACTIONS.values()) {
+        if (control.chatId === chatId && typeof control.cancel === 'function') {
+            control.cancel(reason);
+        }
+    }
 }
 
 function killProcessTree(childProcess) {
@@ -411,12 +492,12 @@ function isSensitivePath(filePath = '') {
 }
 
 function isSandboxPath(filePath) {
-    return isPathInside(FILES_DIR, filePath);
+    return isPathInside(workspaceService.currentRoot, filePath);
 }
 
 function evaluateTerminalPermission(command, permissionMode) {
     if (permissionMode === AGENT_PERMISSION_MODE_FULL) {
-        return { allowed: true, cwd: FILES_DIR };
+        return { allowed: true, cwd: workspaceService.currentRoot };
     }
 
     const raw = String(command || '').trim();
@@ -439,7 +520,7 @@ function evaluateTerminalPermission(command, permissionMode) {
     if (sandboxEscapePatterns.some(pattern => pattern.test(raw))) {
         return {
             allowed: false,
-            reason: `Permission denied: default permission only allows terminal access inside sandbox ${FILES_DIR}. Switch to full access for broader paths.`,
+            reason: `Permission denied: default permission only allows terminal access inside sandbox ${workspaceService.currentRoot}. Switch to full access for broader paths.`,
         };
     }
 
@@ -486,13 +567,13 @@ function evaluateTerminalPermission(command, permissionMode) {
             reasonKey: matchedRule.reasonKey,
             reason: matchedRule.reason,
             summary: raw,
-            cwd: FILES_DIR,
+            cwd: workspaceService.currentRoot,
         };
     }
 
     return {
         allowed: true,
-        cwd: FILES_DIR,
+        cwd: workspaceService.currentRoot,
     };
 }
 
@@ -588,25 +669,14 @@ function runTerminalCommand({ command, cwd, actionControl, timeoutMs = TERMINAL_
                 });
             });
 
-            const promptRegex = /(?:\[[yN]\/[yN]\]|\([yN]\/[yN]\)|continue|confirm|proceed|are you sure|do you want to continue|确定要|是否继续)[?\s:]*$/i;
-            const handleStdinPrompt = (str) => {
-                if (promptRegex.test(str)) {
-                    if (child.stdin && child.stdin.writable) {
-                        child.stdin.write('y\n');
-                        const autoEcho = "\n[Auto-input: y]\n";
-                        partialStdout = appendPartial(partialStdout, autoEcho);
-                        if (onStdout) onStdout(autoEcho);
-                        console.log(`[Terminal] Auto-confirmed interactive prompt: ${str.trim()}`);
-                    }
-                }
-            };
+            child.stdin?.on('error', () => {});
+            child.stdin?.end();
 
             if (child.stdout) {
                 child.stdout.on('data', chunk => {
                     const str = chunk.toString();
                     partialStdout = appendPartial(partialStdout, chunk);
                     if (onStdout) onStdout(str);
-                    handleStdinPrompt(str);
                 });
             }
             if (child.stderr) {
@@ -614,7 +684,6 @@ function runTerminalCommand({ command, cwd, actionControl, timeoutMs = TERMINAL_
                     const str = chunk.toString();
                     partialStderr = appendPartial(partialStderr, chunk);
                     if (onStderr) onStderr(str);
-                    handleStdinPrompt(str);
                 });
             }
 
@@ -688,14 +757,6 @@ function sanitizeProjectFolderName(name = '') {
     return cleaned || `project-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 }
 
-function estimateTokenCount(text = '') {
-    const source = String(text || '');
-    if (!source) return 0;
-    const cjkChars = (source.match(/[\u3400-\u9fff]/g) || []).length;
-    const nonCjkChars = Math.max(0, source.length - cjkChars);
-    return Math.ceil(cjkChars * 0.65 + nonCjkChars / 3.8);
-}
-
 function getAgentContextBudgetTokens(provider = '', model = '', config = {}) {
     const configured = Number(config?.agentContextBudgetTokens || config?.contextBudgetTokens || config?.contextWindowTokens);
     if (Number.isFinite(configured) && configured >= 8000) return Math.floor(configured);
@@ -708,16 +769,10 @@ function getAgentContextBudgetTokens(provider = '', model = '', config = {}) {
     return CONTEXT_DEFAULT_BUDGET_TOKENS;
 }
 
-function compactPreview(text = '', maxChars = 700) {
-    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-    if (normalized.length <= maxChars) return normalized;
-    return `${normalized.slice(0, Math.max(0, maxChars - 18)).trim()} ...[truncated]`;
-}
-
 function serializeMessageForContext(msg = {}, options = {}) {
     const observationLimit = options.observationLimit ?? 500;
     let text = msg.content || '';
-    if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
+    if (Array.isArray(msg.parts)) {
         text = msg.parts.map(part => {
             if (part.type === 'text') return part.content || '';
             if (part.type === 'reasoning') return `<think>${part.content || ''}</think>\n`;
@@ -729,58 +784,14 @@ function serializeMessageForContext(msg = {}, options = {}) {
             return `Tool: ${part.data?.type || 'unknown'}(${toolArgs})${obs ? `\nObservation: ${obs}` : ''}`;
         }).join('\n');
     }
-    return `${msg.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+    const roleLabel = msg.role === 'user' ? 'User' : msg.role === 'system' ? 'System background' : 'Assistant';
+    return `${roleLabel}: ${text}`;
 }
 
 function formatMessagesForContext(messages = [], options = {}) {
     return (Array.isArray(messages) ? messages : [])
         .map(msg => serializeMessageForContext(msg, options))
         .join('\n');
-}
-
-function buildBackgroundDigest({ olderMessages = [], previousSummary = '', currentTask = '' }) {
-    const lines = [];
-    if (previousSummary) {
-        lines.push('Previous compressed background:');
-        lines.push(compactPreview(previousSummary, 4500));
-    }
-
-    lines.push('Compressed earlier conversation and tool background:');
-    const sourceMessages = Array.isArray(olderMessages) ? olderMessages : [];
-    for (const msg of sourceMessages) {
-        const role = msg.role === 'user' ? 'User' : 'Assistant';
-        if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
-            const textParts = msg.parts
-                .filter(part => part.type === 'text' || part.type === 'reasoning')
-                .map(part => {
-                    if (part.type === 'reasoning') {
-                        return `<think>${compactPreview(part.content, 200)}</think>`;
-                    }
-                    return compactPreview(part.content, 420);
-                })
-                .filter(Boolean);
-            const actionParts = msg.parts
-                .filter(part => part.type === 'action')
-                .slice(-6)
-                .map(part => {
-                    const args = (part.data?.args || []).map(arg => compactPreview(arg, 120)).join(', ');
-                    const obs = compactPreview(part.observation || '', 220);
-                    return `tool=${part.data?.type || 'unknown'}(${args})${obs ? ` -> ${obs}` : ''}`;
-                });
-            const merged = [...textParts, ...actionParts].filter(Boolean).join(' | ');
-            if (merged) lines.push(`- ${role}: ${merged}`);
-        } else {
-            const content = compactPreview(msg.content || '', 700);
-            if (content) lines.push(`- ${role}: ${content}`);
-        }
-    }
-
-    lines.push('Continuity requirements: keep the active user request, pending approvals, edited file paths, file hashes, and recent tool observations precise. Do not treat this summary as permission to ignore the current task.');
-    if (currentTask) {
-        lines.push(`Current user task (never compressed away): ${compactPreview(currentTask, 1200)}`);
-    }
-
-    return lines.join('\n').slice(0, 12000);
 }
 
 async function updateSessionContextCompression(chatId, compression = {}) {
@@ -802,7 +813,7 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
     const rawHistory = Array.isArray(history) ? history : [];
     const fullFormattedHistory = formatMessagesForContext(rawHistory, { observationLimit: 500 });
     const fixedContextText = `${message || ''}\n${context || ''}`;
-    const fullEstimateTokens = estimateTokenCount(fullFormattedHistory) + estimateTokenCount(fixedContextText) + 5500;
+    const fullEstimateTokens = estimateTokenCount(fullFormattedHistory) + estimateTokenCount(fixedContextText);
 
     const baseStatus = {
         usedTokens: fullEstimateTokens,
@@ -810,6 +821,7 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
         percent: Math.min(100, Math.round((fullEstimateTokens / Math.max(1, budgetTokens)) * 100)),
         compressed: false,
         state: 'normal',
+        estimated: true,
         updatedAt: new Date().toISOString(),
     };
 
@@ -849,7 +861,7 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
             'Recent conversation kept verbatim:',
             formatMessagesForContext(recentMessages, { observationLimit: 700 }),
         ].filter(Boolean).join('\n\n');
-        compressedTokens = estimateTokenCount(formattedHistory) + estimateTokenCount(fixedContextText) + 5500;
+        compressedTokens = estimateTokenCount(formattedHistory) + estimateTokenCount(fixedContextText);
         finalRecentMessages = recentMessages;
         finalOlderMessages = olderMessages;
         if (compressedTokens <= targetPromptTokens || keepCount <= 3) break;
@@ -863,6 +875,7 @@ async function prepareAgentHistoryContext({ history = [], chatId = '', message =
         percent: Math.min(100, Math.round((compressedTokens / Math.max(1, budgetTokens)) * 100)),
         originalPercent: Math.min(100, Math.round((fullEstimateTokens / Math.max(1, budgetTokens)) * 100)),
         compressed: true,
+        estimated: true,
         state: compressedTokens > maxPromptTokens ? 'compressed-high' : 'compressed',
         keptRecentMessages: keepCount,
         compressedMessages: Math.max(0, rawHistory.length - keepCount),
@@ -1249,7 +1262,7 @@ async function buildDownloadableFile(filePath) {
     if (!stats.isFile()) return null;
 
     const roots = [
-        { type: 'files', basePath: FILES_DIR },
+        { type: 'files', basePath: workspaceService.currentRoot },
         { type: 'project', basePath: PROJECT_ROOT },
         { type: 'workspace', basePath: WORKSPACE_ROOT },
         { type: 'desktop', basePath: path.join(os.homedir(), 'Desktop') },
@@ -1402,6 +1415,8 @@ fs.ensureDirSync(MEMORIES_DIR);
 fs.ensureDirSync(TRASH_DIR);
 
 const memoryService = new MemoryService({
+    workspaceDir: runtime.memoryWorkspaceDir,
+    embeddingMode: runtime.embeddingMode,
     dataDir: DATA_DIR,
     memoriesDir: MEMORIES_DIR,
 });
@@ -1471,6 +1486,12 @@ const CHAT_API_PROVIDER_MODEL_CONFIG = {
         label: 'OpenAI',
         apiKeyField: 'openaiApiKey',
         modelsBaseUrl: 'https://api.openai.com/v1',
+        auth: 'bearer',
+    },
+    nvidia: {
+        label: 'NVIDIA',
+        apiKeyField: 'nvidiaApiKey',
+        modelsBaseUrl: 'https://integrate.api.nvidia.com/v1',
         auth: 'bearer',
     },
     deepseek: {
@@ -1749,6 +1770,8 @@ function getChatProviderLabel(provider = '') {
             return 'LMStudio';
         case 'openai':
             return 'OpenAI';
+        case 'nvidia':
+            return 'NVIDIA';
         case 'deepseek':
             return 'Deepseek';
         case 'zhipu':
@@ -2108,10 +2131,11 @@ function extractCopilotReasoningText(chunk = {}) {
     return '';
 }
 
-async function streamCopilotChat({ apiToken, payload, signal, onText, onReasoning }) {
+async function streamCopilotChat({ apiToken, payload, signal, onText, onReasoning, onUsage }) {
     const response = await withCopilotRetry('stream chat start', () => axios.post(GITHUB_COPILOT_CHAT_URL, {
         ...payload,
         stream: true,
+        ...(onUsage ? { stream_options: { include_usage: true } } : {}),
     }, {
         headers: getCopilotApiHeaders(apiToken),
         responseType: 'stream',
@@ -2145,6 +2169,7 @@ async function streamCopilotChat({ apiToken, payload, signal, onText, onReasonin
             throw new Error(parsed.error.message);
         }
 
+        onUsage?.(parsed);
         const deltaText = extractCopilotDeltaText(parsed);
         const reasoningText = extractCopilotReasoningText(parsed);
         const currentFinishReason = parsed?.choices?.[0]?.finish_reason || '';
@@ -2182,9 +2207,10 @@ async function streamCopilotChat({ apiToken, payload, signal, onText, onReasonin
     return { text, reasoning, finishReason };
 }
 
-async function fetchCopilotChatOnce({ apiToken, payload, signal }) {
+async function fetchCopilotChatOnce({ apiToken, payload, signal, onUsage }) {
+    const { stream_options, ...fallbackPayload } = payload;
     const response = await withCopilotRetry('chat fallback', () => axios.post(GITHUB_COPILOT_CHAT_URL, {
-        ...payload,
+        ...fallbackPayload,
         stream: false,
     }, {
         headers: getCopilotApiHeaders(apiToken),
@@ -2197,6 +2223,7 @@ async function fetchCopilotChatOnce({ apiToken, payload, signal }) {
         throw new Error(response.data.error.message);
     }
 
+    onUsage?.(response.data);
     const message = response.data?.choices?.[0]?.message || {};
     return extractCopilotMessageText(message.content);
 }
@@ -2318,7 +2345,14 @@ async function getPrunedHistory() {
             continue;
         }
 
-        nextHistory.push(item);
+        const isPending = hasPendingRequest(sessionData.pendingRequest);
+        const pendingType = sessionData.pendingRequest?.type || null;
+        if (item.isPending !== isPending || item.pendingType !== pendingType) {
+            nextHistory.push({ ...item, isPending, pendingType });
+            changed = true;
+        } else {
+            nextHistory.push(item);
+        }
     }
 
     if (changed) {
@@ -2451,6 +2485,7 @@ function getDefaultGlobalConfig() {
         offlineReflectionEnabled: false,
         offlineReflectionProvider: 'ollama',
         offlineReflectionModel: '',
+        workspacePath: '',
         agentPermissionMode: AGENT_PERMISSION_MODE_DEFAULT,
     };
 }
@@ -2528,6 +2563,10 @@ async function readGlobalConfig() {
     }
     globalConfigCache = migrateChatApiProviderConfig(globalConfigCache);
     globalConfigCache.agentPermissionMode = getAgentPermissionMode(globalConfigCache);
+    if (globalConfigCache.workspacePath) {
+        const root = await workspaceService.resolveRoot(globalConfigCache.workspacePath).catch(() => null);
+        if (root) workspaceService.rememberRoot(root);
+    }
     return globalConfigCache;
 }
 
@@ -2571,7 +2610,7 @@ function createSessionSummary({ chatId, messages = [], title, pendingRequest = n
         title: userTitle || '鏂板璇?,
         updatedAt: new Date(),
         messagesCount: messages.length,
-        isPending: Boolean(pendingRequest),
+        isPending: hasPendingRequest(pendingRequest),
         pendingType: pendingRequest?.type || null,
         source,
         external,
@@ -2587,7 +2626,7 @@ function createSessionSummary({ chatId, messages = [], title, pendingRequest = n
         title: userTitle || 'New Chat',
         updatedAt: new Date(),
         messagesCount: messages.length,
-        isPending: Boolean(pendingRequest),
+        isPending: hasPendingRequest(pendingRequest),
         pendingType: pendingRequest?.type || null,
         source,
         external,
@@ -2645,6 +2684,9 @@ function mergePreservedStoryGlassConversationMessages(incomingMessages = [], exi
 async function persistSessionRecord({ chatId, messages = [], title, pendingRequest = null, source = null, external = undefined, clientSavedAt = 0, broadcastReason = 'session-updated' }) {
     const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
     const existingSession = await safeReadJsonFile(sessionFilePath, {});
+    if (clientSavedAt && clientSavedAt < Number(existingSession.checkpointRestoredAt || 0)) {
+        throw Object.assign(new Error('此保存早于最近的检查点还原，已忽略过期对话。'), { statusCode: 409 });
+    }
     const normalizedMessages = mergePreservedStoryGlassConversationMessages(
         Array.isArray(messages) ? messages : [],
         existingSession.messages,
@@ -2652,10 +2694,11 @@ async function persistSessionRecord({ chatId, messages = [], title, pendingReque
     );
     const nextSource = source || existingSession.source || 'web';
     const nextExternal = external !== undefined ? external : (existingSession.external || null);
+    const normalizedPendingRequest = hasPendingRequest(pendingRequest) ? pendingRequest : null;
     const nextSession = {
         ...existingSession,
         messages: normalizedMessages,
-        pendingRequest,
+        pendingRequest: normalizedPendingRequest,
         source: nextSource,
         external: nextExternal,
     };
@@ -2674,7 +2717,7 @@ async function persistSessionRecord({ chatId, messages = [], title, pendingReque
         chatId,
         messages: normalizedMessages,
         title,
-        pendingRequest,
+        pendingRequest: normalizedPendingRequest,
         source: nextSource,
         external: nextExternal,
     });
@@ -3952,7 +3995,17 @@ app.delete('/api/hosted-tasks/:id', async (req, res) => {
     }
 });
 
+app.use('/api/files', async (req, res, next) => {
+    try {
+        const root = await workspaceService.resolveRoot(req.get('X-Workspace-Path') ? decodeURIComponent(req.get('X-Workspace-Path')) : (req.query.workspacePath || ''));
+        workspaceService.context.run(root, next);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
 app.get('/api/files', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const subDir = req.query.path || '';
         const targetDir = path.join(FILES_DIR, subDir);
@@ -3973,6 +4026,7 @@ app.get('/api/files', async (req, res) => {
             const stats = await fs.stat(path.join(targetDir, f.name));
             return {
                 name: f.name,
+                absolutePath: path.join(targetDir, f.name),
                 path: path.join(subDir, f.name).replace(/\\/g, '/'),
                 isDirectory: isDir,
                 size: isDir ? '--' : (stats.size / 1024).toFixed(2) + ' KB',
@@ -3989,6 +4043,7 @@ app.get('/api/files', async (req, res) => {
 });
 
 app.get('/api/files/preview/:name', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const subPath = req.params.name || req.query.path;
         const filePath = path.join(FILES_DIR, subPath);
@@ -4190,6 +4245,7 @@ app.delete('/api/skills/:id', async (req, res) => {
 });
 
 app.post('/api/files/save', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const { name, content, path: subPath } = req.body;
         const targetPath = subPath ? path.join(FILES_DIR, subPath) : path.join(FILES_DIR, name);
@@ -4222,13 +4278,14 @@ app.patch('/api/skills/:id', async (req, res) => {
 });
 
 app.get('/api/files/download', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const requestedPath = String(req.query.path || '').trim();
         if (!requestedPath) {
             return res.status(400).json({ error: 'Missing path' });
         }
 
-        const filePath = path.resolve(requestedPath);
+        const filePath = path.resolve(FILES_DIR, requestedPath);
         if (!isAllowedGeneratedFilePath(filePath)) {
             return res.status(403).json({ error: 'Access denied' });
         }
@@ -4249,6 +4306,7 @@ app.get('/api/files/download', async (req, res) => {
 });
 
 app.delete('/api/files/:name', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const subPath = req.params.name || req.query.path;
         const targetPath = path.join(FILES_DIR, subPath);
@@ -4330,6 +4388,7 @@ app.delete('/api/trash/:trashId', async (req, res) => {
 });
 
 app.get('/api/files/download/:name', (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     const subPath = req.params.name || req.query.path;
     const filePath = path.join(FILES_DIR, subPath);
 
@@ -4343,6 +4402,7 @@ app.get('/api/files/download/:name', (req, res) => {
 });
 
 app.post('/api/files/rollback', async (req, res) => {
+    const FILES_DIR = workspaceService.currentRoot;
     try {
         const { filePath, before, content, isDeletion, operation, afterHash, expectedCurrentHash, encoding, textFormat } = req.body;
 
@@ -4441,28 +4501,32 @@ app.post('/api/history', async (req, res) => {
 app.post('/api/history', async (req, res) => {
     const { chatId, messages, title, pendingRequest = null, source, external, clientSavedAt = 0 } = req.body;
 
-    await persistSessionRecord({
-        chatId,
-        messages,
-        title,
-        pendingRequest,
-        source,
-        external,
-        clientSavedAt,
-        broadcastReason: 'history-save',
-    });
-    res.json({ success: true });
+    try {
+        await checkpointService.withSession(chatId, () => persistSessionRecord({
+            chatId, messages, title, pendingRequest, source, external, clientSavedAt,
+            broadcastReason: 'history-save',
+        }));
+        res.json({ success: true });
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ error: error.message });
+    }
 });
 
 app.get('/api/history/:id', async (req, res) => {
     const sessionFilePath = path.join(SESSIONS_DIR, `${req.params.id}.json`);
     if (await fs.exists(sessionFilePath)) {
         const sessionData = await safeReadJsonFile(sessionFilePath, { messages: [] });
+        sessionData.messages = await checkpointService.hydrate(req.params.id, sessionData.messages);
         res.json(sessionData);
     } else {
         res.json({ messages: [] });
     }
 });
+
+app.post('/api/checkpoints/restore', requireAgentAuth, createCheckpointRestoreHandler({
+    service: checkpointService, sessionsDir: SESSIONS_DIR,
+    getHistory, saveHistory, createSessionSummary, emitRealtimeEvent,
+}));
 
 app.delete('/api/history/:id', async (req, res) => {
     const sessionFilePath = path.join(SESSIONS_DIR, `${req.params.id}.json`);
@@ -4515,6 +4579,36 @@ app.post('/api/mcp/config', async (req, res) => {
     const config = req.body;
     await fs.writeJson(MCP_CONFIG_FILE, config, { spaces: 2 });
     res.send('Config saved');
+});
+
+app.get('/api/workspace/directories', async (req, res) => {
+    try {
+        const currentPath = await workspaceService.resolveRoot(req.query.path || '');
+        const entries = await fs.readdir(currentPath, { withFileTypes: true });
+        const directories = entries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+            .map(entry => ({ name: entry.name, path: path.join(currentPath, entry.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        const roots = process.platform === 'win32'
+            ? (await Promise.all('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(async drive => {
+                const root = drive + ':\\';
+                return (await fs.stat(root).catch(() => null))?.isDirectory() ? root : null;
+            }))).filter(Boolean)
+            : ['/'];
+        const parentPath = path.dirname(currentPath);
+        res.json({ currentPath, parentPath: parentPath === currentPath ? null : parentPath, defaultPath: FILES_DIR, directories, roots });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+app.post('/api/workspace/select', async (req, res) => {
+    try {
+        const root = await workspaceService.resolveRoot(req.body.path || '', { allowUnregistered: true });
+        workspaceService.rememberRoot(root);
+        res.json({ path: req.body.path ? root : '', resolvedPath: root });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
 });
 
 app.get('/api/config', async (req, res) => {
@@ -4955,7 +5049,14 @@ app.get('/api/lmstudio/models', async (req, res) => {
 });
 
 // Terminal execution
-app.post('/api/terminal', (req, res) => {
+app.get('/api/auth/token', (req, res) => {
+    if (!isLoopbackRequest(req) || !isTrustedLocalOrigin(req)) {
+        return res.status(403).json({ error: 'Authentication token is available only to local clients.' });
+    }
+    return res.json({ token: AGENT_AUTH_TOKEN });
+});
+
+app.post('/api/terminal', requireAgentAuth, (req, res) => {
     const { command } = req.body;
     const isWin = process.platform === 'win32';
     const shell = isWin ? 'powershell.exe' : undefined;
@@ -5280,16 +5381,15 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
             model: model,
             prompt: prompt,
             stream: true
-        }, { responseType: 'stream', timeout: 120000 });
+        }, { responseType: 'stream', timeout: config?.requestTimeoutMs || 120000, signal: config?.abortSignal });
 
         let fullText = "";
         return new Promise((resolve, reject) => {
-            response.data.on('data', chunk => {
-                const lines = chunk.toString().split('\n');
-                for (const line of lines) {
-                    if (!line.trim()) continue;
+            const lineBuffer = createLineBuffer((line) => {
+                    if (!line.trim()) return;
                     try {
                         const json = JSON.parse(line);
+                        config?.onUsage?.(json);
                         
                         const reasoning = json.reasoning_content || "";
                         if (reasoning && reasoningCallback) {
@@ -5300,10 +5400,15 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                             fullText += json.response;
                             if (streamCallback) streamCallback(json.response);
                         }
-                    } catch (e) {}
-                }
+                    } catch (e) {
+                        console.warn('[LLM stream] Ignoring malformed Ollama JSON line:', e.message);
+                    }
             });
-            response.data.on('end', () => resolve(fullText));
+            response.data.on('data', chunk => lineBuffer.push(chunk));
+            response.data.on('end', () => {
+                lineBuffer.flush();
+                resolve(fullText);
+            });
             response.data.on('error', (err) => reject(err));
         });
     }
@@ -5320,6 +5425,10 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
             break;
         case 'openai':
             baseUrl = 'https://api.openai.com/v1/chat/completions';
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            break;
+        case 'nvidia':
+            baseUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
             headers['Authorization'] = `Bearer ${apiKey}`;
             break;
         case 'deepseek':
@@ -5458,8 +5567,12 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                     { role: 'system', content: systemPrompt },
                     ...messages
                   ],
-            stream: true
+            stream: true,
+            ...(config?.onUsage ? { stream_options: { include_usage: true } } : {})
         };
+        if (config?.applyThinkingLevel === true && ['openai', 'nvidia', 'deepseek', 'copilot'].includes(provider) && ['low', 'medium', 'high'].includes(config?.thinkingLevel)) {
+            payload.reasoning_effort = config.thinkingLevel;
+        }
     }
 
     // 3. Execute Streaming Call
@@ -5468,6 +5581,8 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         const streamed = await streamCopilotChat({
             apiToken,
             payload,
+            signal: config?.abortSignal,
+            onUsage: config?.onUsage,
             onText: (text) => {
                 fullText += text;
                 if (streamCallback) streamCallback(text);
@@ -5475,7 +5590,7 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         });
 
         if (!fullText.trim()) {
-            const fallbackText = await fetchCopilotChatOnce({ apiToken, payload });
+            const fallbackText = await fetchCopilotChatOnce({ apiToken, payload, signal: config?.abortSignal, onUsage: config?.onUsage });
             fullText = fallbackText || streamed.text || '';
             if (fallbackText && streamCallback) streamCallback(fallbackText);
         }
@@ -5483,23 +5598,23 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         return fullText;
     }
 
-    const response = await axios.post(baseUrl, payload, {
+    const response = await postModelStream(baseUrl, payload, {
         headers: headers,
         responseType: 'stream',
-        timeout: 120000
-    });
+        timeout: config?.requestTimeoutMs || 120000,
+        signal: config?.abortSignal,
+    }, { maxAttempts: config?.requestMaxAttempts || 2 });
 
     return new Promise((resolve, reject) => {
-        response.data.on('data', chunk => {
-            const lines = chunk.toString().split('\n');
-            for (const line of lines) {
+        const lineBuffer = createLineBuffer((line) => {
                 const l = line.trim();
-                if (!l) continue;
+                if (!l) return;
                 
                 if (provider === 'anthropic') {
                     if (l.startsWith('data: ')) {
                         try {
                             const json = JSON.parse(l.slice(6));
+                            config?.onUsage?.(json);
                             if (json.type === 'content_block_delta') {
                                 if (json.delta?.type === 'thinking_delta' && json.delta?.thinking) {
                                     const thinking = json.delta.thinking;
@@ -5510,32 +5625,40 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                                     if (streamCallback) streamCallback(text);
                                 }
                             }
-                        } catch (e) {}
+                        } catch (e) {
+                            console.warn('[LLM stream] Ignoring malformed Anthropic SSE line:', e.message);
+                        }
                     }
                 } else {
                     if (l.startsWith('data: ')) {
                         const dataStr = l.slice(6);
-                        if (dataStr === '[DONE]') continue;
+                        if (dataStr === '[DONE]') return;
                         try {
                             const json = JSON.parse(dataStr);
+                            config?.onUsage?.(json);
                             
                             // Check for reasoning_content (DeepSeek compatible APIs)
-                            const reasoning = json.choices[0]?.delta?.reasoning_content || "";
+                            const reasoning = json.choices?.[0]?.delta?.reasoning_content || "";
                             if (reasoning && reasoningCallback) {
                                 reasoningCallback(reasoning);
                             }
                             
-                            const text = json.choices[0]?.delta?.content || "";
+                            const text = json.choices?.[0]?.delta?.content || "";
                             if (text) {
                                 fullText += text;
                                 if (streamCallback) streamCallback(text);
                             }
-                        } catch (e) {}
+                        } catch (e) {
+                            console.warn('[LLM stream] Ignoring malformed SSE line:', e.message);
+                        }
                     }
                 }
-            }
         });
-        response.data.on('end', () => resolve(fullText));
+        response.data.on('data', chunk => lineBuffer.push(chunk));
+        response.data.on('end', () => {
+            lineBuffer.flush();
+            resolve(fullText);
+        });
         response.data.on('error', (err) => reject(err));
     });
 }
@@ -8548,7 +8671,20 @@ async function scanRepoOutline(dirPath, maxFiles = 80, currentDepth = 0, maxDept
     return outline;
 }
 
-async function runAgentLoop(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState = null, approvalDecision = null }) {
+async function runAgentLoop(res, options) {
+    try {
+        return await workspaceService.run(options.config?.workspacePath || '', () => checkpointService.withWorkspace(workspaceService.currentRoot, () => runAgentLoopInWorkspace(res, options)));
+    } catch (error) {
+        if (!res.writableEnded) {
+            res.write('data: ' + JSON.stringify({ text: error.message }) + '\n\n');
+            res.write('data: [DONE]\n\n');
+            res.end();
+        }
+    }
+}
+
+async function runAgentLoopInWorkspace(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState = null, approvalDecision = null }) {
+    const FILES_DIR = workspaceService.currentRoot;
     provider = normalizeChatProviderId(provider || config?.provider || 'ollama');
     model = model || config?.model || 'llama3';
     ollamaUrl = ollamaUrl || config?.ollamaUrl || 'http://localhost:11434';
@@ -8571,8 +8707,6 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
     // Initialize MCP if enabled
     if (mcpEnabled && config?.mcpConfig?.mcpServers) {
         await mcpManager.initializeServers(config.mcpConfig.mcpServers);
-    } else {
-        await mcpManager.closeAll();
     }
 
     if (useSd) {
@@ -8599,6 +8733,8 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
     } else {
         context += '\n\nFULL ACCESS MODE ENABLED: terminal and file tools may access the broader workspace as before. Use caution and keep actions tightly scoped to the user request.';
     }
+
+    context += `\n\nACTIVE WORKSPACE: ${FILES_DIR}. Resolve relative paths and run terminal commands here. The user selected this directory for the current task. Inspect existing projects before creating new project folders.`;
 
     // Cancellation support: Stop the loop and sub-requests if client disconnects
     let aborted = false;
@@ -8628,6 +8764,7 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
         if (streamCompleted) return;
         aborted = true;
         loopAbortController.abort();
+        cancelAgentActionsForChat(chatId);
         console.log(`[Agent] Client disconnected. Aborting loop and requests for chatId: ${chatId}`);
     });
 
@@ -8671,7 +8808,7 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
     const envInfo = {
         os: `${sysDetails.sysInfo.type} ${sysDetails.sysInfo.release} (${sysDetails.sysInfo.arch})`,
         shell: process.platform === 'win32' ? 'PowerShell (Default)' : (process.env.SHELL || 'bash'),
-        cwd: process.cwd(),
+        cwd: FILES_DIR,
         node: process.version,
         platform: process.platform,
         cpu: `${sysDetails.cpuInfo.model} (${sysDetails.cpuInfo.cores} Cores)`,
@@ -8728,9 +8865,14 @@ async function runAgentLoop(res, { message, history, context, provider, model, o
     const persona = config?.systemPrompt || "你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切。请用不同的话语回复用户的问候，切勿直接复制或重复对话历史中的首次问候语。严禁输出 \"Tool\" 或 \"Thought\" 等前缀标记。请在回复开头和结尾带上 [expression:文件名.png] 格式的表情。";
 
     const mcpTools = mcpEnabled ? mcpManager.getAllTools() : [];
-    const mcpToolsText = mcpTools.length > 0 
-        ? mcpTools.map(t => `- mcp_${t.serverName}_${t.name}(${Object.keys(t.inputSchema.properties || {}).join(', ')}): ${t.description}`).join('\n')
-        : '';
+    const toolRegistry = createToolRegistry({
+        searchEnabled,
+        drawingEnabled: config?.drawingProvider !== 'none' && Boolean(config?.drawingProvider || config?.drawingModel || config?.customDrawingModel),
+        musicEnabled,
+        memoryEnabled: shouldUseMemory,
+        mcpTools,
+    });
+    const toolCatalog = renderToolCatalog(toolRegistry);
     const isRealtimeTask = /(?:\b(?:today|latest|recent|current|now|news|headline|weather|price|stock|hot)\b|今天|最新|最近|当前|现在|新闻|热点|天气|股价|热搜)/i.test(String(message || ''));
 
     const capabilityProfile = buildCapabilityProfile({
@@ -8789,34 +8931,7 @@ ${persona}
   </terminal>
 
 ## Available tools:
-${searchEnabled ? '- search(query): Search the web.' : ''}
-- browse(url): Fetch and read webpage content.
-${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image. STRICT WARNING: Only call this tool if the user explicitly asked you to draw or create an image/picture. Never call it for general questions or searching.` : ''}
-- terminal(command, timeoutSeconds): Run a PowerShell command. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Restricted to sandbox ${FILES_DIR}.` : ''}
-${musicEnabled ? '- composeMusic(prompt, bars): Create MIDI music. STRICT WARNING: Only call this tool if the user explicitly asked you to compose or make music/MIDI. Never call it for general queries, questions, or searching.' : ''}
-- readFile(path, startLine, endLine): Read file lines.
-- planFileRead(path, chunkLines): Create a chunk plan for large files.
-- readFileChunk(path, chunkIndex, chunkLines): Read one planned chunk.
-- writeFile(path, content, expectedHash): Create or overwrite a file.
-- editFile(path, startLine, endLine, content, expectedHash): Replace lines.
-- replaceInFile(path, oldText, newText, expectedHash, occurrence): Replace exact text.
-- replaceBlocks(path, blocks, expectedHash): Edit a file using SEARCH/REPLACE blocks (conflict-marker format). Preferred over editFile/replaceInFile.
-- deleteFile(path, expectedHash): Delete a file.
-- listDir(path, limit, offset, includeIgnored): List folder contents.
-- getRepoMap(path): Scan code structure (classes, functions, exports) recursively. Preferred first step when exploring a codebase.
-- createProjectFolder(name): Create folder under ${FILES_DIR}.
-- ensureDir(path): Create directory.
-- diagram(mermaidCode): Render Mermaid diagram.
-- updateTodo(json): Update the visible task checklist. STRICT WARNING: ONLY call this for complex, multi-step tasks (e.g. creating projects, writing code, multi-file editing). NEVER call this for simple one-shot questions, explanations, or weather queries.
-- respond(text): Final reply to user in their language.
-${shouldUseMemory ? '- listMemories(): List memories.\n- searchMemories(query): Semantic search memories.\n- readMemory(filename): Read a memory.\n- saveMemory(name, content): Save a memory.' : ''}
-- listSkills(): List skills.
-- searchSkills(query): Find relevant skills.
-- searchOpenHubSkills(query): Search remote skills.
-- inspectOpenHubSkill(slug): Inspect remote skill.
-- readSkill(name): Read skill content.
-- installSkill(sourceType, sourceOrName, content): Install skill.
-${mcpToolsText}
+${toolCatalog}
 
 ## Language Requirement
 - Thought/Response: MUST be in Chinese (中文). You must write your internal thoughts and planning in Chinese (中文).
@@ -8855,7 +8970,6 @@ Before calling tools, always follow this thinking process (output in "Thought:")
 - Memory: ${envInfo.memory}
 - User: ${envInfo.username}
 - Desktop: ${envInfo.paths.desktop}
-- manage_hosted_tasks(action, jsonConfigOrId): Manage recurring/scheduled tasks. action: 'add'|'delete'|'list'. For 'add', second arg is JSON string: {"task": "prompt", "scheduleType": "daily|weekly|monthly|once", "time": "HH:mm"|"YYYY-MM-DD HH:mm|d HH:mm", "desc": "description"}. For 'delete', second arg is taskId.
 - Pictures: ${envInfo.paths.pictures}
 - Documents: ${envInfo.paths.documents}
 - Downloads: ${envInfo.paths.downloads}
@@ -8948,34 +9062,7 @@ ${musicEnabled ? '- **Instrumental Music**: If the user asks you to create BGM, 
   </terminal>
 
 ## Available tools:
-${searchEnabled ? '- search(query): Search the web. Use this for up-to-date info or documentation.' : ''}
-- browse(url): Fetch and read the text content of a specific webpage. Use this AFTER searching to get detailed information.
-${(config?.drawingModel || config?.drawingProvider === 'stable-diffusion') ? `- draw(prompt, width, height): Generate an image. width and height are optional (default ${getDefaultDrawDimension(config?.drawingProvider, config?.customDrawingModel || config?.drawingModel)}). STRICT WARNING: Only call this tool if the user explicitly asked you to draw or create an image/picture. Never call it for general questions or searching.` : ''}
-- terminal(command, timeoutSeconds): Run a PowerShell command. timeoutSeconds is optional; default is ${formatDurationMs(TERMINAL_COMMAND_DEFAULT_TIMEOUT_MS)}, and 0 disables automatic timeout for large downloads or long model jobs. For servers or model runners that should keep running, prefer Start-Process or Start-Job so this turn can continue. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission keeps this inside sandbox ${FILES_DIR}; sensitive commands may pause for approval.` : 'Full access may reach the broader workspace.'}
-${musicEnabled ? '- composeMusic(prompt, bars): Create a short instrumental MIDI sketch and attach it to the chat. Use this for pure music, loops, BGM, and melody ideas. bars is optional and should usually stay between 4 and 12. STRICT WARNING: Only call this tool if the user explicitly asked you to compose or make music/MIDI. Never call it for general queries, questions, or searching.' : ''}
-- readFile(path, startLine, endLine): Read text content with line numbers. startLine/endLine are optional and useful for large code files. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows non-sensitive files inside sandbox ${FILES_DIR}.` : ''}
-- planFileRead(path, chunkLines): For large text files, return a chunk plan without loading every line into context. chunkLines defaults to ${LARGE_FILE_CHUNK_LINES}.
-- readFileChunk(path, chunkIndex, chunkLines): Read one planned large-file chunk. Prefer this over full-file reading when a file has many lines.
-- writeFile(path, content, expectedHash): Create or overwrite a text file. Relative paths are resolved under ${FILES_DIR}; new files are blocked in repository code directories outside ${FILES_DIR}. Pass expectedHash when overwriting an existing file. The resulting file will be attached for download. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows sandbox paths, and overwriting an existing file may pause for approval.` : ''}
-- editFile(path, startLine, endLine, content, expectedHash): Replace lines (1-indexed, inclusive). To insert, set endLine < startLine. expectedHash is required and must be the SHA256 from the latest readFile output. The updated file will be attached for download. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? 'Editing in default permission may pause for approval.' : ''}
-- replaceInFile(path, oldText, newText, expectedHash, occurrence): Replace an exact text match. expectedHash is required. Omit occurrence only when oldText appears exactly once; otherwise pass a 1-based occurrence number.
-- replaceBlocks(path, blocks, expectedHash): Edit a file using SEARCH/REPLACE blocks (conflict-marker format). Preferred over editFile/replaceInFile for code modifications to prevent line number offset issues. expectedHash is required.
-- deleteFile(path, expectedHash): Delete a file. expectedHash is required and must be the SHA256 from the latest readFile output. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? 'Default permission only allows sandbox paths and requires approval before deletion.' : ''}
-- listDir(path, limit, offset, includeIgnored): List contents of a folder with pagination. Defaults to 200 entries and ignores common heavy folders unless includeIgnored=true. ${permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? `Default permission only allows sandbox paths inside ${FILES_DIR}.` : ''}
-- getRepoMap(path): Scan code structures (classes, functions, declarations, exports) recursively in the target directory. Preferred first step when exploring a new codebase.
-- createProjectFolder(name): Create a dedicated project folder under ${FILES_DIR} and return its path. Use before multi-file deliverables.
-- ensureDir(path): Create a directory. Relative paths resolve under ${FILES_DIR}; project-code directories outside ${FILES_DIR} are blocked for new user deliverables.
-- diagram(mermaidCode): Generate and render a Mermaid diagram. DO NOT wrap the mermaidCode in backticks or markdown code blocks when calling this tool. Example: Tool: diagram("graph TD\nA-->B")
-- updateTodo(json): Update the visible task checklist. STRICT WARNING: ONLY call this for complex, multi-step tasks (e.g. creating projects, writing code, multi-file editing). NEVER call this for simple one-shot questions, explanations, or weather queries. Pass one JSON object string like {"title":"Implementation plan","items":[{"id":"inspect","text":"Inspect the relevant files","status":"in_progress"},{"id":"edit","text":"Implement the change","status":"pending"}]}. Use status values pending, in_progress, or completed. Send the full list each time.
-- respond(text): Final answer to the user in their language.
-${shouldUseMemory ? '- listMemories(): List memory items with categories, importance, previews, and whether they were auto-saved.\n- searchMemories(query): Search the memory system semantically by title, summary, tags, and content.\n- readMemory(filename): Read the full content and metadata of a memory item.\n- saveMemory(name, content): Save durable information worth remembering long-term, such as preferences, identity, project constraints, or communication style. Do not save trivial one-off details.' : ''}
-- listSkills(): List installed skills with names, descriptions, and source types.
-- searchSkills(query): Find the most relevant installed skills for the current task.
-- searchOpenHubSkills(query): Search OpenHub/ClawHub for remotely available skills before installing.
-- inspectOpenHubSkill(slug): Read the metadata and SKILL.md content of an OpenHub skill.
-- readSkill(name): Read the full content of a specific installed skill. Accepts a display name, stable key/slug, or distinctive title fragment.
-- installSkill(sourceType, sourceOrName, content): Install a skill. sourceType can be "openhub", "git", "local", or "manual". For "openhub", the second arg is the skill slug. For "git"/"local", the second arg is the repo URL or local path. For "manual", second arg is the skill name and third arg is the SKILL.md content.
-${mcpToolsText}
+${toolCatalog}
 
 ## Language Requirement
 - **Thought**: MUST be in Chinese (中文). You must write your internal thoughts and planning in Chinese (中文).
@@ -9049,8 +9136,8 @@ ${partialAssistantText || '(empty partial output)'}`;
             });
             
             for (const msg of historyContext.recentMessages) {
-                if (msg.role === 'user') {
-                    messagesList.push({ role: 'user', content: msg.content });
+                if (msg.role === 'user' || msg.role === 'system') {
+                    messagesList.push({ role: 'user', content: msg.role === 'system' ? serializeMessageForContext(msg) : msg.content });
                 } else if (msg.role === 'assistant') {
                     messagesList.push({ role: 'assistant', content: serializeMessageForContext(msg) });
                 }
@@ -9058,8 +9145,8 @@ ${partialAssistantText || '(empty partial output)'}`;
         } else {
             // Uncompressed history
             for (const msg of historyContext.recentMessages) {
-                if (msg.role === 'user') {
-                    messagesList.push({ role: 'user', content: msg.content });
+                if (msg.role === 'user' || msg.role === 'system') {
+                    messagesList.push({ role: 'user', content: msg.role === 'system' ? serializeMessageForContext(msg) : msg.content });
                 } else if (msg.role === 'assistant') {
                     messagesList.push({ role: 'assistant', content: serializeMessageForContext(msg) });
                 }
@@ -9116,6 +9203,23 @@ ${partialAssistantText || '(empty partial output)'}`;
     while (loopCount < maxLoops) {
         if (aborted) return;
         loopCount++;
+        const loopContext = compactLoopMessages(messagesList, {
+            systemText, budgetTokens: historyContext.status.budgetTokens, currentTask: message,
+        });
+        assistantMsg.contextStatus = null;
+        if (loopContext.compressed && !res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ contextStatus: {
+                ...historyContext.status, ...loopContext, state: 'compressed',
+                percent: Math.min(100, Math.round(loopContext.usedTokens / historyContext.status.budgetTokens * 100)),
+            } })}\n\n`);
+        }
+        const onUsage = createUsageTracker(usage => {
+            const status = contextStatusFromUsage(usage, historyContext.status.budgetTokens, {
+                ...historyContext.status, provider, model,
+            });
+            assistantMsg.contextStatus = status;
+            if (!aborted && !res.writableEnded) res.write(`data: ${JSON.stringify({ contextStatus: status })}\n\n`);
+        });
         let assistantResponse = "";
         let assistantReasoning = "";
         let assistantReasoningStreamed = false;
@@ -9223,26 +9327,24 @@ ${partialAssistantText || '(empty partial output)'}`;
                         signal: loopAbortController.signal 
                     }); 
 
+                    const ollamaLines = createLineBuffer(line => {
+                        if (!line.trim() || aborted) return;
+                        try {
+                            const data = JSON.parse(line);
+                            onUsage(data);
+                            const reasoning = data.message?.reasoning_content || data.reasoning_content || '';
+                            if (reasoning) handleReasoningProgress(reasoning);
+                            const content = data.message?.content || data.response || '';
+                            if (content) handleStreamProgress(content);
+                        } catch (error) {
+                            console.warn('[Ollama stream] Ignoring malformed line:', error.message);
+                        }
+                    });
                     for await (const chunk of response.data) {
                         if (aborted) break;
-                        const lines = chunk.toString().split('\n');
-                        for (const line of lines) {
-                            if (!line.trim()) continue;
-                            try {
-                                const data = JSON.parse(line);
-                                
-                                const reasoningContent = data.message?.reasoning_content || data.reasoning_content || "";
-                                if (reasoningContent) {
-                                    handleReasoningProgress(reasoningContent);
-                                }
-                                
-                                const content = data.message?.content || data.response || "";
-                                if (content) {
-                                    handleStreamProgress(content);
-                                }
-                            } catch (e) {}
-                        }
+                        ollamaLines.push(chunk);
                     }
+                    ollamaLines.flush();
 
                     if (aborted) return;
                     success = true;
@@ -9277,13 +9379,15 @@ ${partialAssistantText || '(empty partial output)'}`;
                         { role: 'system', content: systemText },
                         ...messagesList
                     ],
-                    max_tokens: 16384
+                    max_tokens: 16384,
+                    stream_options: { include_usage: true }
                 };
 
                 await streamCopilotChat({
                     apiToken,
                     payload: copilotPayload,
                     signal: loopAbortController.signal,
+                    onUsage,
                     onText: (content) => {
                         handleStreamProgress(content);
                     },
@@ -9296,7 +9400,8 @@ ${partialAssistantText || '(empty partial output)'}`;
                     const fallbackText = await fetchCopilotChatOnce({
                         apiToken,
                         payload: copilotPayload,
-                        signal: loopAbortController.signal
+                        signal: loopAbortController.signal,
+                        onUsage
                     });
                     if (fallbackText) {
                         assistantResponse = fallbackText;
@@ -9321,7 +9426,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     model,
                     ollamaUrl,
                     messagesList,
-                    { ...config, systemPrompt: systemText },
+                    { ...config, systemPrompt: systemText, abortSignal: loopAbortController.signal, applyThinkingLevel: true, onUsage },
                     (content) => {
                         handleStreamProgress(content);
                     },
@@ -9374,170 +9479,7 @@ ${partialAssistantText || '(empty partial output)'}`;
             }
         }
 
-        // --- Multi-Tool execution (Robust Parsing) ---
-        const toolMatches = [];
-        
-        // Helper to parse XML attributes
-        const parseXmlAttributes = (attrStr) => {
-            const attrs = {};
-            if (!attrStr) return attrs;
-            const regex = /([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
-            let match;
-            while ((match = regex.exec(attrStr)) !== null) {
-                const key = match[1];
-                const val = match[2] ?? match[3] ?? match[4];
-                attrs[key] = val;
-            }
-            return attrs;
-        };
-
-        const TOOL_PARAM_MAPPING = {
-            readfile: ['path', 'startLine', 'endLine'],
-            planfileread: ['path', 'chunkLines'],
-            readfilechunk: ['path', 'chunkIndex', 'chunkLines'],
-            writefile: ['path', 'content', 'expectedHash'],
-            editfile: ['path', 'startLine', 'endLine', 'content', 'expectedHash'],
-            replaceinfile: ['path', 'oldText', 'newText', 'expectedHash', 'occurrence'],
-            replaceblocks: ['path', 'blocks', 'expectedHash'],
-            deletefile: ['path', 'expectedHash'],
-            listdir: ['path', 'limit', 'offset', 'includeIgnored'],
-            getrepomap: ['path'],
-            createprojectfolder: ['name'],
-            ensuredir: ['path'],
-            diagram: ['mermaidCode'],
-            updatetodo: ['json'],
-            todo: ['json'],
-            respond: ['text'],
-            terminal: ['command', 'timeoutSeconds'],
-            search: ['query'],
-            browse: ['url'],
-            draw: ['prompt', 'width', 'height'],
-            composemusic: ['prompt', 'bars']
-        };
-
-        const TOOL_BODY_PARAMS = {
-            writefile: 'content',
-            editfile: 'content',
-            replaceblocks: 'blocks',
-            diagram: 'mermaidCode',
-            updatetodo: 'json',
-            todo: 'json',
-            respond: 'text',
-            terminal: 'command',
-            search: 'query',
-            draw: 'prompt',
-            composemusic: 'prompt'
-        };
-
-        let scanIndex = 0;
-        while (scanIndex < assistantResponse.length) {
-            // 1. Try matching XML-style tool call (e.g. <replaceBlocks path="xxx" expectedHash="yyy">...)
-            if (assistantResponse[scanIndex] === '<') {
-                const xmlStartRegex = /^<([a-zA-Z0-9_:-]+)(?:\s+([^>]*))?>/;
-                const startMatch = assistantResponse.substring(scanIndex).match(xmlStartRegex);
-                if (startMatch) {
-                    const fullStartTag = startMatch[0];
-                    let tagName = startMatch[1];
-                    const attrStr = startMatch[2] || "";
-                    
-                    if (tagName.includes(':') && !tagName.startsWith('call:')) {
-                        tagName = tagName.split(':').slice(1).join(':');
-                    }
-
-                    const isKnownTool = TOOL_PARAM_MAPPING[tagName.toLowerCase()];
-                    const isToolCallTag = (tagName.toLowerCase() === 'tool_call' || tagName.toLowerCase() === 'call' || tagName.startsWith('call:'));
-
-                    if (isKnownTool || isToolCallTag) {
-                        const closingTag = `</${startMatch[1]}>`;
-                        const closingIndex = assistantResponse.indexOf(closingTag, scanIndex + fullStartTag.length);
-                        if (closingIndex !== -1) {
-                            const body = assistantResponse.substring(scanIndex + fullStartTag.length, closingIndex);
-                            const attributes = parseXmlAttributes(attrStr);
-                            
-                            let toolNameRaw = isToolCallTag ? (attributes.name || tagName.substring(tagName.indexOf(':') + 1)) : tagName;
-                            const toolName = toolNameRaw.toLowerCase().trim();
-
-                            if (TOOL_PARAM_MAPPING[toolName]) {
-                                const paramNames = TOOL_PARAM_MAPPING[toolName];
-                                const bodyParam = TOOL_BODY_PARAMS[toolName];
-                                const parsedArgs = [];
-                                for (const paramName of paramNames) {
-                                    let val = attributes[paramName];
-                                    if (val === undefined && paramName === bodyParam) {
-                                        val = body; // Preserve exact body content/newlines
-                                    }
-                                    parsedArgs.push(val !== undefined ? val : "");
-                                }
-                                toolMatches.push({
-                                    name: toolNameRaw,
-                                    rawArgs: "",
-                                    parsedArgs: parsedArgs
-                                });
-                                scanIndex = closingIndex + closingTag.length;
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 2. Try matching traditional tool call starting at scanIndex (Tool: name(...) or 工具: name(...))
-            const traditionalRegex = /^(?:Tool|工具)[:：]\s*([a-zA-Z0-9_-]+)\s*\(/i;
-            const tradMatch = assistantResponse.substring(scanIndex).match(traditionalRegex);
-            if (tradMatch) {
-                const toolNameRaw = tradMatch[1];
-                const toolName = toolNameRaw.toLowerCase().trim();
-                if (TOOL_PARAM_MAPPING[toolName]) {
-                    const startOfArgs = scanIndex + tradMatch[0].length - 1; // Index of the '('
-                    
-                    let balance = 0;
-                    let closingParenIndex = -1;
-                    let inStr = false;
-                    let strChar = "";
-                    let escaped = false;
-
-                    for (let j = startOfArgs; j < assistantResponse.length; j++) {
-                        const char = assistantResponse[j];
-                        if (escaped) {
-                            escaped = false;
-                            continue;
-                        }
-                        if (char === '\\') {
-                            escaped = true;
-                            continue;
-                        }
-                        if ((char === '"' || char === "'") && !escaped) {
-                            if (!inStr) {
-                                inStr = true;
-                                strChar = char;
-                            } else if (char === strChar) {
-                                inStr = false;
-                            }
-                        }
-                        if (!inStr) {
-                            if (char === '(') balance++;
-                            if (char === ')') balance--;
-                            if (balance === 0) {
-                                closingParenIndex = j;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (closingParenIndex !== -1) {
-                        const rawArgs = assistantResponse.substring(startOfArgs + 1, closingParenIndex);
-                        toolMatches.push({
-                            name: toolNameRaw,
-                            rawArgs: rawArgs
-                        });
-                        scanIndex = closingParenIndex + 1;
-                        continue;
-                    }
-                }
-            }
-
-            scanIndex++;
-        }
+        const toolMatches = parseToolCalls(assistantResponse, toolRegistry);
 
         if (aborted) return;
 
@@ -9549,14 +9491,7 @@ ${partialAssistantText || '(empty partial output)'}`;
             for (const match of toolMatches) {
                 const name = match.name.toLowerCase().trim();
                 if (name === 'search' || name === 'browse') {
-                    const cleanArg = (raw) => {
-                        let str = (raw || "").trim();
-                        if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
-                            str = str.slice(1, -1);
-                        }
-                        return str.replace(/\\(.)/g, '$1');
-                    };
-                    const arg = match.parsedArgs ? match.parsedArgs[0] : cleanArg(match.rawArgs);
+                    const arg = match.error ? '' : match.parsedArgs[0];
                     const cacheKey = `${name}:${arg}`;
                     if (arg && !slowToolCache.has(cacheKey)) {
                         if (name === 'search') {
@@ -9578,54 +9513,12 @@ ${partialAssistantText || '(empty partial output)'}`;
                 const toolName = toolNameRaw.toLowerCase().trim();
                 const rawArgs = (match.rawArgs || "").trim();
 
-                let args = [];
-                if (match.parsedArgs) {
-                    args = match.parsedArgs;
-                } else if (toolName === 'updatetodo' || toolName === 'todo') {
-                    args = [decodeStructuredToolArgument(rawArgs)];
-                } else {
-                    // Robust tool argument parser
-                    let current = "";
-                    let inQuotes = false;
-                    let quoteChar = "";
-                    let esc = false;
-
-                    for (let i = 0; i < rawArgs.length; i++) {
-                        const char = rawArgs[i];
-                        if (esc) {
-                            if (char === 'n') current += '\n';
-                            else if (char === 'r') current += '\r';
-                            else if (char === 't') current += '\t';
-                            else current += char;
-                            esc = false;
-                            continue;
-                        }
-                        if (char === '\\') {
-                            const next = rawArgs[i + 1];
-                            if (next === '"' || next === "'" || next === '\\' || next === 'n' || next === 'r' || next === 't') {
-                                esc = true;
-                                continue;
-                            }
-                        }
-                        if ((char === '"' || char === "'")) {
-                            if (!inQuotes) {
-                                inQuotes = true;
-                                quoteChar = char;
-                            } else if (char === quoteChar) {
-                                inQuotes = false;
-                            } else {
-                                current += char;
-                            }
-                        } else if (char === ',' && !inQuotes) {
-                            args.push(current.trim());
-                            current = "";
-                        } else {
-                            current += char;
-                        }
-                    }
-                    if (current.trim() || rawArgs.endsWith(',')) {
-                        args.push(current.trim());
-                    }
+                const args = match.parsedArgs;
+                const toolDefinition = toolRegistry.get(toolName);
+                if (match.error) {
+                    messagesList.push({ role: 'assistant', content: `Tool: ${toolNameRaw}(${rawArgs})` });
+                    messagesList.push({ role: 'user', content: `Observation: Error: ${match.error}` });
+                    continue;
                 }
 
                 if (toolName === 'updatetodo' || toolName === 'todo') {
@@ -9676,7 +9569,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     if (currentTodoList?.items?.length) {
                         currentTodoList = {
                             ...currentTodoList,
-                            status: 'done',
+                            status: currentTodoList.items.every(item => item.status === 'completed') ? 'done' : 'incomplete',
                             closed: true,
                             updatedAt: new Date().toISOString(),
                         };
@@ -9757,7 +9650,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         return path.join(FILES_DIR, cleanP);
                     }
 
-                    return path.resolve(process.cwd(), cleanP);
+                    return path.resolve(FILES_DIR, cleanP);
                 };
 
                 const resolveToolPath = (p) => {
@@ -9805,6 +9698,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         reasonKey,
                         reason,
                         summary,
+                        chatId,
                     });
                     const waitingObservation = `Approval required: ${reason}`;
                     actionPart.observation = waitingObservation;
@@ -9889,7 +9783,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         }
                     } else if (toolName === 'terminal') {
                         const terminalPermission = evaluateTerminalPermission(args[0], permissionMode);
-                        const terminalApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const terminalApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
 
                         if (!terminalPermission.allowed && terminalPermission.requiresApproval && !terminalApproved) {
                             await requestUserApproval({
@@ -9938,13 +9832,16 @@ ${partialAssistantText || '(empty partial output)'}`;
                                     : "Skipped: The user manually skipped this terminal command. Continue without relying on its output.";
                                 observation = `${reasonText}\nSTDOUT before skip: ${commandRes.out || ''}\nSTDERR before skip: ${commandRes.err || ''}`;
                             } else {
-                                observation = `STDOUT: ${commandRes.out}\nSTDERR: ${commandRes.err}`;
+                                const exitStatus = commandRes.exitCode === 0 ? 'succeeded' : 'failed';
+                                observation = `Command ${exitStatus} (exit code ${commandRes.exitCode}).\nSTDOUT: ${commandRes.out}\nSTDERR: ${commandRes.err}`;
                             }
-                            if (!commandRes.skipped && !commandRes.out.trim() && !commandRes.err.trim()) observation = "Command executed (no standard output).";
+                            if (!commandRes.skipped && commandRes.exitCode === 0 && !commandRes.out.trim() && !commandRes.err.trim()) {
+                                observation = "Command succeeded (exit code 0; no standard output).";
+                            }
                         }
                     } else if (toolName === 'manage_hosted_tasks') {
                         const action = args[0];
-                        const taskActionApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const taskActionApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
                         if (
                             permissionMode === AGENT_PERMISSION_MODE_DEFAULT &&
                             (action === 'add' || action === 'delete') &&
@@ -10109,7 +10006,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         const writePathResult = resolveWritePath(args[0]);
                         const filePath = writePathResult.filePath;
                         const expectedHash = args[2];
-                        const writeApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const writeApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
 
                         if (writePathResult.error) {
                             observation = writePathResult.error;
@@ -10185,7 +10082,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         const endLine = parseToolLineNumber(args[2]);
                         const newContentText = args[3] || "";
                         const expectedHash = args[4];
-                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
                         if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(filePath)) {
                             observation = `Permission denied: default permission only allows editing files inside sandbox ${FILES_DIR}. Switch to full access to edit project files.`;
                         } else if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && isSensitivePath(filePath)) {
@@ -10269,7 +10166,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         const filePath = resolveToolPath(args[0]);
                         const blocksText = args[1] || "";
                         const expectedHash = args[2];
-                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
 
                         if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(filePath)) {
                             observation = `Permission denied: default permission only allows editing files inside sandbox ${FILES_DIR}. Switch to full access to edit project files.`;
@@ -10380,7 +10277,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                         const newText = String(args[2] ?? '');
                         const expectedHash = args[3];
                         const requestedOccurrence = parsePositiveInteger(args[4], 0, Number.MAX_SAFE_INTEGER);
-                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const editApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
 
                         if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(filePath)) {
                             observation = `Permission denied: default permission only allows editing files inside sandbox ${FILES_DIR}. Switch to full access to edit project files.`;
@@ -10469,7 +10366,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     } else if (toolName === 'deletefile') {
                         const filePath = resolveToolPath(args[0]);
                         const expectedHash = args[1];
-                        const deleteApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const deleteApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
 
                         if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isSandboxPath(filePath)) {
                             observation = `Permission denied: default permission only allows deleting files inside sandbox ${FILES_DIR}. Switch to full access to delete project files.`;
@@ -10629,7 +10526,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                             observation = `Error reading skill: ${e.message}`;
                         }
                     } else if (toolName === 'installskill') {
-                        const installSkillApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args);
+                        const installSkillApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
                         if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !installSkillApproved) {
                             await requestUserApproval({
                                 reasonKey: 'sandbox-skill-install',
@@ -10722,77 +10619,23 @@ ${partialAssistantText || '(empty partial output)'}`;
                         } catch (e) {
                             observation = `Error accessing knowledge base: ${e.message}`;
                         }
-                    } else if (toolName.startsWith('mcp_')) {
-                        // Protocol: mcp_serverName_toolName
-                        const parts = toolName.split('_');
-                        if (parts.length < 3) {
-                            observation = `Error: Invalid MCP tool name format. Expected mcp_serverName_toolName.`;
-                        } else {
-                            const serverName = parts[1];
-                            const mcpToolName = parts.slice(2).join('_');
-                            try {
-                                let mcpArgs = {};
-                                const schema = mcpManager.getToolSchema(serverName, mcpToolName);
-                                const properties = schema?.inputSchema?.properties || {};
-                                const keys = Object.keys(properties);
-
-                                // --- 极强鲁棒性的参数解析逻辑 ---
-                                
-                                // 情况 A: AI 传了一个 JSON 字符串作为第一个参数
-                                if (args.length === 1 && args[0].trim().startsWith('{')) {
-                                    try {
-                                        mcpArgs = JSON.parse(args[0]);
-                                    } catch (e) {
-                                        mcpArgs = args[0] || {};
-                                    }
-                                } else {
-                                    // 情况 B: AI 混合了 命名参数 (key=val) 或 位置参数
-                                    args.forEach((arg, idx) => {
-                                        const trimmedArg = arg.trim();
-                                        
-                                        // 检查是否是 key=value 格式
-                                        const kvMatch = trimmedArg.match(/^(\w+)\s*[:=]\s*([\s\S]*)$/);
-                                        let key = keys[idx]; // 默认按位置找 key
-                                        let val = trimmedArg;
-
-                                        if (kvMatch) {
-                                            const potentialKey = kvMatch[1].trim();
-                                            // 如果提取的 key 在 schema 中存在，则使用它
-                                            if (properties[potentialKey]) {
-                                                key = potentialKey;
-                                                val = kvMatch[2].trim();
-                                            }
-                                        }
-
-                                        if (key) {
-                                            const propSchema = properties[key];
-                                            // 清洗引号
-                                            let cleanVal = val.replace(/^["']|["']$/g, '').trim();
-                                            
-                                            // 类型转换
-                                            const isNumber = propSchema?.type === 'number' || propSchema?.type === 'integer' || 
-                                                           (Array.isArray(propSchema?.type) && (propSchema.type.includes('number') || propSchema.type.includes('integer')));
-                                            const isBoolean = propSchema?.type === 'boolean' || 
-                                                            (Array.isArray(propSchema?.type) && propSchema.type.includes('boolean'));
-
-                                            if (isNumber) {
-                                                const num = Number(cleanVal);
-                                                mcpArgs[key] = !isNaN(num) && cleanVal !== "" ? num : cleanVal;
-                                            } else if (isBoolean) {
-                                                mcpArgs[key] = (cleanVal.toLowerCase() === 'true' || cleanVal === '1');
-                                            } else {
-                                                mcpArgs[key] = cleanVal;
-                                            }
-                                        }
-                                    });
-                                }
-
-                                const result = await mcpManager.callTool(serverName, mcpToolName, mcpArgs);
-                                observation = result.content.map(c => c.text).join('\n');
-                            } catch (e) {
-                                observation = `MCP Error (${serverName}/${mcpToolName}): ${e.message}`;
-                            }
+                    } else if (toolDefinition?.mcp) {
+                        const { serverName, toolName: mcpToolName, annotations } = toolDefinition.mcp;
+                        const mcpArgs = parseMcpArguments(args, toolDefinition);
+                        const mcpApproved = isApprovalGrantedForAction(approvalDecision, toolNameRaw, args, chatId);
+                        if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT &&
+                            (annotations.readOnlyHint !== true || annotations.destructiveHint === true) && !mcpApproved) {
+                            await requestUserApproval({
+                                reasonKey: 'mcp-sensitive-action',
+                                reason: 'This MCP tool may change external data or system state.',
+                                summary: `${serverName}/${mcpToolName}: ${JSON.stringify(mcpArgs).slice(0, 500)}`,
+                            });
+                            return;
                         }
+                        const result = await mcpManager.callTool(serverName, mcpToolName, mcpArgs);
+                        observation = (result.content || []).map(item => item.text ||
+                            (item.type === 'resource_link' ? `${item.name || 'Resource'}: ${item.uri}` : `[${item.type || 'non-text'} content]`)).join('\n');
+                        if (result.isError) observation = `MCP Error: ${observation}`;
                     } else {
                          observation = `Error: Unknown tool '${toolName}'. Available: search, browse, draw, composeMusic, terminal, readFile, planFileRead, readFileChunk, writeFile, editFile, replaceInFile, deleteFile, listDir, createProjectFolder, ensureDir, updateTodo, respond, and enabled MCP tools.`;
                     }
@@ -10823,11 +10666,12 @@ ${partialAssistantText || '(empty partial output)'}`;
                 unregisterAgentAction(actionId);
                 
                 // Truncate observation for logic prompt to prevent token overflow, especially for base64 images
-                const logicObservation = (observation && observation.length > 2000) 
-                    ? observation.slice(0, 1000) + `... [Truncated ${observation.length - 2000} chars] ...` + observation.slice(-1000)
-                    : observation;
+                const logicObservation = truncateToolObservation(observation, {
+                    toolName, args,
+                    maxChars: Math.min(32000, Math.max(4000, Math.floor(historyContext.status.budgetTokens * 0.55))),
+                });
 
-                const toolArgsStr = args.map(a => `"${(a || "").toString().replace(/"/g, '\\"')}"`).join(', ');
+                const toolArgsStr = args.map(arg => JSON.stringify(String(arg ?? ''))).join(', ');
                 currentPrompt += `\nAssistant: Tool: ${toolNameRaw}(${toolArgsStr})\nObservation: ${logicObservation}\n`;
                 messagesList.push({
                     role: 'assistant',
@@ -10920,7 +10764,20 @@ const isGreetingOrSimple = (msg) => {
     return greetings.includes(cleanStr);
 };
 
+function getFastChatIntent(message = '') {
+    const text = String(message).trim();
+    if (/(?:文件|文件夹|目录|工作区|终端|命令|运行|执行|安装|保存|删除|修改|编辑|项目|仓库|代码库|定时|提醒|画一|画个|绘图|生成图片|搜索|检索|联网|天气|新闻|实时|最新|浏览网页|打开网页)|\b(?:search|browse|weather|news|latest|terminal|execute|install|workspace|repository|remind|schedule)\b/i.test(text)) return null;
+    if (/^(?:sb|666|哈哈+|呵呵+|嗯+|哦+|好[的呀啊吧]?|谢谢|感谢|晚安|早安|你在干嘛|你在做什么|你怎么样|无聊|想你了|hi|hey|hello|thanks|thank you|ok|lol)[!?？！。~\s]*$/i.test(text)) return 'CHAT';
+    if (/^(?:解释|介绍|什么是|为什么|如何理解|讲个故事|讲个笑话|写一首诗|写首诗|翻译|润色|总结这段|陪我聊|聊聊)|^(?:explain|what is|why|translate|tell me a joke|write a poem)\b/i.test(text)) return 'CHAT';
+    return null;
+}
+
 async function classifyIntent({ message, provider, model, ollamaUrl, config }) {
+    const fastIntent = getFastChatIntent(message);
+    if (fastIntent) return fastIntent;
+    const controller = new AbortController();
+    const classifierTimer = setTimeout(() => controller.abort(), 2500);
+    const classificationStartedAt = Date.now();
     const classificationPrompt = `You are an advanced routing assistant. Determine whether the user's query requires system tools or terminal actions.
 
 Respond with "CHAT" if the query:
@@ -10945,6 +10802,12 @@ Respond with exactly one word: "CHAT" or "AGENT".`;
             classificationPrompt,
             {
                 ...config,
+                systemPrompt: 'You are a routing classifier. Output exactly CHAT or AGENT. Never output expression tags, persona dialogue, or explanations.',
+                thinkingLevel: 'low',
+                applyThinkingLevel: false,
+                requestTimeoutMs: 2500,
+                requestMaxAttempts: 1,
+                abortSignal: controller.signal,
                 temperature: 0
             }
         );
@@ -10953,8 +10816,11 @@ Respond with exactly one word: "CHAT" or "AGENT".`;
         if (result.includes('AGENT')) return 'AGENT';
         return 'CHAT';
     } catch (err) {
-        console.error('[Router] Intent classification failed, defaulting to AGENT:', err);
+        console.warn('[Router] Classification unavailable within budget; using AGENT.', summarizeModelError(err));
         return 'AGENT';
+    } finally {
+        clearTimeout(classifierTimer);
+        console.log(`[Timing] Intent classification: ${Date.now() - classificationStartedAt}ms`);
     }
 }
 
@@ -10966,6 +10832,7 @@ async function runChatLoop(res, { message, history, provider, model, ollamaUrl, 
     const persona = config?.systemPrompt || "你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切。请用不同的话语回复用户的问候，切勿直接复制或重复对话历史中的首次问候语。严禁输出 \"Tool\" 或 \"Thought\" 等前缀标记。请在回复开头和结尾带上 [expression:文件名.png] 格式的表情。";
 
     let aborted = false;
+    const chatAbortController = new AbortController();
     let streamCompleted = false;
     const heartbeatTimer = setInterval(() => {
         if (aborted || res.writableEnded) {
@@ -10992,6 +10859,7 @@ async function runChatLoop(res, { message, history, provider, model, ollamaUrl, 
         clearInterval(heartbeatTimer);
         if (streamCompleted) return;
         aborted = true;
+        chatAbortController.abort();
         console.log(`[Chat] Client disconnected. Aborting request for chatId: ${chatId}`);
     });
 
@@ -11054,6 +10922,13 @@ ${formattedHistory.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.co
 ## Current Task:
 User message: ${message}`;
 
+    const outputWaitStartedAt = Date.now();
+    let firstOutputLogged = false;
+    const logFirstOutput = () => {
+        if (firstOutputLogged) return;
+        firstOutputLogged = true;
+        console.log(`[Timing] Chat first output: ${Date.now() - outputWaitStartedAt}ms`);
+    };
     let assistantResponse = "";
     let assistantReasoning = "";
     
@@ -11062,6 +10937,7 @@ User message: ${message}`;
 
     const handleStreamProgress = (content) => {
         if (aborted) return;
+        logFirstOutput();
         assistantResponse += content;
 
         const parsedThoughts = extractThoughtsAndText(assistantResponse);
@@ -11093,23 +10969,32 @@ User message: ${message}`;
         if (aborted) return;
         const cleanContent = String(content || '').replace(/<\/?think>/gi, '');
         if (!cleanContent) return;
+        logFirstOutput();
         assistantReasoning += cleanContent;
         if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ reasoning: cleanContent })}\n\n`);
         }
     };
 
+    let measuredContextStatus = null;
+    const onUsage = createUsageTracker(usage => {
+        measuredContextStatus = contextStatusFromUsage(usage, getAgentContextBudgetTokens(provider, model, config), {
+            provider, model, compressed: false, state: 'normal',
+        });
+        if (!aborted && !res.writableEnded) res.write(`data: ${JSON.stringify({ contextStatus: measuredContextStatus })}\n\n`);
+    });
     try {
         await callLLM(
             provider,
             model,
             ollamaUrl,
             chatPrompt,
-            config,
+            { ...config, abortSignal: chatAbortController.signal, applyThinkingLevel: false, onUsage },
             handleStreamProgress,
             handleReasoningProgress
         );
 
+        if (aborted) return;
         const finalThoughts = extractThoughtsAndText(assistantResponse);
         const finalReasoning = finalThoughts.reasoning || assistantReasoning;
         const finalChatText = finalThoughts.text;
@@ -11126,6 +11011,7 @@ User message: ${message}`;
             parts: currentParts, 
             generatedFiles: [], 
             id: assistantMsgId || Date.now(), 
+            contextStatus: measuredContextStatus,
             todoList: null 
         };
         fullHistory.push(assistantMsg);
@@ -11139,9 +11025,11 @@ User message: ${message}`;
 
         sendDone();
     } catch (err) {
-        console.error('[Chat] Call failed:', err);
+        if (aborted) return;
+        console.error('[Chat] Call failed:', summarizeModelError(err));
         if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ text: `调用失败: ${err.message}` })}\n\n`);
+            res.write(`data: ${JSON.stringify({ text: `调用失败: ${modelFailureMessage(err, getChatProviderLabel(provider))}` })}\n\n`);
+            sendDone();
         }
     }
 }
@@ -11266,7 +11154,7 @@ Respond only with the summary.`;
 
 
 // Update chat route
-const PptxGenJS = require('pptxgenjs');
+function PptxGenJS(...args) { const Constructor = require('pptxgenjs'); return new Constructor(...args); }
 
 async function buildImageDeckPptBuffer(images = [], title = '') {
     const pres = new PptxGenJS();
@@ -13837,10 +13725,16 @@ ${collectedStory}`;
 app.post('/api/chat', async (req, res) => {
     const { message, history, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, useDeep, useMemory, uploadedFiles, chatId, assistantMsgId, config, resumeState = null, approvalDecision = null, useTruthCheck = false, useStoryGlass = false, storyGlassPreferences = {} } = req.body;
     touchInteractiveActivity('chat');
+    try {
 
+    const root = await workspaceService.resolveRoot(config?.workspacePath || '');
+    await checkpointService.withWorkspace(root, async () => {
+    const checkpoint = await prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
+    if (res.destroyed || res.writableEnded) return;
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    if (checkpoint) res.write(`data: ${JSON.stringify({ type: 'checkpoint', checkpoint })}\n\n`);
 
     if (chatId && String(message || '').trim().startsWith('/compact')) {
         await handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config });
@@ -13891,16 +13785,28 @@ app.post('/api/chat', async (req, res) => {
             await runAgentLoop(res, { message, history, context, provider, model, ollamaUrl, searchEnabled, mcpEnabled, useSd, chatId, assistantMsgId, uploadedFiles, config, useMemory, resumeState, approvalDecision });
         }
     }
+    });
+    } catch (error) {
+        if (res.destroyed || res.writableEnded) return;
+        if (!res.headersSent) res.status(error.statusCode || 500).json({ error: error.message, text: error.message });
+        else {
+            res.write(`data: ${JSON.stringify({ text: `执行失败：${error.message}` })}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        }
+    }
 });
 
-const resolvedHttps = tryResolveHttpsOptions();
+const resolvedHttps = process.env.SAKI_TLS === '0' ? null : tryResolveHttpsOptions();
 const server = resolvedHttps
     ? https.createServer(resolvedHttps.options, app)
     : http.createServer(app);
 
-server.listen(port, '0.0.0.0', () => {
+mountFrontend(app, runtime);
+const backgroundTimers = [];
+server.listen(port, AGENT_HOST, () => {
     const protocol = resolvedHttps ? 'https' : 'http';
-    console.log(`Server running on ${protocol}://0.0.0.0:${port}`);
+    console.log(`Server running on ${protocol}://${AGENT_HOST}:${server.address().port} (${runtime.profile})`);
     if (resolvedHttps) {
         console.log(`[SSL] HTTPS enabled with cert: ${resolvedHttps.certPath}`);
         console.log(`[SSL] HTTPS key: ${resolvedHttps.keyPath}`);
@@ -13916,8 +13822,10 @@ server.listen(port, '0.0.0.0', () => {
         .catch(error => console.error('[QQBridge] Startup sync failed:', error.message));
     loadQQBotSessionMap().catch(error => console.error('[QQBridge] Failed to load session map:', error.message));
 
+    if (!runtime.backgroundTasks) return;
+
     // Hosted Task Scheduler Loop
-    setInterval(async () => {
+    backgroundTimers.push(setInterval(async () => {
         const dueTasks = taskScheduler.getDueTasks();
         if (dueTasks.length > 0) {
             console.log(`[Scheduler] Found ${dueTasks.length} due tasks.`);
@@ -14032,9 +13940,9 @@ Avoid asking the user for input as they are not currently looking at this screen
                 await taskScheduler.updateTaskStatus(task.id, `Failed: ${e.message}`, null);
             }
         }
-    }, 60000); // Check every minute
+    }, 60000)); // Check every minute
 
-    setInterval(async () => {
+    backgroundTimers.push(setInterval(async () => {
         try {
             const config = await readGlobalConfig();
             const result = await offlineReflectionService.maybeRun({
@@ -14060,5 +13968,22 @@ Avoid asking the user for input as they are not currently looking at this screen
         } catch (error) {
             console.error('[Offline Reflection] Scheduler check failed:', error.message);
         }
-    }, 60000);
+    }, 60000));
 });
+
+let shuttingDown = false;
+async function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const timer of backgroundTimers) clearInterval(timer);
+    const deadline = setTimeout(() => process.exit(1), 10000);
+    deadline.unref();
+    const stopped = new Promise(resolve => server.close(resolve));
+    server.closeIdleConnections?.();
+    await Promise.allSettled([stopped, closeCrawler(), mcpManager.closeAll(), qqBridge.stop()]);
+    clearTimeout(deadline);
+    process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+server.on('error', error => { console.error('[Server] ' + error.message); process.exit(1); });

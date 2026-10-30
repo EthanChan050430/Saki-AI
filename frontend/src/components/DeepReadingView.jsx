@@ -1,20 +1,10 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X, CheckCircle2, Circle, Loader2, ExternalLink, FileText, Activity, BookOpen, Download, Maximize2, Minimize2, ZoomIn } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import mermaid from 'mermaid';
-
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  suppressErrorNotifications: true,
-  errorHandler: () => {},
-  parseError: () => {},
-  flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
-});
+import { loadMermaid } from '../utils/mermaid';
 
 const Mermaid = ({ chart }) => {
   const [svg, setSvg] = useState('');
@@ -31,6 +21,8 @@ const Mermaid = ({ chart }) => {
       const renderChart = async () => {
         try {
           const cleanChart = chart.trim();
+          const mermaid = await loadMermaid();
+          if (!isMounted) return;
           await mermaid.parse(cleanChart);
           const id = `mermaid-svg-${Math.random().toString(36).slice(2, 11)}`;
           const { svg: nextSvg } = await mermaid.render(id, cleanChart);
@@ -313,10 +305,10 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
 
   const renderReportView = (focusMode = false) => (
     <div className={`flex flex-col overflow-hidden bg-white shadow-2xl animate-in fade-in zoom-in duration-300 ${focusMode ? 'h-full rounded-[2rem]' : 'h-[700px] rounded-2xl border'}`}>
-      <div className="flex items-center justify-between border-b bg-gradient-to-r from-gray-50 to-white p-4">
+      <div className="flex items-center justify-between border-b bg-gradient-to-r from-gray-50 to-white px-4 py-2.5 shrink-0">
         <div className="flex items-center gap-2">
-          <FileText size={20} className="text-blue-600" />
-          <span className="font-bold text-gray-800">{t('final_report')}</span>
+          <FileText size={17} className="text-blue-600" />
+          <span className="text-sm font-bold text-gray-800">{t('final_report')}</span>
           {status === 'completed' && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-600">Markdown Ready</span>}
           {status !== 'completed' && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-600 animate-pulse">Generating...</span>}
         </div>
@@ -324,23 +316,23 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
           {renderFocusButton(focusMode)}
           <button
             onClick={downloadMarkdown}
-            className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:bg-green-700 active:scale-95"
+            className="flex items-center gap-1.5 rounded-lg bg-green-600 px-2.5 py-1 text-xs font-bold text-white shadow-md transition-all hover:bg-green-700 active:scale-95"
           >
-            <Download size={14} />
+            <Download size={13} />
             {t('export_md') || 'Export Markdown'}
           </button>
           <button
             onClick={downloadPdf}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:bg-blue-700 active:scale-95"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-bold text-white shadow-md transition-all hover:bg-blue-700 active:scale-95"
           >
-            <FileText size={14} />
+            <FileText size={13} />
             {t('export_pdf') || 'Export PDF'}
           </button>
           <button
             onClick={() => setShowReport(false)}
-            className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-500"
+            className="rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-500"
           >
-            <X size={20} />
+            <X size={16} />
           </button>
         </div>
       </div>
@@ -379,12 +371,12 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
 
       <div className="flex min-h-[400px] flex-1 flex-col overflow-hidden">
         <div className="flex flex-col overflow-hidden border-b bg-gray-50/50">
-          <div className="flex items-center gap-2 overflow-x-auto border-b bg-white p-3 pr-24 no-scrollbar">
+          <div className="flex items-center gap-2 overflow-x-auto border-b bg-white px-3 py-2 pr-24 no-scrollbar">
             {steps.map((step, idx) => (
               <button
                 key={idx}
                 onClick={() => setActiveStepIndex(idx)}
-                className={`flex min-w-[140px] flex-shrink-0 items-start gap-2 rounded-xl border p-2.5 text-left transition-all ${
+                className={`flex min-w-[130px] flex-shrink-0 items-start gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-all ${
                   activeStepIndex === idx ? 'border-blue-200 bg-blue-50 shadow-sm' : 'border-transparent bg-gray-50 hover:bg-gray-100'
                 }`}
               >

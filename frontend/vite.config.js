@@ -96,23 +96,81 @@ function resolveHttpsConfig() {
 }
 
 const httpsConfig = resolveHttpsConfig()
+// The backend loads the same local TLS certificates as Vite.
+const backendTarget = `${httpsConfig ? 'https' : 'http'}://127.0.0.1:5480`
+function createBackendProxy() {
+  return {
+    target: backendTarget,
+    changeOrigin: true,
+    secure: false,
+    configure(proxy) {
+      proxy.on('error', (_error, _request, response) => {
+        if (!response || typeof response.writeHead !== 'function' || response.headersSent || response.writableEnded) return
+        response.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ error: '后端服务暂时不可用，请确认后端已启动后重试。' }))
+      })
+    },
+  }
+}
 const proxyConfig = {
-  '/api': {
-    target: 'http://127.0.0.1:5480',
-    changeOrigin: true,
-  },
-  '/uploads': {
-    target: 'http://127.0.0.1:5480',
-    changeOrigin: true,
-  },
-  '/files': {
-    target: 'http://127.0.0.1:5480',
-    changeOrigin: true,
-  },
+  '/api': createBackendProxy(),
+  '/uploads': createBackendProxy(),
+  '/files': createBackendProxy(),
+}
+
+// Light releases keep static expressions, omitting 437 MB of animation frames.
+function deploymentAssets() {
+  let outDir
+  return {
+    name: 'saki-deployment-assets',
+    apply: 'build',
+    configResolved(config) { outDir = path.resolve(config.root, config.build.outDir) },
+    closeBundle() {
+      const publicDir = process.env.SAKI_PUBLIC_DIR || path.join(__dirname, 'public')
+      const animationDir = path.join(publicDir, 'assets/animate')
+      const light = process.env.SAKI_BUILD_PROFILE === 'light'
+      fs.cpSync(publicDir, outDir, { recursive: true, filter: source => !light || source !== animationDir })
+      fs.writeFileSync(path.join(outDir, 'saki-build.json'), JSON.stringify({ animations: !light }))
+    },
+  }
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), deploymentAssets()],
+  build: {
+    copyPublicDir: false,
+    chunkSizeWarningLimit: 600,
+    ...(process.env.SAKI_BUILD_OUT_DIR ? { outDir: process.env.SAKI_BUILD_OUT_DIR } : {}),
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
+              return 'vendor-react';
+            }
+            if (id.includes('framer-motion')) {
+              return 'vendor-motion';
+            }
+            if (id.includes('react-markdown') || id.includes('remark-gfm') || id.includes('react-syntax-highlighter') || id.includes('prismjs')) {
+              return 'vendor-markdown';
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons';
+            }
+            if (id.includes('i18next') || id.includes('react-i18next')) {
+              return 'vendor-i18n';
+            }
+            if (id.includes('react-diff-view') || id.includes('diff')) {
+              return 'vendor-diff';
+            }
+            if (id.includes('html2canvas')) {
+              return 'vendor-canvas';
+            }
+          }
+        },
+      },
+    },
+  },
   server: {
     https: httpsConfig,
     host: '0.0.0.0',

@@ -1,21 +1,47 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactDOM from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { diffLines } from 'diff';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Send, Plus, Paperclip, ChevronDown, ChevronUp, Bot, User, Terminal, Square, Search, Globe, Server, Palette, Download, Activity, Share2, Copy, Volume2, RotateCcw, Check, X, FileDiff, Undo2, HardDrive, Brain, Presentation, Mic, MicOff, FileText, Shield, Music2, Play, Pause, Trash2, PencilLine, Sparkles, ListChecks } from 'lucide-react';
-import CredibilityCheckView from './CredibilityCheckView';
-import DeepReadingView from './DeepReadingView';
-import PPTView from './PPTView';
-import StoryGlassView from './StoryGlassView';
-import StoryGlassOverlay from './StoryGlassOverlay';
-import Mermaid from './Mermaid';
-import DiffModal from './DiffModal';
-import AiCustomizationModal from './AiCustomizationModal';
+import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { Plus, Paperclip, ChevronDown, ChevronUp, Bot, User, Terminal, Square, Search, Globe, Server, Palette, Download, Activity, Share2, Copy, Volume2, RotateCcw, Check, X, FileDiff, Undo2, HardDrive, Brain, Presentation, Mic, MicOff, FileText, Shield, Music2, Play, Pause, Trash2, PencilLine, Sparkles, ListChecks, Cpu, ArrowLeft, Image, ArrowUp, Feather, BookOpen, ArrowUpRight } from 'lucide-react';
+import WorkspaceSelector from './WorkspaceSelector';
+import AgentMessageParts, { ThinkingBlock } from './AgentActivity';
+import CodeChangesSummary from './CodeChangesSummary';
+import CheckpointRestoreBar from './CheckpointRestoreBar';
+import { checkpointOwners } from '../utils/checkpoints';
+import ErrorBoundary from './ErrorBoundary';
+import ChatMessageItem from './ChatMessageItem';
+import ChatTurnNavigator from './ChatTurnNavigator';
+
+const CredibilityCheckView = React.lazy(() => import('./CredibilityCheckView'));
+const DeepReadingView = React.lazy(() => import('./DeepReadingView'));
+const PPTView = React.lazy(() => import('./PPTView'));
+const StoryGlassView = React.lazy(() => import('./StoryGlassView'));
+const StoryGlassOverlay = React.lazy(() => import('./StoryGlassOverlay'));
+const Mermaid = React.lazy(() => import('./Mermaid'));
+const DiffModal = React.lazy(() => import('./DiffModal'));
+const AiCustomizationModal = React.lazy(() => import('./AiCustomizationModal'));
 import botAvatar from '../head.png';
+import { getChatProviderLabel, MODEL_PROVIDER_ORDER } from '../utils/chatProviderConfig';
+
+const MODEL_PROVIDER_LOGOS = {
+  ollama: 'https://cdn.simpleicons.org/ollama',
+  lmstudio: 'https://cdn.simpleicons.org/lmstudio',
+  copilot: 'https://cdn.simpleicons.org/githubcopilot',
+  openai: 'https://cdn.simpleicons.org/openai',
+  nvidia: 'https://cdn.simpleicons.org/nvidia',
+  deepseek: 'https://cdn.simpleicons.org/deepseek',
+  zhipu: 'https://cdn.simpleicons.org/zhipu',
+  gemini: 'https://cdn.simpleicons.org/googlegemini',
+  minimax: 'https://cdn.simpleicons.org/minimax',
+  anthropic: 'https://cdn.simpleicons.org/anthropic',
+  moonshot: 'https://cdn.simpleicons.org/moonrepo',
+  tongyi: 'https://cdn.simpleicons.org/alibabacloud',
+  doubao: 'https://cdn.simpleicons.org/bytedance',
+  custom: 'https://cdn.simpleicons.org/openapiinitiative',
+};
 
 const FEATURE_TOOLTIP_THEMES = {
   webSearch: {
@@ -1159,6 +1185,22 @@ const getChatDownloadUrl = (backendUrl, file) => {
 const AUTO_COLLAPSE_CODE_LINE_LIMIT = 14;
 const AGENT_PERMISSION_MODE_DEFAULT = 'default';
 const AGENT_PERMISSION_MODE_FULL = 'full-access';
+const CHAT_CODE_THEME_DARK = {
+  ...oneDark,
+  'pre[class*="language-"]': {
+    ...(oneDark['pre[class*="language-"]'] || {}),
+    background: 'transparent',
+    margin: 0,
+    padding: 0,
+    borderRadius: '1rem'
+  },
+  'code[class*="language-"]': {
+    ...(oneDark['code[class*="language-"]'] || {}),
+    background: 'transparent',
+    fontFamily: '"JetBrains Mono", "Fira Code", "SFMono-Regular", monospace',
+    textShadow: 'none'
+  }
+};
 const CHAT_CODE_THEME = {
   ...oneLight,
   'pre[class*="language-"]': {
@@ -1510,26 +1552,6 @@ const countTextLines = (text = '') => {
   return normalized.split(/\r?\n/).length;
 };
 
-const getDiffStats = (fileMetadata) => {
-  const oldText = typeof fileMetadata?.before === 'string' ? fileMetadata.before : '';
-  const newText = typeof fileMetadata?.after === 'string' ? fileMetadata.after : '';
-
-  let added = 0;
-  let removed = 0;
-
-  diffLines(oldText, newText).forEach((part) => {
-    const lines = part.value.split(/\r?\n/);
-    if (lines.length > 0 && lines[lines.length - 1] === '') {
-      lines.pop();
-    }
-    const lineCount = lines.length;
-    if (part.added) added += lineCount;
-    if (part.removed) removed += lineCount;
-  });
-
-  return { added, removed };
-};
-
 const getDrawingProviderLabel = (provider = '') => {
   switch (provider) {
     case 'stable-diffusion':
@@ -1642,7 +1664,11 @@ export default function Chat({
   onSend,
   isGenerating,
   onStop,
+  onCancelPendingChat,
+  currentChatId,
   onSkipAction,
+  onRestoreCheckpoint,
+  restoringCheckpointId = null,
   backendUrl,
   containerRef,
   config,
@@ -1666,7 +1692,8 @@ export default function Chat({
   storyGlassOverlayOpen,
   onStoryGlassOverlayOpenChange,
   onAppendStoryGlassConversation,
-  onEnsureChat
+  onEnsureChat,
+  models
 }) {
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage || i18n.language || 'en-US';
@@ -1677,6 +1704,8 @@ export default function Chat({
     ? AGENT_PERMISSION_MODE_FULL
     : AGENT_PERMISSION_MODE_DEFAULT;
   const [input, setInput] = useState('');
+  const [hoveredCheckpointId, setHoveredCheckpointId] = useState(null);
+  const messageCheckpointOwners = checkpointOwners(messages);
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
   const [copiedIdx, setCopiedIdx] = useState(null);
@@ -1696,9 +1725,17 @@ export default function Chat({
   const [localStoryGlassOverlayOpen, setLocalStoryGlassOverlayOpen] = useState(false);
   const [storyGlassReviewMessageId, setStoryGlassReviewMessageId] = useState(null);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [showFeatureMenu, setShowFeatureMenu] = useState(false);
+  const [showPermissionMenu, setShowPermissionMenu] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [modelDetails, setModelDetails] = useState(null);
+  const [modelProviderFilter, setModelProviderFilter] = useState(config.provider || 'ollama');
   const [isDragOverlayVisible, setIsDragOverlayVisible] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const plusMenuRef = useRef(null);
+  const featureMenuRef = useRef(null);
+  const permissionMenuRef = useRef(null);
+  const modelMenuRef = useRef(null);
   const dragDepthRef = useRef(0);
   const textareaRef = useRef(null);
   const storyGlassModeChangeRef = useRef(onStoryGlassModeChange);
@@ -1719,24 +1756,24 @@ export default function Chat({
   const contextEstimated = Boolean(contextStatus?.estimated);
   const contextNearCompression = contextStatus?.state === 'near-compression';
   const contextTone = contextPercent >= 90
-    ? 'text-rose-600 border-rose-200 bg-rose-50'
+    ? 'text-rose-600 dark:text-rose-400 !border-rose-400/60'
     : contextPercent >= 75
-      ? 'text-amber-600 border-amber-200 bg-amber-50'
+      ? 'text-amber-600 dark:text-amber-400 !border-amber-400/60'
       : (contextCompressed || contextNearCompression)
-        ? 'text-violet-600 border-violet-200 bg-violet-50'
-        : 'text-sky-600 border-sky-200 bg-sky-50';
+        ? 'text-violet-600 dark:text-violet-400 !border-violet-400/60'
+        : 'text-sky-600 dark:text-sky-400 !border-sky-400/40';
   const contextTooltip = contextStatus
     ? getLocalText(
-        `背景信息已${contextEstimated ? '按当前聊天记录计算' : '计算'} ${contextPercent}%。${
+        `上下文预算占用 ${contextPercent}%（${contextEstimated ? '估算' : '接口实测'}）。${
           contextCompressed
             ? `已自动压缩较早背景，保留最近 ${contextStatus.keptRecentMessages || 0} 条消息和当前任务。`
             : (contextNearCompression ? '接近自动压缩阈值，发送时可能会压缩较早背景。' : '尚未压缩。')
-        } 约 ${contextUsedTokens}/${contextBudgetTokens} tokens。`,
-        `Background context ${contextPercent}% ${contextEstimated ? 'calculated from the current chat history' : 'used'}. ${
+        } ${contextEstimated ? '约 ' : ''}${contextUsedTokens}/${contextBudgetTokens} tokens。${contextEstimated ? '接口未提供用量时，仅按当前聊天文本估算。' : `最近一次请求：输入 ${contextStatus.promptTokens}，输出 ${contextStatus.completionTokens}（含思考）tokens。包含系统提示和实际发送的背景；非累计消费额度。`}`,
+        `Context budget ${contextPercent}% used (${contextEstimated ? 'estimated' : 'API measured'}). ${
           contextCompressed
             ? `Earlier background compressed; kept ${contextStatus.keptRecentMessages || 0} recent messages and the current task.`
             : (contextNearCompression ? 'Near the auto-compression threshold; older background may be compressed on send.' : 'Not compressed yet.')
-        } About ${contextUsedTokens}/${contextBudgetTokens} tokens.`
+        } ${contextEstimated ? 'About ' : ''}${contextUsedTokens}/${contextBudgetTokens} tokens. ${contextEstimated ? 'Estimated from chat text when API usage is unavailable.' : `Latest request: ${contextStatus.promptTokens} input, ${contextStatus.completionTokens} output tokens (including reasoning). Includes system instructions and submitted context; not cumulative billing usage.`}`
       )
     : getLocalText('当前聊天记录还没有可计算的背景信息。', 'No chat history is available for background context yet.');
 
@@ -1778,6 +1815,71 @@ export default function Chat({
     }));
   };
 
+  const handleApplySpark = useCallback((promptText) => {
+    setInput(promptText);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, []);
+
+  const starterSparks = useMemo(() => {
+    const isZh = String(uiLanguage || '').toLowerCase().startsWith('zh');
+    if (isZh) {
+      return [
+        {
+          icon: Feather,
+          title: '文字推敲',
+          desc: '梳理行文逻辑，精炼表达质感',
+          prompt: '帮我推敲并润色以下内容，理清核心脉络与行文表达：\n'
+        },
+        {
+          icon: Cpu,
+          title: '架构推演',
+          desc: '探讨系统设计，权衡技术选型',
+          prompt: '我想探讨一个系统或功能的设计方案，我们需要权衡以下几个方向：\n'
+        },
+        {
+          icon: BookOpen,
+          title: '核心研读',
+          desc: '拆解长篇与文献，提炼论点要旨',
+          prompt: '帮我提炼并深度解析这份材料的关键要点与论证逻辑：\n'
+        },
+        {
+          icon: Sparkles,
+          title: '灵感散步',
+          desc: '捕捉散碎想法，碰撞多元视角',
+          prompt: '分享一个我最近的散碎想法，帮我从不同视角发散并梳理延伸思考：\n'
+        }
+      ];
+    }
+    return [
+      {
+        icon: Feather,
+        title: 'Prose & Refinement',
+        desc: 'Polish flow, structure, and tone',
+        prompt: 'Help me refine and polish the tone and structure of this draft:\n'
+      },
+      {
+        icon: Cpu,
+        title: 'Architecture & Design',
+        desc: 'Explore systems, trade-offs & paths',
+        prompt: 'I want to brainstorm a technical design and evaluate trade-offs for:\n'
+      },
+      {
+        icon: BookOpen,
+        title: 'Deep Reading & Synthesis',
+        desc: 'Extract key arguments and nuance',
+        prompt: 'Please extract the core arguments and synthesize key takeaways from:\n'
+      },
+      {
+        icon: Sparkles,
+        title: 'Sparks & Reflection',
+        desc: 'Unpack unstructured thoughts & angles',
+        prompt: 'Here is an unstructured thought—help me expand and see multiple angles:\n'
+      }
+    ];
+  }, [uiLanguage]);
+
   // Handle external file selection (e.g. from Workspace)
   useEffect(() => {
     if (externalFile) {
@@ -1790,6 +1892,13 @@ export default function Chat({
     if (!composerPreset?.timestamp) return;
     setInput(composerPreset.text || '');
     setFiles(Array.isArray(composerPreset.files) ? composerPreset.files : []);
+    if (composerPreset.options) {
+      const options = composerPreset.options;
+      setUseWeb(Boolean(options.useWeb)); setUseMcp(Boolean(options.useMcp));
+      setUseSd(Boolean(options.useSd)); setUseMemory(Boolean(options.useMemory));
+      setUsePpt(Boolean(options.usePpt)); setUseTruthCheck(Boolean(options.useTruthCheck));
+      setUseStoryGlass(Boolean(options.useStoryGlass));
+    }
     onComposerPresetConsumed?.();
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
@@ -1801,6 +1910,16 @@ export default function Chat({
     const handleClickOutside = (event) => {
       if (plusMenuRef.current && !plusMenuRef.current.contains(event.target)) {
         setShowPlusMenu(false);
+      }
+      if (featureMenuRef.current && !featureMenuRef.current.contains(event.target)) {
+        setShowFeatureMenu(false);
+      }
+      if (permissionMenuRef.current && !permissionMenuRef.current.contains(event.target)) {
+        setShowPermissionMenu(false);
+      }
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target)) {
+        setShowModelMenu(false);
+        setModelDetails(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1963,6 +2082,7 @@ export default function Chat({
     let interval;
     if (useMcp || showMcpStatus) {
       const fetchStatus = async () => {
+        if (typeof document !== 'undefined' && document.hidden) return;
         try {
           const res = await fetch(`${backendUrl}/api/mcp/status`);
           const data = await res.json();
@@ -1988,16 +2108,24 @@ export default function Chat({
     const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
 
     // Only auto-scroll if it's a new message or if user is already browsing at the bottom
-    if (isNewMessage || (isAssistantReplying && isAtBottom)) {
-      endRef.current?.scrollIntoView({ behavior: isNewMessage ? 'auto' : 'smooth' });
+    if (isNewMessage) {
+      endRef.current?.scrollIntoView({ behavior: 'auto' });
+    } else if (isAssistantReplying && isAtBottom) {
+      // 流式追加内容时直接瞬时置底，避免 smooth 动画高频排队造成的掉帧与卡顿
+      container.scrollTop = container.scrollHeight;
     }
 
     prevMessageCountRef.current = messages.length;
   }, [messages, isGenerating]);
 
   const handleSend = () => {
+    if (restoringCheckpointId) return;
     if (isGenerating) {
       onStop();
+      return;
+    }
+    if (currentPendingRequest?.assistantMsgId) {
+      onCancelPendingChat?.(currentChatId);
       return;
     }
     const payload = buildSendPayload();
@@ -2636,18 +2764,19 @@ export default function Chat({
   };
 
   return (
+    <Suspense fallback={null}>
     <div className="flex-1 flex flex-col min-h-0 bg-transparent relative">
       {isDragOverlayVisible && (
-        <div className="pointer-events-none fixed inset-0 z-[140] flex items-center justify-center bg-sky-950/35 backdrop-blur-md">
-          <div className="rounded-[2rem] border border-white/30 bg-white/16 px-8 py-7 text-center text-white shadow-2xl">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/20">
-              <Paperclip size={28} />
+        <div className="pointer-events-none fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-xl animate-in fade-in duration-200">
+          <div className="rounded-[2.5rem] border border-white/30 dark:border-white/15 bg-white/20 dark:bg-white/[0.08] p-8 sm:p-10 text-center text-white shadow-[0_24px_64px_rgba(0,0,0,0.35)] backdrop-blur-2xl max-w-sm mx-auto">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#ff75ac]/35 to-white/25 border border-white/30 shadow-lg shadow-[#ff75ac]/25">
+              <Paperclip size={28} className="text-white drop-shadow" />
             </div>
-            <div className="text-xl font-semibold tracking-wide">
-              {getLocalText('释放以上传文件', 'Drop to upload files')}
+            <div className="text-lg font-semibold tracking-wide">
+              {getLocalText('释放以添加文件', 'Drop files to attach')}
             </div>
-            <div className="mt-2 text-sm text-white/80">
-              {getLocalText('支持直接拖入图片、文档和代码文件', 'Images, documents, and code files are all supported')}
+            <div className="mt-2 text-xs text-white/75 leading-relaxed font-normal">
+              {getLocalText('支持拖入图片、文档、PDF 与代码文件', 'Images, documents, PDF & code files supported')}
             </div>
           </div>
         </div>
@@ -2672,331 +2801,177 @@ export default function Chat({
         onDeleteRecord={onDeleteStoryGlassRecord}
         onArchiveConversation={onAppendStoryGlassConversation}
       />
-      <div
-        id="chat-messages-container"
-        ref={containerRef}
-        className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 relative custom-scrollbar"
-      >
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <div
+          id="chat-messages-container"
+          ref={containerRef}
+          className="saki-chat-messages flex-1 overflow-y-auto p-4 md:p-8 space-y-6 relative custom-scrollbar"
+        >
         {messages.length === 0 && (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center">
-              <div 
-                onClick={() => setIsAiCustomizationOpen(true)}
-                className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4 border border-gray-100 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-md flex items-center justify-center bg-white"
-                title={t('edit_ai_settings', '编辑 AI 设定')}
-              >
-                <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
+          <div className="min-h-full flex items-center justify-center relative py-6 sm:py-10 px-4 select-none">
+            {/* Ambient Background Aura */}
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+              <div className="w-[520px] h-[340px] rounded-full bg-gradient-to-tr from-[#ff75ac]/10 via-[#c084fc]/5 to-sky-300/8 blur-3xl opacity-75 dark:opacity-35" />
+            </div>
+
+            <div className="relative w-full max-w-xl mx-auto flex flex-col items-center z-10">
+              {/* Identity & Status Badge */}
+              <div className="flex flex-col items-center">
+                <div className="relative mb-3 group cursor-pointer">
+                  <div
+                    onClick={() => setIsAiCustomizationOpen(true)}
+                    className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-[1.75rem] p-1 bg-gradient-to-b from-white/90 via-white/50 to-white/20 dark:from-white/15 dark:via-white/5 dark:to-transparent border border-white/80 dark:border-white/10 shadow-[0_12px_32px_rgba(255,117,172,0.18)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.4)] backdrop-blur-xl transition-all duration-300 group-hover:scale-105 group-hover:shadow-[0_16px_40px_rgba(255,117,172,0.28)] active:scale-95"
+                    title={t('edit_ai_settings', '编辑伙伴设定与人设偏好')}
+                  >
+                    <div className="w-full h-full rounded-[1.5rem] overflow-hidden bg-white/50 dark:bg-black/30 relative">
+                      <img
+                        src={config.aiAvatar || botAvatar}
+                        alt="Bot"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      />
+                    </div>
+                    {/* Hover edit hint */}
+                    <div className="absolute inset-0 rounded-[1.75rem] bg-black/30 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                      <PencilLine size={18} className="drop-shadow" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Main Heading & Subtitle */}
+                <h2 className="mt-2 text-2xl sm:text-3xl font-light tracking-tight text-[var(--text-dark)] text-center leading-snug">
+                  {getLocalText(
+                    <span>让<span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">灵感与思考</span>在此沉淀</span>,
+                    <span>Where <span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">ideas & reasoning</span> take shape</span>
+                  )}
+                </h2>
+                <p className="mt-2 text-xs sm:text-sm text-[var(--text-secondary)] text-center max-w-md mx-auto leading-relaxed font-normal">
+                  {getLocalText(
+                    '随手记录散碎的想法，深入推演复杂的系统方案，或是开启一场静心的研读。',
+                    'Draft a fleeting spark, reason through a technical system, or explore an idea with calm focus.'
+                  )}
+                </p>
               </div>
-              <h2 className="text-xl font-semibold text-gray-800">{t('welcome_title')}</h2>
-              <p className="text-gray-500 mt-2">{t('welcome_desc')}</p>
+
+              {/* Inspiration Sparks (Non-AI-cliché, tactile thinking entries) */}
+              <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-7">
+                {starterSparks.map((spark, index) => {
+                  const SparkIcon = spark.icon;
+                  return (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => handleApplySpark(spark.prompt)}
+                      className="group relative flex items-start gap-3 p-3.5 sm:p-4 rounded-2xl text-left border border-black/[0.06] dark:border-white/[0.07] bg-white/50 dark:bg-white/[0.03] backdrop-blur-md hover:bg-white/90 dark:hover:bg-white/[0.07] hover:border-[#ff75ac]/40 dark:hover:border-[#ff75ac]/30 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_8px_20px_rgba(255,117,172,0.12)] hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 cursor-pointer"
+                    >
+                      <div className="shrink-0 w-8 h-8 rounded-xl bg-black/[0.03] dark:bg-white/[0.06] border border-black/[0.04] dark:border-white/[0.06] flex items-center justify-center text-[var(--text-secondary)] group-hover:text-[#ff75ac] group-hover:bg-[#ff75ac]/10 group-hover:border-[#ff75ac]/20 transition-all duration-200">
+                        <SparkIcon size={16} />
+                      </div>
+                      <div className="flex-1 min-w-0 pr-2">
+                        <span className="text-xs sm:text-[13px] font-medium text-[var(--text-dark)] group-hover:text-[#ff75ac] transition-colors block">
+                          {spark.title}
+                        </span>
+                        <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 line-clamp-1 group-hover:text-[var(--text-dark)] transition-colors">
+                          {spark.desc}
+                        </p>
+                      </div>
+                      <div className="shrink-0 self-center opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 text-[#ff75ac]">
+                        <ArrowUpRight size={14} />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Studio Micro Cues / Shortcut Hints */}
+              <div className="mt-6 flex items-center justify-center gap-3 sm:gap-4 flex-wrap text-[11px] text-[var(--text-tertiary)] font-normal">
+                <span className="inline-flex items-center gap-1">
+                  <kbd className="px-1.5 py-0.5 rounded bg-black/[0.04] dark:bg-white/[0.06] border border-black/[0.06] dark:border-white/[0.08] font-mono text-[10px] text-[var(--text-secondary)]">↵ Enter</kbd>
+                  <span>{getLocalText('发送', 'Send')}</span>
+                </span>
+                <span className="w-0.5 h-0.5 rounded-full bg-[var(--text-tertiary)] opacity-60" />
+                <span className="inline-flex items-center gap-1">
+                  <kbd className="px-1.5 py-0.5 rounded bg-black/[0.04] dark:bg-white/[0.06] border border-black/[0.06] dark:border-white/[0.08] font-mono text-[10px] text-[var(--text-secondary)]">Shift + ↵</kbd>
+                  <span>{getLocalText('换行', 'New line')}</span>
+                </span>
+                <span className="w-0.5 h-0.5 rounded-full bg-[var(--text-tertiary)] opacity-60" />
+                <span className="inline-flex items-center gap-1">
+                  <Paperclip size={11} className="opacity-70" />
+                  <span>{getLocalText('拖拽文件即刻解析', 'Drop files to attach')}</span>
+                </span>
+              </div>
             </div>
           </div>
         )}
         {messages.map((m, idx) => {
-          const isAssistant = m.role === 'assistant';
-          const previousMessage = idx > 0 ? messages[idx - 1] : null;
-          const isStoryGlassOverlayMessage = Boolean(m.requestOptions?.storyGlassOverlay);
-          const isStoryGlassOverlayUser = m.role === 'user' && isStoryGlassOverlayMessage;
-          const isStoryGlassOverlayAssistant = Boolean(
-            isAssistant
-            && (
-              isStoryGlassOverlayMessage
-              || (
-                previousMessage?.requestOptions?.storyGlassOverlay
-                && (m.placeholderMode === 'story-glass' || m.storyGlassData)
-              )
-            )
-          );
-          if (isStoryGlassOverlayUser) {
+          if (m.role === 'user' && Boolean(m.requestOptions?.storyGlassOverlay)) {
             return null;
           }
-          if (isStoryGlassOverlayAssistant) {
-            return (
-              <div key={m.id || idx} className="flex gap-4">
-                <div 
-                  onClick={() => setIsAiCustomizationOpen(true)}
-                  className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white"
-                  title={t('edit_ai_settings', '编辑 AI 设定')}
-                >
-                  <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
-                </div>
-                <StoryGlassArchiveCard
-                  message={m}
-                  getLocalText={getLocalText}
-                  onOpen={() => openStoryGlassArchive(m.id)}
-                />
-              </div>
-            );
-          }
-          const visibleGeneratedFiles = Array.isArray(m.generatedFiles)
-            ? m.generatedFiles.filter((file) => !(file?.kind === 'story-glass-illustration' && m.storyGlassData?.coverImageUrl))
-            : [];
-          const hasAssistantText = Array.isArray(m.parts) && m.parts.some(
-            part => (part.type === 'text' || part.type === 'reasoning') && part.content.replace(/\[expression[:=].*?\.png\]/g, '').trim()
-          );
-          const hasAssistantContent = hasAssistantText
-            || (Array.isArray(m.parts) && m.parts.some(part => part.type === 'action'))
-            || Boolean(m.deepReadingData)
-            || Boolean(m.pptData)
-            || Boolean(m.credibilityCheckData)
-            || Boolean(m.storyGlassData)
-            || visibleGeneratedFiles.length > 0;
-          const showPendingState = isAssistant && !hasAssistantContent;
-          const hideToolbar = isAssistant && isGenerating && idx === messages.length - 1 && showPendingState;
-
           return (
-            <div key={m.id || idx} className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : ''}`}>
-              {isAssistant && (
-                <div 
-                  onClick={() => setIsAiCustomizationOpen(true)}
-                  className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white"
-                  title={t('edit_ai_settings', '编辑 AI 设定')}
-                >
-                  <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
-                </div>
-              )}
-              <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : 'max-w-[85%]'} group/message ${m.role === 'user' ? 'order-1' : ''}`}>
-                {!(hideToolbar || editingMsgIdx === idx) && (
-                  <MessageBubbleToolbar
-                    align={m.role === 'user' ? 'end' : 'start'}
-                    isAssistant={isAssistant}
-                    message={m}
-                    canRedo={isAssistant}
-                    canEdit={true}
-                    copied={copiedIdx === idx}
-                    speaking={readingIdx === idx}
-                    onCopy={() => copyToClipboard(idx, m)}
-                    onSpeak={() => speakText(idx, m)}
-                    onRedo={() => handleRedoAction(idx)}
-                    onEdit={() => {
-                      if (m.role === 'user') {
-                        onEditMessage?.(idx);
-                      } else {
-                        setEditingMsgIdx(idx);
-                        const getMessageEditText = (msg) => {
-                          if (msg.content) return msg.content;
-                          if (Array.isArray(msg.parts)) {
-                            return msg.parts
-                              .filter(p => p.type === 'text')
-                              .map(p => p.content)
-                              .join('\n');
-                          }
-                          return '';
-                        };
-                        setEditingMsgText(getMessageEditText(m));
-                      }
-                    }}
-                    onDelete={() => onDeleteMessage?.(idx)}
-                    onOpenDiagnostics={() => setDiagnosticsMsg(m)}
-                    labels={{
-                      copy: copiedIdx === idx ? t('copied') : t('copy'),
-                      read: readingIdx === idx ? t('listening') : t('listen'),
-                      redo: t('redo'),
-                      edit: getLocalText('编辑', 'Edit'),
-                      delete: t('delete'),
-                      diagnostics: getLocalText('查看诊断详情', 'View Diagnostics')
-                    }}
-                  />
-                )}
-
-                <div className={`rounded-2xl p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
-                  m.role === 'user'
-                    ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-md rounded-tr-none rounded-2xl p-4'
-                    : showPendingState
-                      ? ''
-                      : 'bg-white/95 border border-gray-100 shadow-sm backdrop-blur-md rounded-tl-none rounded-2xl p-4'
-                }`}>
-                  {editingMsgIdx === idx ? (
-                    <div className="flex flex-col gap-4 pointer-events-auto w-full animate-in fade-in duration-200">
-                      <div className="relative rounded-2xl border border-slate-200/80 bg-slate-50/50 p-1 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)] backdrop-blur-sm focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
-                        <textarea
-                          value={editingMsgText}
-                          onChange={(e) => setEditingMsgText(e.target.value)}
-                          className="w-full min-h-[160px] resize-y rounded-xl bg-transparent px-4 py-3 pb-8 text-sm font-normal leading-relaxed text-slate-700 placeholder-slate-400 focus:outline-none"
-                          placeholder={getLocalText("编辑消息内容...", "Edit message content...")}
-                          autoFocus
-                        />
-                        <div className="absolute bottom-2.5 right-4 text-[9px] font-semibold text-slate-400 font-mono pointer-events-none select-none">
-                          {estimateMessageTokens({ content: editingMsgText })} tokens
-                        </div>
-                      </div>
-                      <div className="flex justify-end items-center gap-2.5">
-                        <button
-                          onClick={() => setEditingMsgIdx(null)}
-                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 active:scale-98 transition-all shadow-sm"
-                        >
-                          {getLocalText("取消", "Cancel")}
-                        </button>
-                        <button
-                          onClick={() => {
-                            onUpdateMessageText?.(idx, editingMsgText);
-                            setEditingMsgIdx(null);
-                          }}
-                          className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:from-blue-600 hover:to-indigo-700 active:scale-98 transition-all shadow-md shadow-blue-500/10"
-                        >
-                          {getLocalText("保存修改", "Save Changes")}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {isAssistant && (
-                        <div className="flex flex-col">
-                          {showPendingState ? (
-                            <AssistantPendingCard
-                              mode={m.placeholderMode}
-                              status={m.status}
-                              isGenerating={isGenerating && idx === messages.length - 1}
-                              getLocalText={getLocalText}
-                            />
-                          ) : (
-                            <>
-                              {(m.parts || []).map((part, i) => (
-                                <React.Fragment key={i}>
-                                  {part.type === 'action' && (
-                                    <TerminalBlock
-                                      action={part.data}
-                                      observation={part.observation}
-                                      fileMetadata={part.fileMetadata}
-                                      onViewChanges={(data) => {
-                                        setDiffModalFile(data);
-                                        setIsDiffModalOpen(true);
-                                      }}
-                                      onRollback={handleRollback}
-                                      onSkipAction={onSkipAction}
-                                    />
-                                  )}
-                                  {part.type === 'reasoning' && (
-                                    <ThinkingBlock
-                                      text={part.content}
-                                      defaultOpen={isGenerating && idx === messages.length - 1}
-                                    />
-                                  )}
-                                  {part.type === 'text' && (
-                                    <MessageContent
-                                      content={part.content}
-                                      isGenerating={isGenerating}
-                                      onOpenSettings={onOpenSettings}
-                                    />
-                                  )}
-                                </React.Fragment>
-                              ))}
-                              {m.streamingActions && m.streamingActions.map((action, i) => (
-                                <TerminalBlock
-                                  key={`streaming-${i}`}
-                                  action={{
-                                    type: action.name,
-                                    args: action.args,
-                                    id: `streaming-${action.index}`,
-                                    isStreaming: true
-                                  }}
-                                  observation={null}
-                                  fileMetadata={null}
-                                  onViewChanges={null}
-                                  onRollback={null}
-                                  onSkipAction={null}
-                                />
-                              ))}
-                              {m.deepReadingData && (
-                                <div className="mt-4 w-full">
-                                  <DeepReadingView data={m.deepReadingData} isEmbedded={true} />
-                                </div>
-                              )}
-                              {m.pptData && (
-                                <div className="mt-4 w-full">
-                                  <PPTView data={m.pptData} isEmbedded={true} />
-                                </div>
-                              )}
-                              {m.credibilityCheckData && (
-                                <div className="mt-4 w-full">
-                                  <CredibilityCheckView data={m.credibilityCheckData} isEmbedded={true} />
-                                </div>
-                              )}
-                              {m.storyGlassData && (
-                                <div className="mt-4 w-full">
-                                  <StoryGlassView
-                                    data={m.storyGlassData}
-                                    isEmbedded={true}
-                                    onRemix={(action) => handleStoryGlassRemix(m.storyGlassData, action)}
-                                    remixActions={STORY_GLASS_REMIX_ACTIONS}
-                                  />
-                                </div>
-                              )}
-                              {visibleGeneratedFiles.length > 0 && (
-                                <div className="mt-4 flex flex-col gap-2">
-                                  {visibleGeneratedFiles.map((file, fileIdx) => (
-                                    file.kind === 'music-composition' ? (
-                                      <MusicFileCard
-                                        key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
-                                        file={file}
-                                        onDownload={handleGeneratedFileDownload}
-                                      />
-                                    ) : (
-                                      <button
-                                        key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}
-                                        onClick={() => handleGeneratedFileDownload(file)}
-                                        className="w-full flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/80 px-3 py-3 text-left transition-all hover:bg-blue-100/80 hover:border-blue-200"
-                                        title={file.filePath || file.relativePath || file.name}
-                                      >
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm shrink-0">
-                                          <FileText size={18} />
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                          <div className="truncate text-sm font-semibold text-gray-800">
-                                            {file.name || file.relativePath || file.filePath}
-                                          </div>
-                                          <div className="truncate text-[11px] text-gray-500">
-                                            {file.relativePath || file.filePath}
-                                          </div>
-                                        </div>
-                                        <div className="shrink-0 flex items-center gap-2 text-blue-600">
-                                          {file.sizeLabel && (
-                                            <span className="text-[11px] font-semibold text-blue-500">{file.sizeLabel}</span>
-                                          )}
-                                          <Download size={16} />
-                                        </div>
-                                      </button>
-                                    )
-                                  ))}
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
-                      {m.role === 'user' && <div className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</div>}
-                    </>
-                  )}
-                  {m.files && m.files.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {m.files.map((f, i) => (
-                        <div key={i} className="flex items-center gap-1.5 bg-black/10 px-2 py-1 rounded text-xs">
-                          <Paperclip size={12} />
-                          {f}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              {m.role === 'user' && (
-                <div className="w-8 h-8 rounded-full overflow-hidden border border-white/20 shrink-0 order-2">
-                  <img src={config.userAvatar || '/assets/head_user.png'} alt="User" className="w-full h-full object-cover" />
-                </div>
-              )}
-            </div>
+            <ChatMessageItem
+              key={m.id || idx}
+              message={m}
+              index={idx}
+              isGenerating={isGenerating}
+              isLastMessage={idx === messages.length - 1}
+              checkpointOwner={messageCheckpointOwners[idx]}
+              config={config}
+              botAvatar={botAvatar}
+              editingMsgIdx={editingMsgIdx}
+              editingMsgText={editingMsgText}
+              setEditingMsgIdx={setEditingMsgIdx}
+              setEditingMsgText={setEditingMsgText}
+              onUpdateMessageText={onUpdateMessageText}
+              onEditMessage={onEditMessage}
+              onDeleteMessage={onDeleteMessage}
+              onRestoreCheckpoint={onRestoreCheckpoint}
+              restoringCheckpointId={restoringCheckpointId}
+              hoveredCheckpointId={hoveredCheckpointId}
+              setHoveredCheckpointId={setHoveredCheckpointId}
+              copiedIdx={copiedIdx}
+              readingIdx={readingIdx}
+              copyToClipboard={copyToClipboard}
+              speakText={speakText}
+              handleRedoAction={handleRedoAction}
+              setDiagnosticsMsg={setDiagnosticsMsg}
+              openStoryGlassArchive={openStoryGlassArchive}
+              currentPendingRequest={currentPendingRequest}
+              onOpenSettings={onOpenSettings}
+              setIsAiCustomizationOpen={setIsAiCustomizationOpen}
+              setDiffModalFile={setDiffModalFile}
+              setIsDiffModalOpen={setIsDiffModalOpen}
+              handleRollback={handleRollback}
+              onSkipAction={onSkipAction}
+              handleStoryGlassRemix={handleStoryGlassRemix}
+              handleGeneratedFileDownload={handleGeneratedFileDownload}
+              STORY_GLASS_REMIX_ACTIONS={STORY_GLASS_REMIX_ACTIONS}
+              getLocalText={getLocalText}
+              t={t}
+              estimateMessageTokens={estimateMessageTokens}
+              MessageBubbleToolbar={MessageBubbleToolbar}
+              StoryGlassArchiveCard={StoryGlassArchiveCard}
+              AssistantPendingCard={AssistantPendingCard}
+              MessageContent={MessageContent}
+              ToolObservation={ToolObservation}
+              MusicFileCard={MusicFileCard}
+            />
           );
         })}
         <div ref={endRef} />
       </div>
+      <ChatTurnNavigator
+        messages={messages}
+        containerRef={containerRef}
+        minTurns={3}
+      />
+    </div>
 
-      <div className="p-4 border-t border-white/10 bg-transparent">
+      <div className="relative z-20 px-4 pb-4 pt-0 bg-transparent">
         <div className="max-w-4xl mx-auto">
           {files.length > 0 && (
             <div className="flex gap-2 mb-2 px-1">
               {files.map((f, i) => (
-                <div key={i} className="text-xs bg-white/20 backdrop-blur-md border border-white/20 px-2 py-1 rounded-full flex items-center gap-1.5 text-white">
-                  <Paperclip size={12} className="text-white/60" />
+                <div key={i} className="text-xs bg-[var(--control-bg)] backdrop-blur-md border border-[var(--control-border)] px-2 py-1 rounded-full flex items-center gap-1.5 text-[var(--text-dark)]">
+                  <Paperclip size={12} className="text-[var(--accent-text)]" />
                   <span>{f.name}</span>
                   <button onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))} className="hover:text-red-300">×</button>
                 </div>
@@ -3011,13 +2986,14 @@ export default function Chat({
               getLocalText={getLocalText}
             />
           )}
+          <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
           <div
-            className="relative flex items-end gap-2 bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl focus-within:border-blue-400 transition-colors p-2 flex-wrap shadow-lg"
+            className="saki-input-shell relative flex items-end gap-2 bg-[var(--control-bg)] dark:bg-[#161824]/65 backdrop-blur-2xl border border-[var(--control-border)]  rounded-2xl focus-within:border-[#ff75ac]/60 focus-within:ring-2 focus-within:ring-[#ff75ac]/20 transition-all p-2 flex-wrap shadow-lg dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]"
             data-onboarding-id="chat-composer"
           >
             {slashSuggestions.length > 0 && (
-              <div className="absolute bottom-full left-3 right-3 mb-3 rounded-[1.5rem] border border-gray-200 bg-white/95 p-2 shadow-2xl backdrop-blur-xl z-[120]">
-                <div className="mb-2 flex items-center gap-2 px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+              <div className="saki-popup absolute bottom-full left-3 right-3 mb-3 rounded-[1.5rem] border border-[var(--control-border)]  bg-[var(--popup-bg)] dark:bg-[#181922]/95 p-2 shadow-2xl backdrop-blur-2xl z-[120]">
+                <div className="mb-2 flex items-center gap-2 px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">
                   <Sparkles size={12} />
                   {getLocalText('斜杠命令', 'Slash Commands')}
                 </div>
@@ -3030,17 +3006,17 @@ export default function Chat({
                         onClick={() => activateSlashCommand(command)}
                         onMouseEnter={() => setSlashIndex(index)}
                         className={`flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-all ${
-                          isActive ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+                          isActive ? 'bg-[#ff75ac]/15 text-[#ff75ac] dark:text-[#ff9bc8]' : 'hover:bg-[var(--surface-inset)]  text-[var(--text-dark)] '
                         }`}
                       >
-                        <div className={`rounded-xl px-2 py-1 text-[11px] font-bold ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                        <div className={`rounded-xl px-2 py-1 text-[11px] font-bold ${isActive ? 'bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white shadow-sm' : 'bg-[var(--surface-inset)]  text-[var(--text-secondary)] '}`}>
                           {command.trigger}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold">
                             {String(uiLanguage || '').toLowerCase().startsWith('zh') ? command.labels.zh : command.labels.en}
                           </div>
-                          <div className="truncate text-xs text-gray-500">
+                          <div className="truncate text-xs text-[var(--text-secondary)]">
                             {String(uiLanguage || '').toLowerCase().startsWith('zh') ? command.descriptions.zh : command.descriptions.en}
                           </div>
                         </div>
@@ -3051,7 +3027,7 @@ export default function Chat({
               </div>
             )}
             {useStoryGlass && (
-              <div className="w-full rounded-2xl border border-rose-100/80 bg-white/65 px-3 py-3 shadow-sm backdrop-blur-md">
+              <div className="w-full rounded-2xl border border-rose-100/80 bg-[var(--control-bg)] px-3 py-3 shadow-sm backdrop-blur-md">
                 <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-rose-500">
                   <Sparkles size={12} />
                   {getLocalText('故事杯偏好', 'Story Glass')}
@@ -3059,7 +3035,7 @@ export default function Chat({
                 <div className="grid gap-2 lg:grid-cols-3">
                   {STORY_GLASS_PREFERENCE_GROUPS.map((group) => (
                     <div key={group.id} className="min-w-0">
-                      <div className="mb-1 text-[10px] font-semibold text-slate-500">
+                      <div className="mb-1 text-[10px] font-semibold text-[var(--text-secondary)]">
                         {getLocalText(group.labels.zh, group.labels.en)}
                       </div>
                       <div className="flex flex-wrap gap-1.5">
@@ -3073,7 +3049,7 @@ export default function Chat({
                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-all ${
                                 active
                                   ? 'border-rose-300 bg-rose-500 text-white shadow-sm'
-                                  : 'border-white/70 bg-white/75 text-slate-600 hover:bg-white'
+                                  : 'border-[var(--control-border)] bg-[var(--control-bg)] text-[var(--text-secondary)] hover:bg-[var(--popup-bg)]'
                               }`}
                             >
                               {active ? <Check size={11} /> : null}
@@ -3088,7 +3064,7 @@ export default function Chat({
               </div>
             )}
             <div
-              className="flex w-full flex-nowrap items-center gap-2 mb-1 px-1 shrink-0 overflow-x-auto overflow-y-visible pb-2 no-scrollbar overscroll-x-contain scroll-smooth [&>*]:shrink-0 [&_button]:whitespace-nowrap"
+              className="flex w-full flex-wrap sm:flex-nowrap items-center gap-1.5 mb-1 px-1 shrink-0 overflow-visible pb-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap"
               data-onboarding-id="chat-mode-bar"
               onWheel={handleModeBarWheel}
             >
@@ -3098,25 +3074,25 @@ export default function Chat({
                   align="start"
                   content={({ arrowLeft }) => (
                     <>
-                      <div className="rounded-xl border border-white/30 bg-white/95 p-3 text-xs text-gray-700 shadow-xl backdrop-blur-xl">
+                      <div className="rounded-xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 text-xs text-[var(--text-dark)] shadow-xl backdrop-blur-xl">
                         <div className="mb-2 flex items-center justify-between gap-2">
                           <span className="font-bold">{getLocalText('背景信息', 'Background')}</span>
                           <span className={`font-bold ${contextPercent >= 90 ? 'text-rose-600' : contextPercent >= 75 ? 'text-amber-600' : 'text-sky-600'}`}>
                             {contextStatus ? `${contextPercent}%` : '--'}
                           </span>
                         </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                        <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-inset)]">
                           <div
                             className={`h-full rounded-full ${contextPercent >= 90 ? 'bg-rose-500' : contextPercent >= 75 ? 'bg-amber-500' : contextCompressed ? 'bg-violet-500' : 'bg-sky-500'}`}
                             style={{ width: `${contextStatus ? contextPercent : 0}%` }}
                           />
                         </div>
-                        <div className="mt-2 leading-relaxed text-gray-500">
+                        <div className="mt-2 leading-relaxed text-[var(--text-secondary)]">
                           {contextTooltip}
                         </div>
                       </div>
                       <div
-                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-white/95 shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
+                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
                         style={{ left: arrowLeft }}
                       />
                     </>
@@ -3124,43 +3100,282 @@ export default function Chat({
                 >
                 <button
                   type="button"
-                  className={`flex h-7 w-7 items-center justify-center rounded-lg border text-[10px] font-bold transition-all ${contextTone}`}
+                  className={`saki-chip-icon-btn ${contextTone}`}
                   title={contextTooltip}
+                  aria-label={getLocalText('背景信息', 'Background context')}
                 >
-                  <Activity size={14} />
+                  <Activity size={13} />
                 </button>
                 </FloatingPopover>
                 <div className="hidden">
-                  <div className="w-64 rounded-xl border border-white/30 bg-white/95 p-3 text-xs text-gray-700 shadow-xl backdrop-blur-xl">
+                  <div className="w-64 rounded-xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 text-xs text-[var(--text-dark)] shadow-xl backdrop-blur-xl">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="font-bold">{getLocalText('背景信息', 'Background')}</span>
                       <span className={`font-bold ${contextPercent >= 90 ? 'text-rose-600' : contextPercent >= 75 ? 'text-amber-600' : 'text-sky-600'}`}>
                         {contextStatus ? `${contextPercent}%` : '--'}
                       </span>
                     </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                    <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-inset)]">
                       <div
                         className={`h-full rounded-full ${contextPercent >= 90 ? 'bg-rose-500' : contextPercent >= 75 ? 'bg-amber-500' : contextCompressed ? 'bg-violet-500' : 'bg-sky-500'}`}
                         style={{ width: `${contextStatus ? contextPercent : 0}%` }}
                       />
                     </div>
-                    <div className="mt-2 leading-relaxed text-gray-500">
+                    <div className="mt-2 leading-relaxed text-[var(--text-secondary)]">
                       {contextTooltip}
                     </div>
                   </div>
                 </div>
               </div>
+              <div className="relative shrink-0" ref={modelMenuRef} data-onboarding-id="chat-model-switcher">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowModelMenu(prev => !prev);
+                    setModelDetails(null);
+                    setModelProviderFilter(config.provider || 'ollama');
+                  }}
+                  className={`saki-chip-btn max-w-[15rem] ${showModelMenu ? 'is-active' : ''}`}
+                  aria-expanded={showModelMenu}
+                  aria-haspopup="dialog"
+                >
+                  <Cpu size={13} className="shrink-0 text-saki-pink" />
+                  <span className="truncate">
+                    {models?.find(item => item.provider === config.provider && item.name === (config.provider === 'copilot' && config.model?.includes('/') ? config.model.split('/').slice(1).join('/') : config.model))?.label || config.model}
+                  </span>
+                  <ChevronDown size={11} className={`shrink-0 transition-transform ${showModelMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showModelMenu && (
+                  <div role="dialog" aria-label={getLocalText('选择模型', 'Select model')} data-saki-popup="models" className="saki-popup absolute bottom-full left-0 z-[110] mb-2 w-[min(92vw,26rem)] overflow-hidden rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] shadow-2xl">
+                    {!modelDetails ? (
+                      <>
+                        <div className="flex items-center gap-1 border-b border-[var(--control-border)] px-2 py-1.5">
+                          {MODEL_PROVIDER_ORDER.map(provider => {
+                            const providerModels = (models || []).filter(item => item.provider === provider);
+                            if (!providerModels.length) return null;
+                            const providerLabel = getChatProviderLabel(provider);
+                            const logoUrl = MODEL_PROVIDER_LOGOS[provider];
+                            return (
+                              <button
+                                key={provider}
+                                type="button"
+                                onClick={() => setModelProviderFilter(provider)}
+                                className={`group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${
+                                  modelProviderFilter === provider ? 'bg-[var(--surface-inset)] text-[var(--text-dark)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-inset)]'
+                                }`}
+                                title={providerLabel}
+                              >
+                                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                                  modelProviderFilter === provider ? 'bg-[var(--popup-bg)] shadow-sm' : 'bg-[var(--surface-inset)]'
+                                }`}>
+                                  <img src={logoUrl} alt={providerLabel} className="h-4 w-4 object-contain" />
+                                </span>
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            onClick={() => {
+                            setShowModelMenu(false);
+                            setModelDetails(null);
+                            onOpenSettings?.();
+                            }}
+                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-dashed border-[var(--control-border)]  text-[var(--text-secondary)]  transition-colors hover:border-[#ff75ac] hover:bg-[#ff75ac]/10 hover:text-[#ff75ac]"
+                            title={getLocalText('添加或配置模型', 'Add or configure models')}
+                            aria-label={getLocalText('添加或配置模型', 'Add or configure models')}
+                          >
+                            <Plus size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowModelMenu(false)}
+                            className="ml-auto rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-inset)] hover:text-[var(--text-dark)]"
+                            aria-label={getLocalText('关闭模型选择器', 'Close model selector')}
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
+                        <div className="max-h-[min(60vh,24rem)] overflow-y-auto p-2">
+                          {(models || [])
+                            .filter(item => item.provider === modelProviderFilter)
+                            .filter(item => !(item.name === config.drawingModel && item.provider === config.drawingProvider))
+                            .map(model => {
+                              const normalizedCurrentModel = config.provider === 'copilot' && config.model?.includes('/')
+                                ? config.model.split('/').slice(1).join('/')
+                                : config.model;
+                              const active = config.provider === model.provider && normalizedCurrentModel === model.name;
+                              return (
+                                <div
+                                  key={`${model.provider}-${model.name}`}
+                                  className={`group flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-[#ff75ac]/10 dark:hover:bg-[#ff75ac]/15 ${active ? 'bg-[#ff75ac]/15' : ''}`}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfig({ ...config, provider: model.provider, model: model.name })}
+                                    className={`flex min-w-0 flex-1 items-center gap-2 text-left text-sm ${active ? 'font-bold text-[#ff75ac] dark:text-[#ff9bc8]' : 'text-[var(--text-dark)] '}`}
+                                  >
+                                    <span className="truncate">{model.label || model.name}</span>
+                                    {model.supportsVision ? <Image size={12} className="shrink-0 text-sky-500" /> : null}
+                                    {active ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#ff75ac]" /> : null}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setModelDetails(model)}
+                                    className="invisible flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px] text-[var(--text-secondary)] opacity-0 transition-all hover:text-[var(--text-dark)] group-hover:visible group-hover:opacity-100 focus-visible:visible focus-visible:opacity-100"
+                                    title={getLocalText('调整思考等级', 'Adjust thinking level')}
+                                  >
+                                    {config.thinkingLevel === 'low'
+                                      ? getLocalText('低', 'Low')
+                                      : config.thinkingLevel === 'high'
+                                        ? getLocalText('高', 'High')
+                                        : getLocalText('中等', 'Medium')}
+                                    <ChevronDown size={12} className="-rotate-90" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          {!(models || []).filter(item => item.provider === modelProviderFilter).length && (
+                            <div className="px-2 py-3 text-xs text-[var(--text-tertiary)]">{t('no_models_detected')}</div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-3">
+                        <div className="flex items-center gap-2 border-b border-[var(--control-border)] pb-2">
+                          <button type="button" onClick={() => setModelDetails(null)} className="rounded-lg p-1 text-[var(--text-secondary)] hover:bg-[var(--surface-inset)]">
+                            <ArrowLeft size={15} />
+                          </button>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold text-[var(--text-dark)]">{modelDetails.label || modelDetails.name}</div>
+                            <div className="text-[11px] text-[var(--text-tertiary)]">{getChatProviderLabel(modelDetails.provider)}</div>
+                          </div>
+                        </div>
+                        <div className="pt-4">
+                          <div className="mb-2 text-sm font-bold text-[var(--text-dark)]">{getLocalText('思考层级', 'Thinking level')}</div>
+                          <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-[var(--control-border)]">
+                            {[
+                              ['low', getLocalText('低', 'Low')],
+                              ['medium', getLocalText('中等', 'Medium')],
+                              ['high', getLocalText('高', 'High')],
+                            ].map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setConfig(prev => ({ ...prev, thinkingLevel: value }))}
+                                className={`px-3 py-2 text-xs font-semibold transition-colors ${config.thinkingLevel === value ? 'bg-[var(--surface-inset)] text-[var(--text-dark)]' : 'bg-[var(--popup-bg)] text-[var(--text-secondary)] hover:bg-[var(--surface-inset)]'}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {modelDetails.contextWindow ? (
+                          <div className="mt-4 flex items-center justify-between text-sm">
+                            <span className="font-semibold text-[var(--text-dark)]">Max context</span>
+                            <span className="text-[var(--text-secondary)]">{modelDetails.contextWindow}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <WorkspaceSelector backendUrl={backendUrl} config={config} setConfig={setConfig} disabled={isGenerating} getLocalText={getLocalText} />
+              <div className="relative shrink-0" ref={permissionMenuRef}>
+                <button
+                  type="button"
+                  disabled={isGenerating}
+                  onClick={() => setShowPermissionMenu(prev => !prev)}
+                  className={`saki-chip-btn disabled:cursor-not-allowed disabled:opacity-50 ${
+                    showPermissionMenu || permissionMode === AGENT_PERMISSION_MODE_FULL ? 'is-active' : ''
+                  }`}
+                  aria-expanded={showPermissionMenu}
+                  aria-haspopup="dialog"
+                >
+                  <Shield size={13} className={`shrink-0 ${permissionMode === AGENT_PERMISSION_MODE_FULL ? 'text-rose-500' : 'text-saki-pink'}`} />
+                  <span>{permissionMode === AGENT_PERMISSION_MODE_FULL ? getLocalText('全部允许', 'Allow all') : getLocalText('按需确认', 'Ask when needed')}</span>
+                  <ChevronDown size={11} className={`shrink-0 transition-transform ${showPermissionMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showPermissionMenu && (
+                  <div role="dialog" aria-label={getLocalText('访问权限', 'Access permissions')} data-saki-popup="permissions" className="saki-popup absolute bottom-full left-0 z-[105] mb-2 w-[min(88vw,22rem)] overflow-hidden rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-2 text-[var(--text-dark)] shadow-2xl">
+                    <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">
+                      {getLocalText('访问权限', 'Access permissions')}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfig(prev => ({ ...prev, agentPermissionMode: AGENT_PERMISSION_MODE_DEFAULT }));
+                        setShowPermissionMenu(false);
+                      }}
+                      className="flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left hover:bg-[var(--surface-inset)]"
+                    >
+                      <Shield size={18} className="mt-0.5 shrink-0 text-[var(--text-dark)]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold">{getLocalText('按需确认', 'Ask when needed')}</span>
+                        <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{getLocalText('只对有风险的操作进行询问', 'Ask only for risky operations')}</span>
+                      </span>
+                      {permissionMode === AGENT_PERMISSION_MODE_DEFAULT ? <Check size={17} className="mt-0.5 shrink-0" /> : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfig(prev => ({ ...prev, agentPermissionMode: AGENT_PERMISSION_MODE_FULL }));
+                        setShowPermissionMenu(false);
+                      }}
+                      className="flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left hover:bg-[var(--surface-inset)]"
+                    >
+                      <Shield size={18} className="mt-0.5 shrink-0 text-rose-600" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold">{getLocalText('全部允许', 'Allow all')}</span>
+                        <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{getLocalText('不受限制地访问互联网和编辑电脑上的文件', 'Allow unrestricted internet and computer file access')}</span>
+                      </span>
+                      {permissionMode === AGENT_PERMISSION_MODE_FULL ? <Check size={17} className="mt-0.5 shrink-0" /> : null}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="relative shrink-0" ref={featureMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowFeatureMenu(prev => !prev)}
+                  className={`saki-chip-btn ${
+                    showFeatureMenu || config.searchEnabled || useWeb || useMcp || useSd || useMemory || usePpt || useTruthCheck || useStoryGlass
+                      ? 'is-active'
+                      : ''
+                  }`}
+                  aria-expanded={showFeatureMenu}
+                  aria-haspopup="dialog"
+                >
+                  <ListChecks size={13} className="shrink-0 text-saki-pink" />
+                  <span>{getLocalText('功能', 'Features')}</span>
+                  <ChevronDown size={11} className={`shrink-0 transition-transform ${showFeatureMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showFeatureMenu && (
+                  <div role="dialog" aria-label={getLocalText('功能选择', 'Feature selection')} data-saki-popup="features" className="saki-popup absolute bottom-full left-0 z-[100] mb-2 max-h-[min(70vh,28rem)] w-[min(92vw,30rem)] overflow-y-auto rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 shadow-2xl backdrop-blur-xl">
+                    <div className="mb-2 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">
+                      <span>{getLocalText('功能选择', 'Feature selection')}</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowFeatureMenu(false)}
+                        className="rounded-md p-1 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-inset)] hover:text-[var(--text-dark)]"
+                        aria-label={getLocalText('关闭功能菜单', 'Close feature menu')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
               <FeatureTooltip
                 type="webSearch"
                 title={t('web_search')}
                 description={getLocalText('搜索网页资料并快速返回可用结果', 'Search the web and return useful results quickly')}
               >
                 <button
+                  type="button"
                   onClick={() => setConfig({ ...config, searchEnabled: !config.searchEnabled })}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all shrink-0 ${config.searchEnabled ? 'bg-blue-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${config.searchEnabled ? 'is-active' : ''}`}
                 >
-                  <Search size={14} className={config.searchEnabled ? 'text-white' : 'text-blue-600'} />
-                  {t('web_search')}
+                  <Search size={13} className={`shrink-0 ${config.searchEnabled ? 'text-saki-pink' : ''}`} />
+                  <span>{t('web_search')}</span>
                 </button>
               </FeatureTooltip>
               <FeatureTooltip
@@ -3169,6 +3384,7 @@ export default function Chat({
                 description={getLocalText('联网搜索多篇资料，进行深度研究分析，生成综合报告', 'Search multiple sources, conduct deep research analysis, and generate comprehensive reports')}
               >
                 <button
+                  type="button"
                   onClick={() => {
                     const nextState = !useWeb;
                     setUseWeb(nextState);
@@ -3176,10 +3392,10 @@ export default function Chat({
                       setUseTruthCheck(false);
                     }
                   }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all shrink-0 ${useWeb ? 'bg-green-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${useWeb ? 'is-active' : ''}`}
                 >
-                  <Globe size={14} className={useWeb ? 'text-white' : 'text-green-600'} />
-                  {t('deep_research')}
+                  <Globe size={13} className={`shrink-0 ${useWeb ? 'text-saki-pink' : ''}`} />
+                  <span>{t('deep_research')}</span>
                 </button>
               </FeatureTooltip>
               <div
@@ -3193,8 +3409,8 @@ export default function Chat({
                   onOpenChange={setShowMcpStatus}
                   content={({ arrowLeft }) => (
                     <>
-                      <div className="bg-white/90 backdrop-blur-xl border border-white/20 shadow-xl rounded-xl p-3 text-gray-700 font-sans">
-                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">{t('service_status')}</div>
+                      <div className="bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
+                        <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2">{t('service_status')}</div>
                         <div className="space-y-2">
                           {mcpStatus && Object.entries(mcpStatus).length > 0 ? (
                             Object.entries(mcpStatus).map(([name, info]) => (
@@ -3203,7 +3419,7 @@ export default function Chat({
                                   <span className="truncate flex-1 pr-2 font-medium">{name}</span>
                                   <div className="flex items-center gap-1.5 shrink-0">
                                     <span className={`w-1.5 h-1.5 rounded-full ${info.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
-                                    <span className="text-gray-400">{info.connected ? t('tools_count', { count: info.toolCount }) : t('connect_fail')}</span>
+                                    <span className="text-[var(--text-tertiary)]">{info.connected ? t('tools_count', { count: info.toolCount }) : t('connect_fail')}</span>
                                   </div>
                                 </div>
                                 {info.error && !info.connected && (
@@ -3214,18 +3430,19 @@ export default function Chat({
                               </div>
                             ))
                           ) : (
-                            <div className="text-[11px] text-gray-400 italic">{t('connecting_server')}</div>
+                            <div className="text-[11px] text-[var(--text-tertiary)] italic">{t('connecting_server')}</div>
                           )}
                         </div>
                       </div>
                       <div
-                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-white/90 shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
+                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
                         style={{ left: arrowLeft }}
                       />
                     </>
                   )}
                 >
                 <button
+                  type="button"
                   onClick={async () => {
                     const hasConfig = config?.mcpConfig?.mcpServers && Object.keys(config.mcpConfig.mcpServers).length > 0;
                     if (!hasConfig) {
@@ -3252,11 +3469,11 @@ export default function Chat({
                       }
                     }
                   }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${useMcp ? 'bg-purple-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${useMcp ? 'is-active' : ''}`}
                   title={t('mcp_service')}
                 >
-                  <Server size={14} className={useMcp ? 'text-white' : 'text-purple-600'} />
-                  {t('mcp_service')}
+                  <Server size={13} className={`shrink-0 ${useMcp ? 'text-saki-pink' : ''}`} />
+                  <span>{t('mcp_service')}</span>
                 </button>
                 </FloatingPopover>
 
@@ -3274,8 +3491,8 @@ export default function Chat({
                   onOpenChange={setShowSdStatus}
                   content={({ arrowLeft }) => (
                     <>
-                      <div className="bg-white/90 backdrop-blur-xl border border-white/20 shadow-xl rounded-xl p-3 text-gray-700 font-sans">
-                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center justify-between">
+                      <div className="bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
+                        <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2 flex items-center justify-between">
                           {isStableDiffusionDrawing ? t('sd_status') : 'API Status'}
                           {activeDrawingStatus && (
                             <span className={`w-1.5 h-1.5 rounded-full ${activeDrawingStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
@@ -3283,12 +3500,12 @@ export default function Chat({
                         </div>
 
                         {!activeDrawingStatus ? (
-                          <div className="text-[11px] text-gray-400 italic">{t('connecting_server')}</div>
+                          <div className="text-[11px] text-[var(--text-tertiary)] italic">{t('connecting_server')}</div>
                         ) : isStableDiffusionDrawing ? (activeDrawingStatus.connected ? (
                           <div className="space-y-2">
-                            <label className="block text-[10px] text-gray-400 mb-1">{t('select_model')}</label>
+                            <label className="block text-[10px] text-[var(--text-tertiary)] mb-1">{t('select_model')}</label>
                             <select
-                              className="w-full border border-white/20 rounded-md px-2 py-1 text-[11px] bg-white/50 outline-none focus:ring-1 focus:ring-pink-500"
+                              className="w-full border border-[var(--control-border)] rounded-md px-2 py-1 text-[11px] bg-[var(--control-bg)] outline-none focus:ring-1 focus:ring-pink-500"
                               value={config.sdModel || ''}
                               onChange={(e) => setConfig({ ...config, sdModel: e.target.value })}
                             >
@@ -3305,13 +3522,13 @@ export default function Chat({
                           </div>
                         )) : (
                           <div className="space-y-2">
-                            <div className="rounded-lg bg-gray-50 px-2.5 py-2 text-[11px] text-gray-600">
-                              <div className="font-semibold text-gray-700">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
-                              <div className="mt-1 break-all text-[10px] text-gray-500">
+                            <div className="rounded-lg bg-[var(--surface-inset)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
+                              <div className="font-semibold text-[var(--text-dark)]">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
+                              <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
                                 Model: {activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || 'not configured'}
                               </div>
                               {activeDrawingStatus.endpoint && (
-                                <div className="mt-1 break-all text-[10px] text-gray-500">
+                                <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
                                   Endpoint: {activeDrawingStatus.endpoint}
                                 </div>
                               )}
@@ -3334,13 +3551,14 @@ export default function Chat({
                         )}
                       </div>
                       <div
-                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-white/90 shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
+                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
                         style={{ left: arrowLeft }}
                       />
                     </>
                   )}
                 >
                 <button
+                  type="button"
                   onClick={() => {
                     const nextState = !useSd;
                     setUseSd(nextState);
@@ -3349,27 +3567,27 @@ export default function Chat({
                     }
                   }}
                   disabled={config.drawingProvider === 'none'}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${config.drawingProvider === 'none' ? 'opacity-50 cursor-not-allowed bg-gray-100 text-gray-400' : useSd ? 'bg-pink-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${useSd ? 'is-active' : ''}`}
                   title={t('intelligent_drawing')}
                 >
-                  <Palette size={14} className={config.drawingProvider === 'none' ? 'text-gray-400' : useSd ? 'text-white' : 'text-pink-600'} />
-                  {t('intelligent_drawing')}
+                  <Palette size={13} className={`shrink-0 ${useSd ? 'text-saki-pink' : ''}`} />
+                  <span>{t('intelligent_drawing')}</span>
                 </button>
                 </FloatingPopover>
 
                 {false && showSdStatus && activeDrawingStatus && (
                   <div className="absolute bottom-full left-0 pb-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                    <div className="w-56 bg-white/90 backdrop-blur-xl border border-white/20 shadow-xl rounded-xl p-3 text-gray-700 font-sans">
-                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center justify-between">
+                    <div className="w-56 bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
+                      <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2 flex items-center justify-between">
                         {isStableDiffusionDrawing ? t('sd_status') : 'API 状态'}
                         <span className={`w-1.5 h-1.5 rounded-full ${activeDrawingStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
                       </div>
 
                       {isStableDiffusionDrawing ? (activeDrawingStatus.connected ? (
                         <div className="space-y-2">
-                          <label className="block text-[10px] text-gray-400 mb-1">{t('select_model')}</label>
+                          <label className="block text-[10px] text-[var(--text-tertiary)] mb-1">{t('select_model')}</label>
                           <select
-                            className="w-full border border-white/20 rounded-md px-2 py-1 text-[11px] bg-white/50 outline-none focus:ring-1 focus:ring-pink-500"
+                            className="w-full border border-[var(--control-border)] rounded-md px-2 py-1 text-[11px] bg-[var(--control-bg)] outline-none focus:ring-1 focus:ring-pink-500"
                             value={config.sdModel || ''}
                             onChange={(e) => setConfig({ ...config, sdModel: e.target.value })}
                           >
@@ -3386,13 +3604,13 @@ export default function Chat({
                         </div>
                       )) : (
                         <div className="space-y-2">
-                          <div className="rounded-lg bg-gray-50 px-2.5 py-2 text-[11px] text-gray-600">
-                            <div className="font-semibold text-gray-700">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
-                            <div className="mt-1 break-all text-[10px] text-gray-500">
+                          <div className="rounded-lg bg-[var(--surface-inset)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
+                            <div className="font-semibold text-[var(--text-dark)]">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
+                            <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
                               模型：{activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || '未配置'}
                             </div>
                             {activeDrawingStatus.endpoint && (
-                              <div className="mt-1 break-all text-[10px] text-gray-500">
+                              <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
                                 地址：{activeDrawingStatus.endpoint}
                               </div>
                             )}
@@ -3424,11 +3642,12 @@ export default function Chat({
                 description={getLocalText('开启长期记忆，让AI记住对话上下文和个人偏好', 'Enable long-term memory so AI remembers context and preferences')}
               >
                 <button
+                  type="button"
                   onClick={() => setUseMemory(!useMemory)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${useMemory ? 'bg-purple-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${useMemory ? 'is-active' : ''}`}
                 >
-                  <Brain size={14} className={useMemory ? 'text-white' : 'text-purple-600'} />
-                  {t('memory')}
+                  <Brain size={13} className={`shrink-0 ${useMemory ? 'text-saki-pink' : ''}`} />
+                  <span>{t('memory')}</span>
                 </button>
               </FeatureTooltip>
               <FeatureTooltip
@@ -3437,6 +3656,7 @@ export default function Chat({
                 description={getLocalText('自动生成精美的PPT演示文稿', 'Automatically generate beautiful PPT presentations')}
               >
                 <button
+                  type="button"
                   onClick={() => {
                     const nextState = !usePpt;
                     setUsePpt(nextState);
@@ -3444,9 +3664,9 @@ export default function Chat({
                       setUseTruthCheck(false);
                     }
                   }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${usePpt ? 'bg-orange-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${usePpt ? 'is-active' : ''}`}
                 >
-                  <Presentation size={14} className={usePpt ? 'text-white' : 'text-orange-600'} />
+                  <Presentation size={13} className={`shrink-0 ${usePpt ? 'text-saki-pink' : ''}`} />
                   <span>{t('smart_ppt')}</span>
                 </button>
               </FeatureTooltip>
@@ -3456,13 +3676,14 @@ export default function Chat({
                 description={getLocalText('多维度验证信息可信度，识别虚假内容', 'Verify information credibility across multiple dimensions and identify false content')}
               >
                 <button
+                  type="button"
                   onClick={() => {
                     const nextState = !useTruthCheck;
                     setUseTruthCheck(nextState);
                   }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${useTruthCheck ? 'bg-teal-600 text-white shadow-md' : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'}`}
+                  className={`saki-chip-btn ${useTruthCheck ? 'is-active' : ''}`}
                 >
-                  <Share2 size={14} className={useTruthCheck ? 'text-white' : 'text-teal-600'} />
+                  <Share2 size={13} className={`shrink-0 ${useTruthCheck ? 'text-saki-pink' : ''}`} />
                   <span>{getLocalText('智链', 'Zhilian')}</span>
                 </button>
               </FeatureTooltip>
@@ -3471,6 +3692,7 @@ export default function Chat({
                 description={getLocalText('把你的故事调成一张更像 Saki 的情绪特调卡，生成名字、风味、配方和适饮时刻。', 'Turn your story into a Saki-style signature drink card with a name, flavor, recipe, and perfect moment.')}
               >
                 <button
+                  type="button"
                   onClick={() => {
                     if (isRecording) {
                       stopRecording();
@@ -3480,68 +3702,37 @@ export default function Chat({
                     setUseStoryGlass(false);
                     setIsStoryGlassOverlayOpen(true);
                   }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${
-                    isStoryGlassOverlayOpen
-                      ? 'bg-gradient-to-r from-rose-500 to-amber-500 text-white shadow-md'
-                      : 'bg-white/40 text-gray-800 border border-white/40 hover:bg-white/60'
-                  }`}
+                  className={`saki-chip-btn ${isStoryGlassOverlayOpen ? 'is-active' : ''}`}
                 >
-                  <Sparkles size={14} className={isStoryGlassOverlayOpen ? 'text-white' : 'text-rose-500'} />
+                  <Sparkles size={13} className={`shrink-0 ${isStoryGlassOverlayOpen ? 'text-saki-pink' : ''}`} />
                   <span>{getLocalText('故事杯', 'Story Glass')}</span>
                 </button>
               </FeatureTooltip>
-              <FeatureTooltip
-                type="permission"
-                title={permissionMode === AGENT_PERMISSION_MODE_FULL ? getLocalText('完全访问', 'Full Access') : getLocalText('默认权限', 'Default Permission')}
-                description={permissionMode === AGENT_PERMISSION_MODE_FULL
-                  ? getLocalText('允许更深层的读写与系统操作', 'Allow deeper read, write, and system actions')
-                  : getLocalText('保持更稳妥的默认操作范围', 'Keep a safer default action scope')}
-              >
-                <button
-                  onClick={() => setConfig(prev => ({
-                  ...prev,
-                  agentPermissionMode: permissionMode === AGENT_PERMISSION_MODE_FULL
-                    ? AGENT_PERMISSION_MODE_DEFAULT
-                    : AGENT_PERMISSION_MODE_FULL
-                }))}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${
-                  permissionMode === AGENT_PERMISSION_MODE_FULL
-                    ? 'bg-rose-600 text-white shadow-md'
-                    : 'bg-emerald-600 text-white shadow-md'
-                }`}
-                data-title={
-                  permissionMode === AGENT_PERMISSION_MODE_FULL
-                    ? getLocalText('点击切换为默认权限', 'Switch to default permission')
-                    : getLocalText('点击切换为完全访问权限', 'Switch to full access')
-                }
-              >
-                <Shield size={14} className="text-white" />
-                <span>
-                  {permissionMode === AGENT_PERMISSION_MODE_FULL
-                    ? getLocalText('完全访问', 'Full Access')
-                    : getLocalText('默认权限', 'Default Permission')}
-                </span>
-              </button>
-              </FeatureTooltip>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="relative" ref={plusMenuRef}>
               <button
                 onClick={() => setShowPlusMenu(!showPlusMenu)}
-                className={`p-2.5 rounded-xl transition-all ${showPlusMenu ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:text-blue-600 hover:bg-white/20'}`}
+                aria-label={getLocalText('添加附件', 'Add attachment')}
+                aria-expanded={showPlusMenu}
+                className={`p-2.5 rounded-full transition-all ${showPlusMenu ? 'bg-[#ff75ac] text-white shadow-lg shadow-[#ff75ac]/25' : 'text-[var(--text-secondary)]  hover:text-[#ff75ac] dark:hover:text-[#ff9bc8] hover:bg-[var(--control-bg)] '}`}
               >
                 <Plus size={20} />
               </button>
 
               {showPlusMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 z-[100]">
+                <div className="saki-popup absolute bottom-full left-0 mb-2 w-48 bg-[var(--popup-bg)] dark:bg-[#181922]/95 rounded-2xl shadow-2xl border border-[var(--control-border)]  overflow-hidden py-2 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-200 z-[100]">
                   <button
                     onClick={() => {
                       setShowPlusMenu(false);
                       onOpenFileManager?.();
                     }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-dark)]  hover:bg-[#ff75ac]/10 dark:hover:bg-[#ff75ac]/15 hover:text-[#ff75ac] transition-colors"
                   >
-                    <Server size={18} className="text-gray-400 group-hover:text-blue-500" />
+                    <Server size={18} className="text-[var(--text-tertiary)] group-hover:text-blue-500" />
                     <span className="font-bold">{t('workspace')}</span>
                   </button>
                   <button
@@ -3549,9 +3740,9 @@ export default function Chat({
                       setShowPlusMenu(false);
                       fileInputRef.current?.click();
                     }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-dark)]  hover:bg-[#ff75ac]/10 dark:hover:bg-[#ff75ac]/15 hover:text-[#ff75ac] transition-colors"
                   >
-                    <HardDrive size={18} className="text-gray-400 group-hover:text-blue-500" />
+                    <HardDrive size={18} className="text-[var(--text-tertiary)] group-hover:text-blue-500" />
                     <span className="font-bold">{t('local_files')}</span>
                   </button>
                 </div>
@@ -3566,6 +3757,7 @@ export default function Chat({
             />
             <textarea
               ref={textareaRef}
+              disabled={Boolean(restoringCheckpointId)}
               rows={1}
               value={input}
               onFocus={(e) => {
@@ -3606,23 +3798,28 @@ export default function Chat({
                 }
               }}
               placeholder={t('ask_placeholder')}
-              className="flex-1 bg-transparent border-none focus:ring-0 focus:outline-none resize-none py-2.5 text-sm max-h-48 text-gray-900 font-medium placeholder-gray-500"
+              className="flex-1 bg-transparent border-none focus:ring-0 focus:outline-none resize-none py-2.5 text-sm max-h-48 text-[var(--text-dark)]  font-medium placeholder-gray-500 dark:placeholder-gray-400"
             />
             <button
               onClick={toggleRecording}
-              className={`p-2.5 rounded-xl transition-all active:scale-95 ${isRecording ? 'bg-red-500 text-white shadow-lg animate-pulse' : 'text-gray-500 hover:text-blue-600 hover:bg-white/20'}`}
+              className={`p-2.5 rounded-full transition-all active:scale-95 ${isRecording ? 'bg-red-500 text-white shadow-lg animate-pulse' : 'text-[var(--text-secondary)]  hover:text-[#ff75ac] dark:hover:text-[#ff9bc8] hover:bg-[var(--control-bg)] '}`}
               title={isRecording ? t('voice_stop') : t('voice_input')}
             >
               {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
             <button
               onClick={handleSend}
-              className={`p-2.5 rounded-xl transition-all active:scale-95 ${isGenerating ? 'bg-red-500/80 text-white shadow-lg' : (input.trim() || files.length > 0 ? 'bg-blue-600/80 text-white shadow-lg' : 'bg-white/20 text-gray-600')}`}
+              disabled={Boolean(restoringCheckpointId)}
+              className={`p-2.5 rounded-full transition-all active:scale-95 ${isGenerating || currentPendingRequest?.assistantMsgId ? 'bg-red-500/80 text-white shadow-lg' : (input.trim() || files.length > 0 ? 'bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_6px_20px_rgba(255,117,172,0.35)] hover:opacity-95' : 'bg-[var(--control-bg)]  text-[var(--text-tertiary)] ')}`}
+              title={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('结束生成', 'Stop generation') : getLocalText('发送', 'Send')}
             >
-              {isGenerating ? <div className="w-4 h-4 bg-white rounded-sm" /> : <Send size={20} />}
+              {isGenerating || currentPendingRequest?.assistantMsgId ? <div className="w-4 h-4 bg-white rounded-sm" /> : <ArrowUp size={20} />}
             </button>
           </div>
-          <p className="text-[10px] text-center text-gray-400 mt-2">{t('ai_accuracy_tip')}</p>
+          <div className="flex items-center justify-center gap-1.5 text-[10px] text-[var(--text-tertiary)] opacity-65 tracking-wide mt-2 select-none">
+            <span className="w-1 h-1 rounded-full bg-[var(--text-tertiary)] opacity-50" />
+            <span>{t('ai_accuracy_tip')}</span>
+          </div>
         </div>
       </div>
 
@@ -3648,6 +3845,7 @@ export default function Chat({
         getLocalText={getLocalText}
       />
     </div>
+    </Suspense>
   );
 }
 
@@ -3671,36 +3869,36 @@ function TaskTodoPanel({ todo, collapsed, onToggle, getLocalText }) {
   const title = todo?.title || getLocalText('任务清单', 'Task Todo');
 
   return (
-    <div className="mb-2 overflow-hidden rounded-2xl border border-white/30 bg-white/80 shadow-lg shadow-slate-900/10 backdrop-blur-xl">
+    <div className="mb-2 overflow-hidden rounded-2xl border border-white/30 bg-[var(--popup-bg)] shadow-lg shadow-slate-900/10 backdrop-blur-xl">
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/70"
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[var(--popup-bg)]"
         title={collapsed ? getLocalText('展开任务清单', 'Expand task todo') : getLocalText('折叠任务清单', 'Collapse task todo')}
       >
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-saki-pink text-white shadow-sm">
           <ListChecks size={17} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-bold text-slate-800">{title}</span>
+            <span className="truncate text-sm font-bold text-[var(--text-dark)]">{title}</span>
             <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
               {completedCount}/{totalCount}
             </span>
           </div>
           {collapsed && activeItem && (
-            <div className="mt-0.5 truncate text-xs font-medium text-slate-500">
+            <div className="mt-0.5 truncate text-xs font-medium text-[var(--text-secondary)]">
               {activeItem.text}
             </div>
           )}
         </div>
-        <div className="shrink-0 text-slate-500">
+        <div className="shrink-0 text-[var(--text-secondary)]">
           {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </div>
       </button>
 
       {!collapsed && (
-        <div className="border-t border-slate-200/70 bg-white/60 px-3 py-2">
+        <div className="border-t border-[var(--control-border)] bg-[var(--popup-bg)] px-3 py-2">
           <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
             {items.map((item, index) => {
               const status = item.status || 'pending';
@@ -3710,7 +3908,7 @@ function TaskTodoPanel({ todo, collapsed, onToggle, getLocalText }) {
                 <div
                   key={item.id || `${item.text}-${index}`}
                   className={`flex min-h-[2rem] items-start gap-2 rounded-xl px-2.5 py-1.5 text-sm transition-colors ${
-                    isActive ? 'bg-blue-50/85 text-blue-900' : isCompleted ? 'text-slate-400' : 'text-slate-600'
+                    isActive ? 'bg-blue-50/85 text-blue-900' : isCompleted ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]'
                   }`}
                 >
                   <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
@@ -3718,14 +3916,14 @@ function TaskTodoPanel({ todo, collapsed, onToggle, getLocalText }) {
                       ? 'border-emerald-500 bg-emerald-500 text-white'
                       : isActive
                         ? 'border-blue-500 bg-blue-100 text-blue-600'
-                        : 'border-slate-300 bg-white text-transparent'
+                        : 'border-[var(--control-border)] bg-[var(--popup-bg)] text-transparent'
                   }`}>
                     {isCompleted ? (
                       <Check size={13} strokeWidth={3} />
                     ) : isActive ? (
                       <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
                     ) : (
-                      <span className="h-2 w-2 rounded-full bg-slate-300" />
+                      <span className="h-2 w-2 rounded-full bg-[var(--surface-inset)]" />
                     )}
                   </span>
                   <span className={`min-w-0 flex-1 break-words leading-5 ${isCompleted ? 'line-through decoration-slate-300' : ''}`}>
@@ -3788,7 +3986,7 @@ function MessageBubbleToolbar({
   const tokens = isAssistant ? estimateMessageTokens(message) : 0;
 
   return (
-    <div className={`pointer-events-none absolute -top-4 z-10 flex w-max max-w-[calc(100vw-5rem)] gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-3' : 'left-3'}`}>
+    <div className={`saki-message-toolbar pointer-events-none absolute -top-4 z-10 flex w-max max-w-[calc(100vw-5rem)] gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-3' : 'left-3'}`}>
       {isAssistant && tokens > 0 && (
         <button 
           onClick={(e) => {
@@ -3861,23 +4059,23 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
 
   return (
     <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-auto">
-      <div className="bg-white border border-slate-100 rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+      <div data-saki-dialog="true" className="bg-[var(--popup-bg)] border border-[var(--control-border)] rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-              <Brain size={18} />
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--control-border)] bg-[var(--surface-inset)] shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 bg-saki-pink/10 text-[var(--accent-text)] rounded-lg">
+              <Brain size={16} />
             </div>
             <div>
-              <h3 className="text-slate-800 font-bold text-sm">{getLocalText('消息运行诊断', 'Message Diagnostics')}</h3>
-              <p className="text-[10px] text-slate-400 font-semibold">{getLocalText('查看该条回复的执行指标与工具日志', 'Execution stats and tool logs')}</p>
+              <h3 className="text-[var(--text-dark)] font-bold text-sm leading-tight">{getLocalText('消息运行诊断', 'Message Diagnostics')}</h3>
+              <p className="text-[10px] text-[var(--text-tertiary)] font-semibold leading-tight mt-0.5">{getLocalText('查看该条回复的执行指标与工具日志', 'Execution stats and tool logs')}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+            className="p-1.5 hover:bg-[var(--surface-inset)] rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
@@ -3885,19 +4083,19 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
         <div className="flex-1 overflow-auto p-6 space-y-6 custom-scrollbar text-left">
           {/* Diagnostic Metrics Grid */}
           <div className="grid grid-cols-3 gap-4">
-            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex flex-col justify-center">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{getLocalText('生成时间', 'Creation Time')}</span>
-              <span className="text-xs font-bold text-slate-700">{timeStr}</span>
+            <div className="rounded-2xl border border-[var(--control-border)] bg-[var(--surface-inset)] p-4 flex flex-col justify-center">
+              <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('生成时间', 'Creation Time')}</span>
+              <span className="text-xs font-bold text-[var(--text-dark)]">{timeStr}</span>
             </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex flex-col justify-center">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{getLocalText('生成总用时', 'Generation Duration')}</span>
-              <span className="text-xs font-bold text-slate-700">
+            <div className="rounded-2xl border border-[var(--control-border)] bg-[var(--surface-inset)] p-4 flex flex-col justify-center">
+              <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('生成总用时', 'Generation Duration')}</span>
+              <span className="text-xs font-bold text-[var(--text-dark)]">
                 {message.generationDurationMs 
                   ? `${(message.generationDurationMs / 1000).toFixed(2)} 秒` 
                   : getLocalText('未知 (历史消息)', 'N/A (Historical)')}
               </span>
             </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 flex items-center gap-3">
+            <div className="rounded-2xl border border-[var(--control-border)] bg-[var(--surface-inset)] p-4 flex items-center gap-3">
               <div className="relative flex items-center justify-center shrink-0">
                 <svg width="36" height="36" className="transform -rotate-90">
                   <circle cx="18" cy="18" r="14" fill="transparent" stroke="#f1f5f9" strokeWidth="2.5" />
@@ -3913,11 +4111,11 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                     strokeLinecap="round"
                   />
                 </svg>
-                <span className="absolute text-[8px] font-bold text-slate-600">{estimatedTokens}</span>
+                <span className="absolute text-[8px] font-bold text-[var(--text-secondary)]">{estimatedTokens}</span>
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider truncate">{getLocalText('Token 估算', 'Est. Tokens')}</span>
-                <span className="text-[9px] font-semibold text-slate-500 mt-0.5 truncate">
+                <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider truncate">{getLocalText('Token 估算', 'Est. Tokens')}</span>
+                <span className="text-[9px] font-semibold text-[var(--text-secondary)] mt-0.5 truncate">
                   {getLocalText(`中 ${chineseChars.length} / 英 ${englishWords.length}`, `CN ${chineseChars.length} / EN ${englishWords.length}`)}
                 </span>
               </div>
@@ -3927,8 +4125,8 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
           {/* Raw LLM Output */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                <Brain size={12} className="text-slate-400" />
+              <h4 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-2">
+                <Brain size={12} className="text-[var(--text-tertiary)]" />
                 {getLocalText('模型原始输出内容 (含思维链与工具标签)', 'Raw Model Output (Including COT & Tool Tags)')}
               </h4>
               {message.rawText && (
@@ -3943,21 +4141,22 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                 </button>
               )}
             </div>
-            <pre className="rounded-2xl border border-slate-100 bg-slate-950 p-4 text-[10px] text-slate-300 overflow-auto font-mono max-h-[200px] custom-scrollbar whitespace-pre-wrap leading-relaxed">
+            <pre className="rounded-2xl border border-[var(--control-border)] bg-slate-950 p-4 text-[10px] text-slate-300 overflow-auto font-mono max-h-[200px] custom-scrollbar whitespace-pre-wrap leading-relaxed">
               {message.rawText || message.content || getLocalText('暂无原始输出记录 (历史消息)', 'No raw output record (Historical)')}
             </pre>
           </div>
 
           {/* Execution Logs */}
           <div className="space-y-3">
-            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-              <Terminal size={12} className="text-slate-400" />
+            <h4 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-2">
+              <Terminal size={12} className="text-[var(--text-tertiary)]" />
               {getLocalText('运行状态与工具调用日志', 'Operation & Tool Invocation Logs')}
             </h4>
 
             {actionParts.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200/80 p-8 text-center bg-slate-50/20">
-                <p className="text-xs font-semibold text-slate-400">
+              <div className="rounded-2xl border border-dashed border-[var(--control-border)] p-8 text-center bg-[var(--surface-inset)] flex flex-col items-center justify-center gap-2">
+                <Terminal size={18} className="text-[var(--text-tertiary)] opacity-50" />
+                <p className="text-xs font-normal text-[var(--text-tertiary)]">
                   {getLocalText('纯文本回答，此阶段没有触发工具调用。', 'Pure text reply. No tools were invoked.')}
                 </p>
               </div>
@@ -3970,11 +4169,11 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                   const hasError = String(part.observation || '').startsWith('Error:');
 
                   return (
-                    <div key={index} className="rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-sm">
+                    <div key={index} className="rounded-2xl border border-[var(--control-border)] overflow-hidden bg-[var(--popup-bg)] shadow-sm">
                       {/* Log Entry Header */}
-                      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50/50 border-b border-slate-100">
+                      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[var(--surface-inset)] border-b border-[var(--control-border)]">
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono font-bold text-slate-400">#{index + 1}</span>
+                          <span className="text-[10px] font-mono font-bold text-[var(--text-tertiary)]">#{index + 1}</span>
                           <span className="font-mono text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
                             {toolName}
                           </span>
@@ -3990,7 +4189,7 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                       <div className="p-4 space-y-3 text-[11px] font-normal">
                         {/* Arguments */}
                         <div>
-                          <div className="text-[9px] font-semibold text-slate-400 mb-1">{getLocalText('调用参数：', 'Arguments:')}</div>
+                          <div className="text-[9px] font-semibold text-[var(--text-tertiary)] mb-1">{getLocalText('调用参数：', 'Arguments:')}</div>
                           <pre className="rounded-xl bg-slate-900 p-3 text-[10px] text-emerald-400 overflow-x-auto font-mono max-h-[100px] custom-scrollbar">
                             {JSON.stringify(args, null, 2)}
                           </pre>
@@ -3999,7 +4198,7 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                         {/* Observation */}
                         {part.observation && (
                           <div>
-                            <div className="text-[9px] font-semibold text-slate-400 mb-1">{getLocalText('输出结果 / 日志：', 'Observation / Output:')}</div>
+                            <div className="text-[9px] font-semibold text-[var(--text-tertiary)] mb-1">{getLocalText('输出结果 / 日志：', 'Observation / Output:')}</div>
                             <pre className="rounded-xl bg-slate-950 p-3 text-[10px] text-slate-300 overflow-x-auto font-mono max-h-[140px] custom-scrollbar whitespace-pre-wrap">
                               {String(part.observation).substring(0, 1500)}
                               {String(part.observation).length > 1500 ? '\n... (truncated)' : ''}
@@ -4016,10 +4215,10 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-100 flex justify-end bg-slate-50/30">
+        <div className="px-6 py-3 border-t border-[var(--control-border)] flex justify-end bg-[var(--surface-inset)]">
           <button
             onClick={onClose}
-            className="rounded-full bg-slate-800 text-white px-5 py-1.5 text-xs font-bold hover:bg-slate-700 active:scale-98 transition-all shadow-sm"
+            className="rounded-full bg-saki-pink text-white px-5 py-1.5 text-xs font-bold hover:bg-saki-pink-hover active:scale-98 transition-all shadow-sm"
           >
             {getLocalText('关闭', 'Close')}
           </button>
@@ -4041,6 +4240,8 @@ function ToolbarButton({ onClick, label, icon: Icon, active = false, destructive
             : 'text-gray-600 hover:bg-gray-100'
       }`}
       title={label}
+      aria-label={label}
+      data-destructive={destructive || undefined}
     >
       <Icon size={13} className={active ? 'animate-pulse' : ''} />
       <span className="hidden sm:inline">{label}</span>
@@ -4063,16 +4264,16 @@ function RichCodeBlock({ language, value }) {
 
   return (
     <div className="my-5 overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-gradient-to-br from-white via-slate-50/95 to-slate-100/90 shadow-[0_20px_50px_rgba(15,23,42,0.08)] ring-1 ring-white/70">
-      <div className="relative flex items-center justify-between border-b border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] px-4 py-3">
+      <div className="relative flex items-center justify-between border-b border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] px-3.5 py-2">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-300/70 to-transparent" />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full bg-rose-400/90 shadow-[0_0_0_3px_rgba(251,113,133,0.12)]" />
             <span className="h-2.5 w-2.5 rounded-full bg-amber-400/90 shadow-[0_0_0_3px_rgba(251,191,36,0.12)]" />
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/90 shadow-[0_0_0_3px_rgba(52,211,153,0.12)]" />
           </div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/85 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm backdrop-blur-sm">
-            <FileText size={12} className="text-sky-500" />
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/85 px-2.5 py-1 text-[10px] font-semibold text-slate-600 shadow-sm backdrop-blur-sm">
+            <FileText size={11} className="text-sky-500" />
             <span className="tracking-[0.18em] text-slate-500">{label}</span>
             <span className="h-1 w-1 rounded-full bg-slate-300" />
             <span>{localeIsZh ? '代码块' : 'Code Block'}</span>
@@ -4082,7 +4283,7 @@ function RichCodeBlock({ language, value }) {
         </div>
         <button
           onClick={handleCopy}
-          className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[11px] font-semibold shadow-sm transition-all hover:-translate-y-[1px] hover:shadow-md active:translate-y-0 ${
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[10px] font-semibold shadow-sm transition-all hover:-translate-y-[1px] hover:shadow-md active:translate-y-0 ${
             isCopied
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-slate-200/80 bg-white/90 text-slate-600 hover:border-sky-200 hover:bg-sky-50/80 hover:text-sky-700'
@@ -4092,8 +4293,8 @@ function RichCodeBlock({ language, value }) {
           {isCopied ? (localeIsZh ? '已复制' : 'Copied') : (localeIsZh ? '复制' : 'Copy')}
         </button>
       </div>
-      <div className="bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.08),transparent_32%),linear-gradient(180deg,rgba(248,250,252,0.82),rgba(241,245,249,0.94))] p-1.5">
-        <div className="overflow-hidden rounded-[1.15rem] border border-white/80 bg-white/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+      <div className="bg-[radial-gradient(circle_at_top_left,rgba(255,117,172,0.08),transparent_32%),linear-gradient(180deg,rgba(248,250,252,0.82),rgba(241,245,249,0.94))] dark:bg-[radial-gradient(circle_at_top_left,rgba(255,117,172,0.08),transparent_32%),linear-gradient(180deg,rgba(18,19,26,0.92),rgba(14,15,20,0.98))] p-1.5">
+        <div className="overflow-hidden rounded-[1.15rem] border border-white/80 dark:border-white/10 bg-white/80 dark:bg-black/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <SyntaxHighlighter
             language={language || 'text'}
             style={CHAT_CODE_THEME}
@@ -4162,7 +4363,6 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
           processedContent = processedContent.replace(dotsMatch[0], `<think>${dotsMatch[1].trim()}</think>`);
       }
 
-      // 2b. 处理 Thought: ... Response: 结构
       const thoughtRegex = /(?:[`*]*)(?:Thought|思考|思考过程)[:：](?:[`*]*)\s*([\s\S]*?)(?=(?:\n\s*(?:[`*]*)(?:Response|回答|Tool|工具|Observation)[:：])|$)/i;
       const tMatch = processedContent.match(thoughtRegex);
       if (tMatch) {
@@ -4177,21 +4377,17 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
       }
   }
 
-  // 3. 处理流式传输中的标签不完整问题
-  // 3a. 有开头无结尾：补齐结尾
   if (processedContent.includes('<think>') && !processedContent.includes('</think>')) {
     processedContent += '</think>';
   }
-  // 3b. 有结尾无开头：可能来自上一个 Part 被截断，补齐开头以便解析
   if (processedContent.includes('</think>') && !processedContent.includes('<think>')) {
     processedContent = '<think>' + processedContent;
   }
 
-  // 4. 分割内容
   const parts = processedContent.split(/(<think>[\s\S]*?<\/think>)/g);
 
   return (
-    <div className="prose prose-sm max-w-none">
+    <div className="saki-markdown prose prose-sm max-w-none">
       {parts.map((part, i) => {
         const trimmedPart = part.trim();
         if (trimmedPart.startsWith('<think>')) {
@@ -4203,12 +4399,10 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
         }
         if (!trimmedPart) return null;
 
-        // 5. 彻底清洗：移除残余标识
         const cleanedPart = part
           .replace(/^(?:[`*]*)(?:Assistant|User|用户|Tool|工具|Thought|思考|Response|回答|Observation|结果)[:：\s]?(?:[`*]*)\s*/gmi, '')
           .replace(/\n(?:[`*]*)(?:Assistant|User|用户|Tool|工具|Thought|思考|Response|回答|Observation|结果)[:：\s]?(?:[`*]*)\s*/gmi, '\n')
           .replace(/(?:[`*]*)(?:Tool|工具)[:：\s]?\w+\([\s\S]*?\)/gmi, '')
-          // 移除残留的标签
           .replace(/<\/?think>/gi, '')
           .replace(/(?:[`*]*)(?:Assistant|User|用户|Tool|工具|Thought|思考|Response|回答|Observation|结果)[:：\s]?(?:[`*]*)\s*$/i, '')
           .trim();
@@ -4228,14 +4422,12 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
                 const isInlineCode = isInlineMarkdownCode({ inline, node, className, children });
                 if (!isInlineCode && match && match[1] === 'mermaid') {
                   const chartCode = String(children).replace(/\n$/, '');
-                  // 如果正在生成中，且代码块末尾没有明显的闭合迹象，或者长度还在剧烈变化，可以考虑暂不渲染
-                  // 但 Mermaid 组件内部已经有了语法检查和延迟渲染
                   return <Mermaid chart={chartCode} />;
                 }
                 if (!isInlineCode) {
                   return <RichCodeBlock language={match?.[1] || ''} value={String(children).replace(/\n$/, '')} />;
                 }
-                return <code className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[0.92em] text-sky-700" {...props}>{children}</code>;
+                return <code className="rounded-md bg-[var(--primary-light)] px-1.5 py-0.5 text-[0.92em] text-[var(--accent-text)]" {...props}>{children}</code>;
               },
               a: ({ href, children, ...props }) => {
                 if (typeof href === 'string' && href.startsWith(INTERNAL_SETTINGS_LINK_PREFIX)) {
@@ -4255,7 +4447,7 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
                     href={href}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-medium text-sky-600 underline decoration-sky-300 underline-offset-4 transition-colors hover:text-sky-700"
+                    className="font-medium text-[var(--accent-text)] underline decoration-saki-pink/40 underline-offset-4 transition-colors hover:decoration-saki-pink"
                   >
                     {children}
                   </a>
@@ -4336,47 +4528,6 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
           />
         </div>,
         document.body
-      )}
-    </div>
-  );
-}
-
-function ThinkingBlock({ text, defaultOpen = false }) {
-  const { t } = useTranslation();
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  useEffect(() => {
-    setIsOpen(defaultOpen);
-  }, [defaultOpen]);
-
-  if (!text) return null;
-
-  // 移除可能在思考块内部出现的 Response: 标记（容错）
-  let cleanedText = text.replace(/(?:[`*]*)(?:Response|回答)[:：](?:[`*]*)\s*[\s\S]*$/i, '').trim();
-  // 移除可能存在的包裹性 <think> / </think> 标签
-  cleanedText = cleanedText
-    .replace(/^<think>/i, '')
-    .replace(/<\/think>$/i, '')
-    .trim();
-  if (!cleanedText) return null;
-
-  return (
-    <div className="my-3 border-l-2 border-amber-200 pl-3 bg-amber-50/20 rounded-r-xl transition-all duration-300">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 text-amber-600/70 text-[11px] py-1.5 hover:text-amber-700 font-medium transition-colors"
-      >
-        <div className={`p-0.5 rounded-full bg-amber-100 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
-          <ChevronDown size={12} />
-        </div>
-        <span>{isOpen ? t('hide_thoughts') : t('show_thoughts')}</span>
-      </button>
-      {isOpen && (
-        <div className="text-gray-500 text-[11px] pb-3 pr-2 leading-relaxed animate-in fade-in slide-in-from-top-1 duration-200">
-          <ReactMarkdown remarkPlugins={markdownPlugins}>
-            {cleanedText}
-          </ReactMarkdown>
-        </div>
       )}
     </div>
   );
@@ -4535,235 +4686,10 @@ function MusicFileCard({ file, onDownload }) {
   );
 }
 
-const stripAnsi = (str) => {
-  if (typeof str !== 'string') return '';
-  return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
-};
-
-function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, onRollback, onSkipAction }) {
-  const { t, i18n } = useTranslation();
-  const actionType = action.type;
-  const actionKind = String(actionType || '').toLowerCase();
-  const actionId = action.id;
-  const actionArgs = Array.isArray(action.args) ? action.args : [];
-  const [skipRequested, setSkipRequested] = useState(false);
-  const getLocalText = (zhText, enText) => (
-    String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh') ? zhText : enText
-  );
-  const getFileNameFromPath = (filePath = '') => {
-    const raw = String(filePath || '').trim();
-    if (!raw) return getLocalText('目标', 'target');
-    return raw.split(/[\\/]/).filter(Boolean).pop() || raw;
-  };
-  const [isExpanded, setIsExpanded] = useState(actionKind === 'draw' || actionKind === 'diagram' || actionKind === 'composemusic' || actionKind === 'terminal');
-  const [isCodeExpanded, setIsCodeExpanded] = useState(() => {
-    if (actionKind === 'writefile') return countTextLines(actionArgs[1] || '') <= AUTO_COLLAPSE_CODE_LINE_LIMIT;
-    if (actionKind === 'editfile') return countTextLines(actionArgs[3] || '') <= AUTO_COLLAPSE_CODE_LINE_LIMIT;
-    if (actionKind === 'replaceinfile') return countTextLines(actionArgs[2] || '') <= AUTO_COLLAPSE_CODE_LINE_LIMIT;
-    return true;
-  });
-  const getLabel = () => {
-    switch (actionKind) {
-      case 'search': return t('search_action');
-      case 'draw': return t('draw_action');
-      case 'composemusic': return 'Music Composition';
-      case 'terminal': return t('terminal_action');
-      case 'writefile': return t('writeFile_action');
-      case 'editfile': return t('editFile_action');
-      case 'replaceinfile': return t('editFile_action');
-      case 'readfile': return t('readFile_action');
-      case 'deletefile': return t('deleteFile_action');
-      case 'diagram': return t('diagram_action');
-      default: return t('default_action');
-    }
-  };
-
-  const getContent = () => {
-    if (actionKind === 'writefile') {
-      return {
-        isCode: true,
-        summary: `${t('path_label')}: ${actionArgs[0] || ''}`,
-        content: String(actionArgs[1] || ''),
-      };
-    }
-    if (actionKind === 'editfile') {
-      const [filePath, startLine, endLine, content] = actionArgs;
-      return {
-        isCode: true,
-        summary: `${t('path_label')}: ${filePath || ''}${startLine !== undefined && endLine !== undefined ? ` · L${startLine}-${endLine}` : ''}`,
-        content: String(content || ''),
-      };
-    }
-    if (actionKind === 'replaceinfile') {
-      const [filePath, oldText, newText] = actionArgs;
-      return {
-        isCode: true,
-        summary: `${t('path_label')}: ${filePath || ''}`,
-        content: `--- oldText ---\n${String(oldText || '')}\n\n--- newText ---\n${String(newText || '')}`,
-      };
-    }
-    if (actionKind === 'diagram') {
-      return {
-        isCode: false,
-        summary: '',
-        content: t('diagram_rendering'),
-      };
-    }
-    return {
-      isCode: false,
-      summary: '',
-      content: actionArgs.join(' '),
-    };
-  };
-
-  const contentData = getContent();
-  if (actionKind === 'editfile') {
-    contentData.summary = `${t('path_label')}: ${actionArgs[0] || ''}${actionArgs[1] !== undefined && actionArgs[2] !== undefined ? ` | L${actionArgs[1]}-${actionArgs[2]}` : ''}`;
-  }
-  const codeLineCount = countTextLines(contentData.content);
-  const shouldAutoCollapseCode = contentData.isCode && codeLineCount > AUTO_COLLAPSE_CODE_LINE_LIMIT;
-  const isStreaming = action.isStreaming;
-  const isPending = !observation && !fileMetadata;
-  const pendingLabel = isStreaming
-    ? getLocalText('正在生成工具参数...', 'Streaming tool arguments...')
-    : ((actionKind === 'editfile' || actionKind === 'replaceinfile')
-      ? getLocalText(`正在编辑 ${getFileNameFromPath(actionArgs[0])} 文件...`, `Editing ${getFileNameFromPath(actionArgs[0])}...`)
-      : (actionKind === 'terminal'
-        ? getLocalText('正在执行终端指令...', 'Running terminal command...')
-        : ''));
-  const canSkipAction = isPending && !isStreaming && actionKind === 'terminal' && actionId && typeof onSkipAction === 'function';
-  const handleSkip = async () => {
-    if (!canSkipAction || skipRequested) return;
-    setSkipRequested(true);
-    const ok = await onSkipAction(actionId);
-    if (!ok) {
-      setSkipRequested(false);
-    }
-  };
-  const diffStats = fileMetadata ? getDiffStats(fileMetadata) : null;
-  const changeSummary = diffStats && (diffStats.added > 0 || diffStats.removed > 0)
-    ? `+${diffStats.added} -${diffStats.removed}`
-    : null;
-
-  // 如果是图表，使用更简洁的样式
-  if (actionKind === 'diagram' && observation) {
-    return <Mermaid chart={observation} />;
-  }
-
+function ToolObservation({ action = {}, observation }) {
+  const { t } = useTranslation();
+  if (String(action.type || '').toLowerCase() === 'diagram') return <Mermaid chart={observation} />;
   return (
-    <div className="my-4 rounded-lg overflow-hidden border border-gray-200 bg-white shadow-sm font-mono text-sm max-w-full">
-      <div className="bg-gray-50 px-4 py-2 flex items-center relative border-b">
-        <div className="flex gap-1.5 cursor-pointer z-10" onClick={() => setIsExpanded(!isExpanded)}>
-          <div className="w-3 h-3 rounded-full bg-[#ff5f56]"></div>
-          <div className="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
-          <div className="w-3 h-3 rounded-full bg-[#27c93f]"></div>
-        </div>
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-gray-500 text-xs font-sans font-medium">{getLabel()}</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2 z-10">
-          {fileMetadata && (
-            <div className="flex items-center gap-2 mr-2">
-              {changeSummary && (
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-[10px] font-semibold font-sans text-emerald-700 whitespace-nowrap">
-                  {changeSummary}
-                </span>
-              )}
-              <button
-                onClick={() => onViewChanges?.(fileMetadata)}
-                className="flex items-center gap-1 px-2 py-0.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 rounded text-[10px] font-sans transition-colors pointer-events-auto"
-                title="查看代码差异"
-              >
-                <FileDiff size={12} />
-                <span>{t('view_changes_action')}</span>
-              </button>
-              <button
-                onClick={() => onRollback?.(fileMetadata)}
-                className="flex items-center gap-1 px-2 py-0.5 bg-orange-500/10 hover:bg-orange-500/20 text-orange-600 rounded text-[10px] font-sans transition-colors pointer-events-auto"
-                title={actionKind === 'deletefile' ? t('restore_action') : t('rollback_action')}
-              >
-                <Undo2 size={12} />
-                <span>{actionKind === 'deletefile' ? t('restore_action_label') : t('rollback_action')}</span>
-              </button>
-            </div>
-          )}
-          <Terminal size={14} className="text-gray-400" />
-        </div>
-      </div>
-      {isPending && pendingLabel && (
-        <div className="border-b border-blue-100 bg-blue-50/80 px-4 py-2.5 font-sans text-xs text-blue-700">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-blue-600 shadow-sm">
-              {actionKind === 'terminal' ? <Terminal size={12} /> : <PencilLine size={12} />}
-            </span>
-            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-500" />
-            <span className="font-medium">{skipRequested ? getLocalText('正在请求跳过这条指令...', 'Requesting skip...') : pendingLabel}</span>
-            {canSkipAction && (
-              <button
-                type="button"
-                onClick={handleSkip}
-                disabled={skipRequested}
-                className="ml-auto inline-flex items-center gap-1 rounded-md border border-blue-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60"
-              >
-                <X size={12} />
-                <span>{getLocalText('跳过这条指令', 'Skip command')}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-      <div className="p-3 text-gray-700 whitespace-pre-wrap break-all leading-relaxed bg-gray-50/30">
-        {contentData.isCode ? (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <span className="text-blue-500">$</span>
-              <span className="break-all">{contentData.summary}</span>
-              {shouldAutoCollapseCode && (
-                <button
-                  onClick={() => setIsCodeExpanded(!isCodeExpanded)}
-                  className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-sans font-medium text-gray-600 transition-colors hover:border-blue-200 hover:text-blue-600"
-                >
-                  <span>{isCodeExpanded ? t('collapse_code') : t('expand_code')}</span>
-                  {isCodeExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                  <span className="text-gray-400">{codeLineCount}</span>
-                </button>
-              )}
-            </div>
-            <div className={`relative overflow-hidden rounded-lg border border-gray-200 bg-white ${!isCodeExpanded && shouldAutoCollapseCode ? 'max-h-64' : ''}`}>
-              <pre className="overflow-x-auto p-3 text-xs text-gray-700 whitespace-pre-wrap break-all leading-relaxed">{contentData.content || ''}</pre>
-              {!isCodeExpanded && shouldAutoCollapseCode && (
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white via-white/95 to-transparent" />
-              )}
-            </div>
-          </div>
-        ) : (
-          <>
-            <span className="text-blue-500 mr-2">$</span>
-            {contentData.content}
-          </>
-        )}
-      </div>
-      {observation && (
-        <div className="border-t bg-white">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-full flex items-center justify-between px-4 py-2 text-[11px] text-gray-500 hover:bg-gray-50 transition-colors border-b border-dashed"
-          >
-            <span className="flex items-center gap-1.5">
-              {actionKind === 'search' ? t('view_search_results') : t('view_execution_output')}
-              {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            </span>
-          </button>
-          {isExpanded && (
-            <div className={`p-4 text-xs text-gray-600 bg-gray-50/50 ${actionKind === 'draw' || actionKind === 'diagram' ? 'max-h-none' : 'max-h-60'} overflow-y-auto font-sans leading-relaxed`}>
-              <div className="prose prose-sm max-w-none">
-                {actionKind === 'diagram' ? (
-                  <Mermaid chart={observation} />
-                ) : actionKind === 'terminal' ? (
-                  <pre className="font-mono bg-slate-950 text-slate-100 p-3.5 rounded-lg border border-slate-900 overflow-x-auto text-[11px] leading-relaxed whitespace-pre-wrap max-h-96 shadow-inner w-full">
-                    {stripAnsi(observation)}
-                  </pre>
-                ) : (
                   <ReactMarkdown
                     remarkPlugins={markdownPlugins}
                     urlTransform={urlTransform}
@@ -4859,14 +4785,5 @@ function TerminalBlock({ action = {}, observation, fileMetadata, onViewChanges, 
                   >
                     {observation}
                   </ReactMarkdown>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
-
-

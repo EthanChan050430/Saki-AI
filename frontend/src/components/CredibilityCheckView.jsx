@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -633,29 +633,29 @@ export default function CredibilityCheckView({ data, isEmbedded = true }) {
     <div
       className={`mt-4 overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_32%),linear-gradient(145deg,_rgba(255,255,255,0.98),_rgba(248,250,252,0.94))] shadow-[0_25px_60px_rgba(15,23,42,0.14)] ${isEmbedded ? '' : 'max-w-5xl'}`}
     >
-      <div className="border-b border-slate-200/80 px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-lg">
-              {isError ? <AlertTriangle size={18} /> : <Search size={18} />}
+      <div className="border-b border-slate-200/80 px-4 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-md">
+              {isError ? <AlertTriangle size={16} /> : <Search size={16} />}
             </div>
-            <div>
-              <div className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-400">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 leading-tight">
                 {getLocalText('智链可信度核验', 'Zhilian Verification')}
               </div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
+              <div className="mt-0.5 text-sm sm:text-base font-semibold text-slate-900 leading-tight truncate">
                 {safeData.claim || getLocalText('等待核验内容', 'Waiting for the claim')}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${verdictStyle.badge}`}>
-              <span className={`h-2 w-2 rounded-full ${verdictStyle.dot}`} />
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${verdictStyle.badge}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${verdictStyle.dot}`} />
               {safeData.verdictLabel || getStageLabel(safeData.currentStage, getLocalText)}
             </span>
-            <span className={`inline-flex items-center gap-2 rounded-full bg-gradient-to-r px-3 py-1 text-xs font-semibold text-white shadow-md ${tone.glow}`}>
-              <Sparkles size={12} />
+            <span className={`inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-sm ${tone.glow}`}>
+              <Sparkles size={11} />
               {getStageLabel(safeData.currentStage, getLocalText)}
             </span>
           </div>
@@ -785,21 +785,21 @@ export default function CredibilityCheckView({ data, isEmbedded = true }) {
           </div>
 
           <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white/90 shadow-sm">
-            <div className="border-b border-slate-200 px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+            <div className="border-b border-slate-200 px-4 py-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 leading-tight">
                 {getLocalText('步骤分析', 'Step-by-step analysis')}
               </div>
-              <div className="mt-1 text-sm text-slate-500">
+              <div className="mt-0.5 text-xs text-slate-500 leading-tight">
                 {getLocalText('像深度研究一样，逐步展示拆解、检索、证据比对、评分与结论。', 'See the verification flow across extraction, search, evidence comparison, scoring, and final synthesis.')}
               </div>
             </div>
 
-            <div className="flex gap-3 overflow-x-auto border-b border-slate-200 bg-slate-50/80 px-4 py-3 no-scrollbar">
+            <div className="flex gap-2.5 overflow-x-auto border-b border-slate-200 bg-slate-50/80 px-3.5 py-2 no-scrollbar">
               {steps.map((step, index) => (
                 <button
                   key={step.id || step.title || index}
                   onClick={() => setActiveStepIndex(index)}
-                  className={`flex min-w-[150px] flex-shrink-0 items-start gap-2 rounded-2xl border px-3 py-3 text-left transition-all ${
+                  className={`flex min-w-[140px] flex-shrink-0 items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition-all ${
                     activeStepIndex === index
                       ? 'border-sky-200 bg-sky-50 shadow-sm'
                       : 'border-transparent bg-white hover:border-slate-200 hover:bg-slate-50'

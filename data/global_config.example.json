@@ -5,6 +5,7 @@
   "apiKey": "",
   "apiBaseUrl": "",
   "openaiApiKey": "",
+  "nvidiaApiKey": "",
   "deepseekApiKey": "",
   "zhipuApiKey": "",
   "geminiApiKey": "",
@@ -58,5 +59,7 @@
   "offlineReflectionEnabled": false,
   "offlineReflectionProvider": "ollama",
   "offlineReflectionModel": "",
-  "agentPermissionMode": "default"
+  "workspacePath": "",
+  "agentPermissionMode": "default",
+  "thinkingLevel": "medium"
 }

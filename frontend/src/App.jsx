@@ -1,19 +1,18 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense } from 'react';
 import Sidebar from './components/Sidebar';
 import Chat from './components/Chat';
 import Header from './components/Header';
-import SettingsModal from './components/SettingsModal';
-import FeatureGuideModal from './components/FeatureGuideModal';
-import OnboardingTour from './components/OnboardingTour';
-import ThirdPartyChatModal from './components/ThirdPartyChatModal';
-import FileManagerModal from './components/FileManagerModal';
-import MemoryManagerModal from './components/MemoryManagerModal';
-import SkillManagerModal from './components/SkillManagerModal';
-import HostedTasksModal from './components/HostedTasksModal';
-import CharacterView from './components/CharacterView';
-import CherryBlossoms from './components/CherryBlossoms';
+const SettingsModal = React.lazy(() => import('./components/SettingsModal'));
+const FeatureGuideModal = React.lazy(() => import('./components/FeatureGuideModal'));
+const OnboardingTour = React.lazy(() => import('./components/OnboardingTour'));
+const ThirdPartyChatModal = React.lazy(() => import('./components/ThirdPartyChatModal'));
+const FileManagerModal = React.lazy(() => import('./components/FileManagerModal'));
+const MemoryManagerModal = React.lazy(() => import('./components/MemoryManagerModal'));
+const SkillManagerModal = React.lazy(() => import('./components/SkillManagerModal'));
+const HostedTasksModal = React.lazy(() => import('./components/HostedTasksModal'));
+const CharacterView = React.lazy(() => import('./components/CharacterView'));
+const CherryBlossoms = React.lazy(() => import('./components/CherryBlossoms'));
 import axios from 'axios';
-import html2canvas from 'html2canvas';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen } from 'lucide-react';
@@ -26,15 +25,16 @@ import {
   migrateApiProviderConfig,
 } from './utils/chatProviderConfig';
 import { getTiledWindowMotion, tiledOverlayMotion } from './utils/modalMotion';
+import { getChatBackgroundSource } from './utils/chatAppearance';
+import { attachCheckpoint, restoreCheckpoint } from './utils/checkpoints';
+import { createStreamUpdateScheduler } from './utils/sseStream';
+import { calculateContextStatusFromMessages } from './utils/contextUsage';
 const MODELS_CACHE_KEY = 'agent_models_combined_v4';
 const MODEL_FETCH_DEBOUNCE_MS = 250;
 const AGENT_PERMISSION_MODE_DEFAULT = 'default';
 const AGENT_PERMISSION_MODE_FULL = 'full-access';
 const MOBILE_BREAKPOINT = 768;
 const UTILITY_WINDOW_LIMIT = 4;
-const CONTEXT_DEFAULT_BUDGET_TOKENS = 32000;
-const CONTEXT_AUTO_COMPRESS_RATIO = 0.82;
-const CONTEXT_RECENT_MESSAGE_COUNT = 8;
 const MODEL_SETTINGS_LINK = 'agent://settings/models';
 const ONBOARDING_STORAGE_KEY = 'agent_onboarding_completed_v1';
 const CHARACTER_ACTIVITY_ANIMATIONS = new Set([
@@ -320,95 +320,6 @@ function ensureCurrentModelInCatalog(models = [], config = {}) {
   ];
 }
 
-function estimateContextTokenCount(text = '') {
-  const source = String(text || '');
-  if (!source) return 0;
-  const cjkChars = (source.match(/[\u3400-\u9fff]/g) || []).length;
-  const nonCjkChars = Math.max(0, source.length - cjkChars);
-  return Math.ceil(cjkChars * 0.65 + nonCjkChars / 3.8);
-}
-
-function getContextBudgetTokens(provider = '', model = '', config = {}) {
-  const configured = Number(config?.agentContextBudgetTokens || config?.contextBudgetTokens || config?.contextWindowTokens);
-  if (Number.isFinite(configured) && configured >= 8000) return Math.floor(configured);
-
-  const modelId = String(model || '').toLowerCase();
-  if (modelId.includes('claude-3-7') || modelId.includes('claude-sonnet-4') || modelId.includes('claude-opus-4')) return 180000;
-  if (modelId.includes('gemini-1.5') || modelId.includes('gemini-2')) return 120000;
-  if (modelId.includes('gpt-4.1') || modelId.includes('gpt-5') || modelId.includes('o3') || modelId.includes('o4')) return 120000;
-  if (String(provider || '').toLowerCase() === 'ollama') return 32768;
-  return CONTEXT_DEFAULT_BUDGET_TOKENS;
-}
-
-function compactContextText(text = '', maxChars = 700) {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 18)).trim()} ...[truncated]`;
-}
-
-function serializeMessageForContextEstimate(message = {}) {
-  if (!message) return '';
-
-  let text = String(message.content || '').trim();
-  if (message.role === 'assistant') {
-    const partsText = Array.isArray(message.parts)
-      ? message.parts.map((part) => {
-          if (part?.type === 'text') return String(part.content || '');
-          if (part?.type === 'action') {
-            const args = (part.data?.args || [])
-              .map((arg) => `"${compactContextText(arg, 600).replace(/"/g, '\\"')}"`)
-              .join(', ');
-            const observation = compactContextText(part.observation || '', 500);
-            return `Tool: ${part.data?.type || 'unknown'}(${args})${observation ? `\nObservation: ${observation}` : ''}`;
-          }
-          return '';
-        }).filter(Boolean).join('\n')
-      : '';
-
-    const structuredParts = [
-      message.deepReadingData?.summary || message.deepReadingData?.reportHtml,
-      message.pptData?.title || message.pptData?.summary,
-      message.credibilityCheckData?.summary,
-      message.storyGlassData?.sakiComment || message.storyGlassData?.storySummary,
-    ].filter(Boolean).map((item) => compactContextText(item, 900));
-
-    text = [text, partsText, ...structuredParts].filter(Boolean).join('\n');
-  }
-
-  if (!text) return '';
-  return `${message.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-}
-
-function calculateContextStatusFromMessages(messages = [], config = {}) {
-  const sourceMessages = Array.isArray(messages) ? messages : [];
-  if (sourceMessages.length === 0) return null;
-
-  const budgetTokens = getContextBudgetTokens(config.provider, config.model, config);
-  const formattedHistory = sourceMessages
-    .map(serializeMessageForContextEstimate)
-    .filter(Boolean)
-    .join('\n');
-  const usedTokens = estimateContextTokenCount(formattedHistory) + 5500;
-  const autoCompressThreshold = Math.max(8000, Math.floor(budgetTokens * CONTEXT_AUTO_COMPRESS_RATIO));
-  const shouldCompress = usedTokens > autoCompressThreshold && sourceMessages.length > CONTEXT_RECENT_MESSAGE_COUNT;
-  const keptRecentMessages = shouldCompress
-    ? Math.min(CONTEXT_RECENT_MESSAGE_COUNT, sourceMessages.length)
-    : sourceMessages.length;
-
-  return {
-    usedTokens,
-    budgetTokens,
-    percent: Math.min(100, Math.round((usedTokens / Math.max(1, budgetTokens)) * 100)),
-    compressed: false,
-    state: shouldCompress ? 'near-compression' : 'estimated',
-    estimated: true,
-    messageCount: sourceMessages.length,
-    keptRecentMessages,
-    compressedMessages: shouldCompress ? Math.max(0, sourceMessages.length - keptRecentMessages) : 0,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 function upsertGeneratedFile(files = [], generatedFile) {
   if (!generatedFile?.filePath) return files;
   const nextFiles = Array.isArray(files) ? [...files] : [];
@@ -459,6 +370,58 @@ function normalizeTaskTodoPayload(payload = {}, previousTodo = null) {
     items,
     updatedAt: source?.updatedAt || new Date().toISOString(),
   };
+}
+
+function applyStreamDeltaToMessage(m, data, options = {}, onExpressionChange) {
+  const parts = [...(m.parts || [])];
+  if (data.reasoning) {
+    const lastIndex = parts.length - 1;
+    if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
+      const updatedContent = parts[lastIndex].content + data.reasoning;
+      parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+    } else {
+      parts.push({ type: 'reasoning', content: data.reasoning });
+    }
+  }
+  if (data.text) {
+    const lastIndex = parts.length - 1;
+    let newContent = data.text;
+    if (lastIndex >= 0 && parts[lastIndex].type === 'text') {
+      const updatedContent = parts[lastIndex].content + data.text;
+      parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+      newContent = updatedContent;
+    } else {
+      parts.push({ type: 'text', content: data.text });
+    }
+    if (!options.useWeb && onExpressionChange) {
+      const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
+      const expressionMatches = [...newContent.matchAll(expressionRegex)];
+      if (expressionMatches.length > 0) {
+        const lastMatch = expressionMatches[expressionMatches.length - 1];
+        const fileName = lastMatch[1]?.trim();
+        if (fileName) {
+          onExpressionChange(fileName);
+        }
+      }
+    }
+  }
+  if (data.action) {
+    parts.push({ type: 'action', data: data.action });
+  }
+  if (data.observation || data.fileMetadata) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === 'action') {
+        if (data.observation) parts[i].observation = data.observation;
+        if (data.fileMetadata) parts[i].fileMetadata = data.fileMetadata;
+        break;
+      }
+    }
+  }
+  const generatedFiles = data.generatedFile
+    ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
+    : (m.generatedFiles || []);
+  const newStreamingActions = data.action ? [] : (m.streamingActions || []);
+  return { ...m, parts, generatedFiles, streamingActions: newStreamingActions };
 }
 
 function applyTodoUpdateToAssistantMessage(message, todoPayload) {
@@ -581,11 +544,86 @@ function cacheHistoryList(items) {
 
 function App() {
   const { t, i18n } = useTranslation();
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') return 'light';
+    const saved = localStorage.getItem('agent_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('agent_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback((event) => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    const isAppearanceTransition =
+      typeof document !== 'undefined' &&
+      typeof document.startViewTransition === 'function' &&
+      !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (!isAppearanceTransition) {
+      setTheme(nextTheme);
+      return;
+    }
+
+    let x = Math.round(window.innerWidth / 2);
+    let y = Math.round(window.innerHeight / 2);
+    const target = (event && event.currentTarget) || document.querySelector('.theme-toggle-btn');
+    if (target && typeof target.getBoundingClientRect === 'function') {
+      const rect = target.getBoundingClientRect();
+      x = Math.round(rect.left + rect.width / 2);
+      y = Math.round(rect.top + rect.height / 2);
+    } else if (event && typeof event.clientX === 'number') {
+      x = Math.round(event.clientX);
+      y = Math.round(event.clientY);
+    }
+
+    const endRadius = Math.ceil(Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    ));
+
+    const transition = document.startViewTransition(() => {
+      setTheme(nextTheme);
+      document.documentElement.setAttribute('data-theme', nextTheme);
+      if (nextTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      localStorage.setItem('agent_theme', nextTheme);
+    });
+
+    transition.ready.then(() => {
+      const clipPath = nextTheme === 'dark'
+        ? [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`]
+        : [`circle(${endRadius}px at ${x}px ${y}px)`, `circle(0px at ${x}px ${y}px)`];
+      document.documentElement.animate(
+        { clipPath: clipPath },
+        {
+          duration: 450,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+          pseudoElement: nextTheme === 'dark' ? '::view-transition-new(root)' : '::view-transition-old(root)',
+        }
+      );
+    }).catch(() => {});
+  }, [theme]);
   const [history, setHistory] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [currentPendingRequest, setCurrentPendingRequest] = useState(null);
   const latestMessagesRef = useRef([]);
+  const [restoringCheckpointId, setRestoringCheckpointId] = useState(null);
+  const checkpointRestoreRef = useRef(false);
+  const currentChatIdRef = useRef(currentChatId);
+  currentChatIdRef.current = currentChatId;
   const [isGenerating, setIsGenerating] = useState(false);
   const [contextStatus, setContextStatus] = useState(null);
   const abortControllerRef = useRef(null);
@@ -599,11 +637,9 @@ function App() {
   const [onboardingStepIndex, setOnboardingStepIndex] = useState(0);
   const commandPaletteInputRef = useRef(null);
 
-  // Deep Reading State
   const [deepReadingData, setDeepReadingData] = useState(null);
   const [isStoryGlassOverlayOpen, setIsStoryGlassOverlayOpen] = useState(false);
 
-  // Keep ref in sync
   useEffect(() => {
     latestMessagesRef.current = messages;
   }, [messages]);
@@ -623,7 +659,20 @@ function App() {
   const [currentExpression, setCurrentExpression] = useState('normal.png');
   const [animationTrigger, setAnimationTrigger] = useState(null);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
-  const musicRef = useRef(new Audio('/assets/HiSchool.wav'));
+  const musicRef = useRef(null);
+  const getMusicAudio = useCallback(() => {
+    if (!musicRef.current) {
+      const audio = new Audio('/assets/HiSchool.mp3');
+      audio.onerror = () => {
+        // Fallback to wav if mp3 fails
+        if (audio.src && audio.src.endsWith('.mp3')) {
+          audio.src = '/assets/HiSchool.wav';
+        }
+      };
+      musicRef.current = audio;
+    }
+    return musicRef.current;
+  }, []);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const chatContainerRef = useRef(null);
 
@@ -854,17 +903,14 @@ function App() {
     setIsHostedTasksOpen(true);
   };
 
-  // Trigger hello animation on initial load
   useEffect(() => {
     if (isConfigLoaded) {
       setAnimationTrigger({ type: 'hello', timestamp: Date.now() });
     }
   }, [isConfigLoaded]);
 
-  // Trigger hello animation on session switch or new session
   useEffect(() => {
     if (currentChatId) {
-      // Don't override if a working animation is already requested in the same cycle
       setAnimationTrigger(prev => {
         if (prev && CHARACTER_ACTIVITY_ANIMATIONS.has(prev.type)) return prev;
         return { type: 'hello', timestamp: Date.now() };
@@ -874,23 +920,22 @@ function App() {
 
   const exportToImage = async () => {
     if (!chatContainerRef.current) return;
-    
-    // Create a clones of the container for better rendering
+
     const element = chatContainerRef.current;
-    
+
     try {
+      const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(element, {
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        scale: 2, 
+        scale: 2,
         onclone: (clonedDoc) => {
           const clonedElement = clonedDoc.getElementById('chat-messages-container');
           if (clonedElement) {
             clonedElement.style.height = 'auto';
             clonedElement.style.maxHeight = 'none';
             clonedElement.style.overflow = 'visible';
-            // Hide the scroll-to-bottom anchor if it exists
             const anchor = clonedElement.lastElementChild;
             if (anchor && anchor.tagName === 'DIV' && !anchor.innerHTML) {
               anchor.style.display = 'none';
@@ -898,7 +943,7 @@ function App() {
           }
         }
       });
-      
+
       const image = canvas.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = image;
@@ -911,21 +956,26 @@ function App() {
   };
 
   const toggleMusicMode = () => {
+    const audio = getMusicAudio();
     if (isMusicPlaying) {
-      musicRef.current.pause();
-      musicRef.current.currentTime = 0;
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
       setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       setIsMusicPlaying(false);
     } else {
-      musicRef.current.loop = true;
-      musicRef.current.play().catch(err => console.error("Audio play failed:", err));
+      if (audio) {
+        audio.loop = true;
+        audio.play().catch(err => console.error("Audio play failed:", err));
+      }
       setAnimationTrigger({ type: 'dance', loop: true, timestamp: Date.now() });
       setIsMusicPlaying(true);
     }
   };
 
   const handleStoryGlassModeChange = useCallback((enabled) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     if (enabled) {
       setCurrentExpression('busy.png');
@@ -943,7 +993,6 @@ function App() {
     }
   }, [isGenerating, isMusicPlaying]);
 
-  // Auto-speak logic when music mode is on
   useEffect(() => {
     if (isMusicPlaying && messages.length > 0 && !isGenerating) {
       const lastMsg = messages[messages.length - 1];
@@ -989,6 +1038,7 @@ function App() {
       userAvatar: '/assets/head_user.png',
       showParticles: true,
       agentPermissionMode: AGENT_PERMISSION_MODE_DEFAULT,
+      thinkingLevel: 'medium',
       systemPrompt: '你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切，经常使用“呢”、“呀”、“~”等语气词。\n\n在每一个回复中，你必须遵循以下绝对规则：\n1. **严禁输出 "Tool" 或 "Thought" 等前缀**：直接以少女的身份开始对话，不要带有任何系统标识符。\n2. **开头表情**：回复的第一行必须包含一个表情标记 `[expression:文件名.png]`。例如：确认时用 `[expression:ok.png]`；思考时用 `[expression:think.png]`；普通开始用 `[expression:normal.png]`。\n3. **结束表情**：回复的结束也必须带上一个表情标记，如 `[expression:happy.png]`。\n4. 可选表情列表：normal.png, ok.png, no_problem.png, think.png, busy.png, excited.png, happy.png, shy.png, worry.png。\n\n请始终保持Saki（诗琪）的身份进行对话。'
     };
 
@@ -1030,10 +1080,14 @@ function App() {
       } else {
         parsed.agentPermissionMode = normalizePermissionMode(parsed.agentPermissionMode);
       }
+      if (!['low', 'medium', 'high'].includes(parsed.thinkingLevel)) {
+        parsed.thinkingLevel = defaultConfig.thinkingLevel;
+        migrated = true;
+      }
 
       // Migration: Update if the prompt is old or missing key instructions
-      if (!parsed.systemPrompt || 
-          parsed.systemPrompt.includes('AI Copilot Agent') || 
+      if (!parsed.systemPrompt ||
+          parsed.systemPrompt.includes('AI Copilot Agent') ||
           parsed.systemPrompt.includes('筱筱') ||
           !parsed.systemPrompt.includes('严禁输出 "Tool"')) {
         parsed.systemPrompt = defaultConfig.systemPrompt;
@@ -1082,7 +1136,7 @@ function App() {
     },
     {
       id: 'model-switcher',
-      selector: '[data-onboarding-id="header-model-switcher"]',
+      selector: '[data-onboarding-id="chat-model-switcher"]',
       title: getLocalText('当前模型与提供商', 'Current model and provider'),
       description: getLocalText(
         '这里会显示当前正在使用的模型。你可以快速切换不同提供商和模型，聊天失败时也会引导你回到设置页检查配置。',
@@ -1330,10 +1384,17 @@ function App() {
     // Attempt local cache first
     localStorage.removeItem('agent_models_combined');
     localStorage.removeItem('agent_models_combined_v3');
-    const cachedModels = localStorage.getItem(MODELS_CACHE_KEY);
-    if (cachedModels) {
+    let cachedModels = [];
+    const cachedModelsJson = localStorage.getItem(MODELS_CACHE_KEY);
+    if (cachedModelsJson) {
       try {
-        setModels(JSON.parse(cachedModels));
+        const parsedCachedModels = JSON.parse(cachedModelsJson);
+        cachedModels = dedupeModels(
+          (Array.isArray(parsedCachedModels) ? parsedCachedModels : [])
+            .filter(model => model && typeof model === 'object' && model.provider && model.name)
+            .map(decorateModel)
+        );
+        setModels(cachedModels);
       } catch (e) {}
     }
 
@@ -1344,8 +1405,8 @@ function App() {
 
       // 1. Fetch Ollama Models
       try {
-        const ollamaRes = await axios.get(`${BACKEND_URL}/api/models`, { 
-          params: { ollamaUrl: config.ollamaUrl } 
+        const ollamaRes = await axios.get(`${BACKEND_URL}/api/models`, {
+          params: { ollamaUrl: config.ollamaUrl }
         });
         const ollamaModels = mapCatalogModels(ollamaRes.data || [], 'ollama');
         combinedModels = [...combinedModels, ...ollamaModels];
@@ -1355,8 +1416,8 @@ function App() {
 
       // 1.5. Fetch LMStudio Models
       try {
-        const lmstudioRes = await axios.get(`${BACKEND_URL}/api/lmstudio/models`, { 
-          params: { lmstudioUrl: config.lmstudioUrl } 
+        const lmstudioRes = await axios.get(`${BACKEND_URL}/api/lmstudio/models`, {
+          params: { lmstudioUrl: config.lmstudioUrl }
         });
         const lmstudioModels = mapCatalogModels(lmstudioRes.data || [], 'lmstudio');
         combinedModels = [...combinedModels, ...lmstudioModels];
@@ -1367,8 +1428,8 @@ function App() {
       // 2. Fetch GitHub Models
       if (config.copilotToken || config.provider === 'copilot') {
         try {
-          const githubRes = await axios.get(`${BACKEND_URL}/api/github/models`, { 
-            params: { token: config.copilotToken || '' } 
+          const githubRes = await axios.get(`${BACKEND_URL}/api/github/models`, {
+            params: { token: config.copilotToken || '' }
           });
           const githubModels = (githubRes.data || []).map(item => {
             if (typeof item === 'string') {
@@ -1423,7 +1484,10 @@ function App() {
         });
       }
 
-      combinedModels = ensureCurrentModelInCatalog(dedupeModels(combinedModels), config);
+      combinedModels = ensureCurrentModelInCatalog(
+        dedupeModels([...combinedModels, ...cachedModels]),
+        config
+      );
 
       if (isCancelled) return;
 
@@ -1438,7 +1502,7 @@ function App() {
         const normalizedCurrentModel = config.provider === 'copilot' ? normalizeCopilotModelName(config.model) : config.model;
         const modelExists = combinedModels.some(m => m.name === normalizedCurrentModel && m.provider === config.provider);
         const currentProviderHasCatalog = combinedModels.some(m => m.provider === config.provider);
-        
+
         if (currentProviderHasCatalog && (!modelExists || isCurrentModelDrawing)) {
           const availableModels = combinedModels.filter(m => !(m.name === config.drawingModel && m.provider === config.drawingProvider));
           if (availableModels.length > 0) {
@@ -1470,6 +1534,7 @@ function App() {
     config.customApiBaseUrl,
     config.customApiKey,
     config.openaiApiKey,
+    config.nvidiaApiKey,
     config.deepseekApiKey,
     config.zhipuApiKey,
     config.geminiApiKey,
@@ -1614,6 +1679,7 @@ function App() {
     uploadedFiles: files,
     createdAt: new Date().toISOString(),
     options: {
+      workspacePath: options.workspacePath ?? config.workspacePath ?? '',
       useSearch: Boolean(options.useSearch),
       useWeb: Boolean(options.useWeb),
       useMcp: Boolean(options.useMcp),
@@ -1710,29 +1776,29 @@ function App() {
     const newMessages = [...messages];
     const userMsg = newMessages[idx - 1];
     const userContent = userMsg?.content || '';
-    
+
     // Remove the two messages
     newMessages.splice(idx - 1, 2);
     setMessages(newMessages);
     latestMessagesRef.current = newMessages;
     setContextStatus(calculateContextStatusFromMessages(newMessages, config));
     saveChatToBackend(currentChatId, newMessages);
-    
+
     return userContent;
   };
 
   const sendMessage = async (text, files = [], options = {}) => {
-    if (isGenerating) return;
-    
+    if (isGenerating || checkpointRestoreRef.current) return;
+
     let activeChatId = currentChatId;
     if (!activeChatId) {
       activeChatId = Date.now().toString();
       setCurrentChatId(activeChatId);
     }
 
-    const userMsg = { 
-      role: 'user', 
-      content: text, 
+    const userMsg = {
+      role: 'user',
+      content: text,
       files: files.map(f => f.name),
       attachedFiles: files // Store full file info in message for backend reference
     };
@@ -1766,7 +1832,6 @@ function App() {
       setAnimationTrigger({ type: 'drinking', timestamp: Date.now() });
     };
 
-    // Handle Initial expressions
     const activityAnimation = getCharacterActivityAnimation(options);
     if (activityAnimation === 'thinking') {
       setCurrentExpression('think.png');
@@ -1812,10 +1877,14 @@ function App() {
         setDeepReadingData({ steps: [], reportHtml: '', status: 'running' });
       }
 
+      const streamScheduler = createStreamUpdateScheduler(() => {
+        setMessages([...latestMessagesRef.current]);
+      });
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1828,7 +1897,7 @@ function App() {
         for (const line of lines) {
           const trimmedLine = line.trim();
           if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
-          
+
           const dataStr = trimmedLine.slice(6).trim();
           if (dataStr === '[DONE]') {
             stopSignalReceived = true;
@@ -1838,8 +1907,23 @@ function App() {
           try {
             const data = JSON.parse(dataStr);
 
+            if (data.type === 'checkpoint' && data.checkpoint) {
+              setMessages(previous => {
+                const updated = attachCheckpoint(previous, data.checkpoint);
+                latestMessagesRef.current = updated;
+                return updated;
+              });
+              continue;
+            }
+
             if (data.contextStatus) {
               setContextStatus(data.contextStatus);
+              setMessages(previous => {
+                const updated = previous.map(item => item.id === assistantMsgId
+                  ? { ...item, contextStatus: data.contextStatus } : item);
+                latestMessagesRef.current = updated;
+                return updated;
+              });
               continue;
             }
 
@@ -1861,16 +1945,16 @@ function App() {
                   const updated = { ...prev, ...deepData };
                   if (deepData.steps) updated.steps = deepData.steps;
                   if (deepData.status) updated.status = deepData.status;
-                  
+
                   // 同步更新到消息列表中，以便持久化
                   setMessages(prevMsgs => {
-                    const newMsgs = prevMsgs.map(m => 
+                    const newMsgs = prevMsgs.map(m =>
                       m.id === assistantMsgId ? { ...m, deepReadingData: updated } : m
                     );
                     latestMessagesRef.current = newMsgs; // 立即同步 Ref，防止最后一次保存时状态不对
                     return newMsgs;
                   });
-                  
+
                   return updated;
                });
                continue;
@@ -1879,7 +1963,7 @@ function App() {
             if (data.type === 'ppt' || data.pptData) {
               const pptData = data.pptData || data;
               setMessages(prevMsgs => {
-                const newMsgs = prevMsgs.map(m => 
+                const newMsgs = prevMsgs.map(m =>
                   m.id === assistantMsgId ? { ...m, pptData: { ...(m.pptData || {}), ...pptData } } : m
                 );
                 latestMessagesRef.current = newMsgs;
@@ -1927,7 +2011,6 @@ function App() {
             }
 
             if (data.reasoning || data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
-              // Stop thinking animation when content starts arriving
               setAnimationTrigger(prev => {
                 if (prev && prev.type === 'thinking') {
                   return { type: 'stop', timestamp: Date.now() };
@@ -1935,95 +2018,48 @@ function App() {
                 return prev;
               });
 
-              setMessages(prev => {
-                const updated = prev.map(m => {
-                  if (m.id === assistantMsgId) {
-                    const parts = [...m.parts];
-                    if (data.reasoning) {
-                      const lastIndex = parts.length - 1;
-                      if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
-                        const updatedContent = parts[lastIndex].content + data.reasoning;
-                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
-                      } else {
-                        const reasoningPart = { type: 'reasoning', content: data.reasoning };
-                        parts.push(reasoningPart);
-                      }
-                    }
-                    if (data.text) {
-                      const lastIndex = parts.length - 1;
-                      let newContent = data.text;
-                      if (lastIndex >= 0 && parts[lastIndex].type === 'text') {
-                        const updatedContent = parts[lastIndex].content + data.text;
-                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
-                        newContent = updatedContent;
-                      } else {
-                        const textPart = { type: 'text', content: data.text };
-                        parts.push(textPart);
-                        newContent = data.text;
-                      }
-                      
-                      // Check for expression marker in the text (only in non-deep-reading mode)
-                      if (!options.useWeb) {
-                        // Extract filename.png from [expression:filename.png]
-                        // Using a greedy approach to find the latest completed marker
-                        const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
-                        const expressionMatches = [...newContent.matchAll(expressionRegex)];
-                        if (expressionMatches.length > 0) {
-                          const lastMatch = expressionMatches[expressionMatches.length - 1];
-                          const fileName = lastMatch[1].trim();
-                          if (fileName) {
-                            setCurrentExpression(fileName);
-                          }
-                        }
-                      }
-                    }
-                    if (data.action) {
-                      parts.push({ type: 'action', data: data.action });
-                    }
-                    if (data.observation || data.fileMetadata) {
-                      for (let i = parts.length - 1; i >= 0; i--) {
-                        if (parts[i].type === 'action') {
-                          if (data.observation) parts[i].observation = data.observation;
-                          if (data.fileMetadata) parts[i].fileMetadata = data.fileMetadata;
-                          break;
-                        }
-                      }
-                    }
-                    const generatedFiles = data.generatedFile
-                      ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
-                      : (m.generatedFiles || []);
-                    const newStreamingActions = data.action ? [] : (m.streamingActions || []);
-                    return { ...m, parts, generatedFiles, streamingActions: newStreamingActions };
-                  }
-                  return m;
-                });
-                latestMessagesRef.current = updated;
-                return updated;
-              });
+              latestMessagesRef.current = latestMessagesRef.current.map(m =>
+                m.id === assistantMsgId ? applyStreamDeltaToMessage(m, data, options, setCurrentExpression) : m
+              );
+
+              const isHeavyTransition = Boolean(data.action || data.observation || data.fileMetadata || data.generatedFile);
+              if (isHeavyTransition) {
+                streamScheduler.flushNow();
+              } else {
+                streamScheduler.schedule();
+              }
             }
           } catch (e) {
             console.warn('Failed to parse SSE line:', trimmedLine, e);
           }
         }
-        if (stopSignalReceived) break;
+        if (stopSignalReceived) {
+          streamScheduler.flushNow();
+          break;
+        }
       }
     } catch (error) {
        if (error.name === 'AbortError') {
          console.log('Generation aborted by user');
        } else {
          console.error('Chat error:', error);
-         // Optionally push an error message to chat
          setMessages(prev => [...prev, { role: 'assistant', parts: [{ type: 'text', content: `Error: ${error.message}` }], id: Date.now() }]);
        }
     } finally {
+      if (typeof streamScheduler !== 'undefined') {
+        streamScheduler.flushNow();
+        streamScheduler.cancel();
+      }
       setIsGenerating(false);
       const keepStoryGlassTasting = options.useStoryGlass && storyGlassTastingStarted;
-      if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
+      if (activityAnimation === 'thinking') {
+        setCurrentExpression('normal.png');
+        setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
+      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
         setCurrentExpression('ok.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       }
-      
-      // Resume dance if music mode is on
+
       if (isMusicPlaying && !keepStoryGlassTasting) {
         setTimeout(() => {
           setAnimationTrigger({ type: 'dance', loop: true, timestamp: Date.now() });
@@ -2089,7 +2125,7 @@ function App() {
   };
 
   const handleDeleteMessage = async (idx) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group) return;
@@ -2134,7 +2170,7 @@ function App() {
   };
 
   const handleEditMessage = async (idx) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group?.userMessage) return;
@@ -2185,8 +2221,12 @@ function App() {
       } else {
         updatedMsg = { ...msg, content: newText };
       }
-      
+
       nextMessages[idx] = updatedMsg;
+      // Editing any part of the request invalidates later measured snapshots.
+      for (let i = idx; i < nextMessages.length; i++) {
+        nextMessages[i] = { ...nextMessages[i], contextStatus: null };
+      }
       syncChatState(nextMessages);
     }
   };
@@ -2208,6 +2248,7 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let completed = false;
+    let shouldClearPending = false;
     let nextPendingRequest = pendingRequest;
     let storyGlassTastingStarted = false;
     const startStoryGlassTastingAnimation = () => {
@@ -2249,7 +2290,7 @@ function App() {
           uploadedFiles: files,
           chatId: activeChatId,
           assistantMsgId,
-          config,
+          config: { ...config, workspacePath: options.workspacePath ?? config.workspacePath ?? '' },
           resumeState,
           approvalDecision
         })
@@ -2270,7 +2311,10 @@ function App() {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          completed = true;
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -2291,8 +2335,23 @@ function App() {
           try {
             const data = JSON.parse(dataStr);
 
+            if (data.type === 'checkpoint' && data.checkpoint) {
+              setMessages(previous => {
+                const updated = attachCheckpoint(previous, data.checkpoint);
+                latestMessagesRef.current = updated;
+                return updated;
+              });
+              continue;
+            }
+
             if (data.contextStatus) {
               setContextStatus(data.contextStatus);
+              setMessages(previous => {
+                const updated = previous.map(item => item.id === assistantMsgId
+                  ? { ...item, contextStatus: data.contextStatus } : item);
+                latestMessagesRef.current = updated;
+                return updated;
+              });
               continue;
             }
 
@@ -2476,8 +2535,10 @@ function App() {
       }
     } catch (error) {
       if (error.name === 'AbortError') {
+        shouldClearPending = true;
         console.log('Generation aborted by user');
       } else {
+        shouldClearPending = true;
         console.error('Chat error:', error);
         setMessages(prevMsgs => {
           const newMsgs = prevMsgs.map(message => {
@@ -2505,7 +2566,10 @@ function App() {
     } finally {
       setIsGenerating(false);
       const keepStoryGlassTasting = options.useStoryGlass && storyGlassTastingStarted;
-      if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
+      if (activityAnimation === 'thinking') {
+        setCurrentExpression('normal.png');
+        setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
+      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
         setCurrentExpression('ok.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       }
@@ -2518,7 +2582,7 @@ function App() {
 
       setDeepReadingData(null);
       abortControllerRef.current = null;
-      const finalPendingRequest = completed ? null : nextPendingRequest;
+      const finalPendingRequest = completed || shouldClearPending ? null : nextPendingRequest;
       const durationMs = Date.now() - generationStartTime;
       setMessages(prevMsgs => {
         const newMsgs = prevMsgs.map(message => (
@@ -2536,15 +2600,15 @@ function App() {
             : message
         ));
         latestMessagesRef.current = newMsgs;
+        persistChatState(activeChatId, newMsgs, finalPendingRequest);
         return newMsgs;
       });
       setCurrentPendingRequest(finalPendingRequest);
-      persistChatState(activeChatId, latestMessagesRef.current, finalPendingRequest);
     }
   };
 
   const sendMessageWithContext = async ({ text, files = [], options = {}, baseMessages = null }) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     let activeChatId = currentChatId;
     if (!activeChatId) {
@@ -2554,6 +2618,7 @@ function App() {
 
     const historyBase = Array.isArray(baseMessages) ? baseMessages : (latestMessagesRef.current || []);
     const normalizedOptions = {
+      workspacePath: options.workspacePath ?? config.workspacePath ?? '',
       useSearch: Boolean(options.useSearch),
       useWeb: Boolean(options.useWeb),
       useMcp: Boolean(options.useMcp),
@@ -2599,6 +2664,36 @@ function App() {
       options: normalizedOptions,
       pendingRequest
     });
+  };
+
+  const handleRestoreCheckpoint = async (message) => {
+    if (!message?.checkpoint?.id || !currentChatId || isGenerating || checkpointRestoreRef.current) return false;
+    const chatId = currentChatId;
+    checkpointRestoreRef.current = true;
+    setRestoringCheckpointId(message.checkpoint.id);
+    try {
+      const result = await restoreCheckpoint(BACKEND_URL, chatId, message.checkpoint.id);
+      if (currentChatIdRef.current === chatId) {
+        setMessages(result.messages);
+        latestMessagesRef.current = result.messages;
+        setCurrentPendingRequest(null);
+        setDeepReadingData(null);
+        setContextStatus(calculateContextStatusFromMessages(result.messages, config));
+        setComposerPreset({
+          timestamp: Date.now(), text: result.userMessage.content || '',
+          files: result.userMessage.attachedFiles || [], options: result.userMessage.requestOptions || {},
+        });
+        setConfig(previous => ({ ...previous, workspacePath: result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath }));
+      }
+      refreshHistory();
+      return true;
+    } catch (error) {
+      window.alert(`${getLocalText('还原检查点失败', 'Could not restore checkpoint')}: ${error.message}`);
+      return false;
+    } finally {
+      checkpointRestoreRef.current = false;
+      setRestoringCheckpointId(null);
+    }
   };
 
   const handleSendMessage = async (text, files = [], options = {}) => {
@@ -2668,7 +2763,7 @@ function App() {
   };
 
   const handleRedoMessage = async (idx) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group?.userMessage) return;
@@ -2699,7 +2794,7 @@ function App() {
   };
 
   const handleContinuePendingChat = async (chatId) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
     if (!confirmLeaveActiveResearch()) return;
 
     try {
@@ -2757,8 +2852,46 @@ function App() {
     }
   };
 
+  const handleCancelPendingChat = async (chatId) => {
+    if (!chatId) return;
+
+    if (String(currentChatId) === String(chatId) && isGenerating) {
+      stopGeneration();
+      return;
+    }
+
+    try {
+      const res = await axios.get(`${BACKEND_URL}/api/history/${chatId}`);
+      const sessionMessages = Array.isArray(res.data.messages) ? res.data.messages : [];
+      const pendingRequest = res.data.pendingRequest || null;
+      const nextMessages = sessionMessages.map((message) => (
+        pendingRequest?.assistantMsgId
+          && String(message.id) === String(pendingRequest.assistantMsgId)
+          ? { ...message, status: message.status === 'error' ? 'error' : 'interrupted' }
+          : message
+      ));
+
+      await axios.post(`${BACKEND_URL}/api/history`, {
+        chatId,
+        messages: nextMessages,
+        pendingRequest: null,
+        clientSavedAt: Date.now()
+      });
+
+      if (String(currentChatId) === String(chatId)) {
+        setMessages(nextMessages);
+        latestMessagesRef.current = nextMessages;
+        setCurrentPendingRequest(null);
+        setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
+      }
+      refreshHistory();
+    } catch (error) {
+      console.error('Failed to stop pending chat:', error);
+    }
+  };
+
   const handleApprovalDecision = async (approved) => {
-    if (isGenerating) return;
+    if (isGenerating || checkpointRestoreRef.current) return;
 
     const pendingRequest = currentPendingRequest;
     const activeApprovalRequest = pendingRequest?.approvalRequest;
@@ -3031,6 +3164,7 @@ function App() {
       case 'files':
         return (
           <FileManagerModal
+            workspacePath={config.workspacePath || ''}
             isOpen={true}
             onClose={() => closeDesktopUtilityWindow('files')}
             onSelect={fileManagerMode === 'select' ? (file) => setSelectedWorkspaceFile(file) : null}
@@ -3071,24 +3205,33 @@ function App() {
   };
 
   return (
-    <div 
-      className="flex h-screen bg-[#f3f4f6] text-[#374151] font-sans overflow-hidden"
-      style={config.chatBackgroundImage ? {
-        backgroundImage: `url('${config.chatBackgroundImage}')`,
+    <Suspense fallback={null}>
+    <div
+      className="flex h-screen bg-[#f0f4f9] dark:bg-[#0b0c10] text-[#1d1d1f] dark:text-[#f5f5f7] font-sans overflow-hidden transition-colors duration-300 relative"
+      data-saki-background={getChatBackgroundSource(config, theme, isMobileViewport)}
+      style={{
+        backgroundImage: `url(${JSON.stringify(getChatBackgroundSource(config, theme, isMobileViewport))})`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundAttachment: 'fixed'
-      } : {}}
+      }}
     >
-      <Sidebar 
-        isOpen={isSidebarOpen} 
-        setOpen={setSidebarOpen} 
-        history={history} 
+      {/* Liquid Mesh Starry Backdrop */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+        <div className="absolute -top-[15%] -left-[10%] w-[55%] h-[55%] rounded-full bg-gradient-to-br from-[#ff75ac]/18 dark:from-[#ff75ac]/12 to-transparent blur-3xl opacity-75" />
+        <div className="absolute top-[20%] -right-[15%] w-[50%] h-[50%] rounded-full bg-gradient-to-bl from-[#af52de]/15 dark:from-[#7c3aed]/12 to-transparent blur-3xl opacity-60" />
+        <div className="absolute -bottom-[15%] left-[25%] w-[45%] h-[45%] rounded-full bg-gradient-to-tr from-[#34c759]/12 dark:from-[#3b82f6]/10 to-transparent blur-3xl opacity-50" />
+      </div>
+      <Sidebar
+        isOpen={isSidebarOpen}
+        setOpen={setSidebarOpen}
+        history={history}
         currentChatId={currentChatId}
-        onSelectChat={handleLoadChat} 
+        onSelectChat={handleLoadChat}
         onDeleteChat={handleDeleteChat}
         onNewChat={handleStartNewChat}
         onContinueChat={handleContinuePendingChat}
+        onCancelPendingChat={handleCancelPendingChat}
         onToggleGuide={toggleFeatureGuideModal}
         onToggleSettings={toggleSettingsModal}
         onToggleFileManager={() => toggleFileManagerModal('manage')}
@@ -3099,18 +3242,17 @@ function App() {
         activeUtilityKeys={activeUtilityKeys}
         isUtilityLayerActive={useDesktopUtilityWindows && desktopUtilityWindows.length > 0}
       />
-      <div className="flex-1 flex flex-col relative overflow-hidden bg-white/20 backdrop-blur-sm shadow-2xl">
-        {config.showParticles && <CherryBlossoms />}
-        <Header 
-          config={config} 
-          setConfig={setConfig} 
-          models={models}
-          toggleSidebar={() => setSidebarOpen(!isSidebarOpen)} 
+      <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-white/30 dark:bg-[#12131a]/40 shadow-2xl z-10 border-l border-white/20 dark:border-white/5">
+        {config.showParticles && window.__SAKI_RUNTIME__?.profile !== 'light' && <CherryBlossoms />}
+        <Header
+          toggleSidebar={() => setSidebarOpen(!isSidebarOpen)}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onExport={exportToImage}
           isMusicPlaying={isMusicPlaying}
           onToggleMusic={toggleMusicMode}
           hasMessages={messages.length > 0}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
         <AnimatePresence mode="wait">
           <motion.div
@@ -3121,12 +3263,16 @@ function App() {
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
             className="flex-1 flex flex-col min-h-0"
           >
-            <Chat 
-               messages={messages} 
-               onSend={handleSendMessage} 
+            <Chat
+               messages={messages}
+               onSend={handleSendMessage}
                isGenerating={isGenerating}
                onStop={stopGeneration}
+               onCancelPendingChat={handleCancelPendingChat}
+               currentChatId={currentChatId}
                onSkipAction={handleSkipAction}
+               onRestoreCheckpoint={handleRestoreCheckpoint}
+               restoringCheckpointId={restoringCheckpointId}
                backendUrl={BACKEND_URL}
                containerRef={chatContainerRef}
                config={config}
@@ -3151,17 +3297,19 @@ function App() {
                onStoryGlassOverlayOpenChange={setIsStoryGlassOverlayOpen}
                onAppendStoryGlassConversation={handleAppendStoryGlassConversation}
                onEnsureChat={ensureActiveChat}
+               models={models}
             />
           </motion.div>
         </AnimatePresence>
-        <AnimatePresence>
-          {useDesktopUtilityWindows && desktopUtilityWindows.length > 0 && (
-          <motion.div
-            key="desktop-utility-overlay"
-            {...tiledOverlayMotion}
-            className="fixed inset-0 z-[105] pointer-events-none"
-          >
-            <div className="absolute inset-0 bg-slate-950/18 backdrop-blur-[2px] pointer-events-auto" />
+      </div>
+      <AnimatePresence>
+        {useDesktopUtilityWindows && desktopUtilityWindows.length > 0 && (
+        <motion.div
+          key="desktop-utility-overlay"
+          {...tiledOverlayMotion}
+          className="fixed inset-0 z-[120] pointer-events-none"
+        >
+          <div className="absolute inset-0 bg-slate-950/25 dark:bg-black/50 backdrop-blur-[2px] pointer-events-auto" onClick={closeAllDesktopUtilityWindows} />
             {desktopUtilityWindows.length > 1 && (
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
@@ -3172,7 +3320,7 @@ function App() {
                 <button
                   type="button"
                   onClick={closeAllDesktopUtilityWindows}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/78 px-4 py-2 text-sm font-semibold text-slate-700 shadow-[0_20px_60px_rgba(15,23,42,0.18)] transition-colors hover:bg-white"
+                  className="inline-flex items-center gap-2 rounded-full border border-white/50 dark:border-white/10 bg-white/80 dark:bg-[#202230]/90 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-[0_20px_60px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.5)] transition-colors hover:bg-white dark:hover:bg-[#2a2d3e]"
                 >
                   <X size={15} />
                   <span>{getLocalText('全部关闭', 'Close all')}</span>
@@ -3201,7 +3349,7 @@ function App() {
                       zIndex: index + 1,
                     }}
                   >
-                    <div className="h-full w-full overflow-hidden rounded-[32px] border border-white/45 bg-white/60 shadow-[0_28px_90px_rgba(15,23,42,0.28)] backdrop-blur-xl">
+                    <div className="h-full w-full overflow-hidden rounded-[32px] border border-white/45 dark:border-white/10 bg-white/70 dark:bg-[#161822]/85 shadow-[0_28px_90px_rgba(15,23,42,0.28)] dark:shadow-[0_28px_90px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
                       <div
                         className="h-full w-full"
                         style={{
@@ -3252,6 +3400,7 @@ function App() {
           )}
           {!useDesktopUtilityWindows && isFileManagerOpen && (
             <FileManagerModal
+              workspacePath={config.workspacePath || ''}
               key="file-manager-modal"
               isOpen={true}
               onClose={() => setIsFileManagerOpen(false)}
@@ -3284,19 +3433,18 @@ function App() {
             />
           )}
         </AnimatePresence>
-      </div>
       {isCommandPaletteOpen && (
         <div
           className="fixed inset-0 z-[130] bg-slate-950/45 backdrop-blur-sm px-4 py-10"
           onClick={closeCommandPalette}
         >
           <div
-            className="mx-auto flex h-full max-h-[min(42rem,calc(100vh-5rem))] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] border border-white/20 bg-white/95 shadow-2xl"
+            className="mx-auto flex h-full max-h-[min(42rem,calc(100vh-5rem))] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] border border-white/40 dark:border-white/10 bg-white/95 dark:bg-[#161720]/95 shadow-2xl backdrop-blur-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="border-b border-gray-100 px-5 py-4">
-              <div className="flex items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
-                <Search size={18} className="text-gray-400" />
+            <div className="border-b border-gray-100 dark:border-white/10 px-4 py-2.5">
+              <div className="flex items-center gap-2.5 rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-black/20 px-3.5 py-2 shadow-sm">
+                <Search size={16} className="text-gray-400" />
                 <input
                   ref={commandPaletteInputRef}
                   value={commandPaletteQuery}
@@ -3306,9 +3454,9 @@ function App() {
                   }}
                   onKeyDown={handleCommandPaletteKeyDown}
                   placeholder={getLocalText('搜索对话或跳转到功能…', 'Search chats or jump to a feature...')}
-                  className="flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400"
+                  className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
                 />
-                <div className="hidden rounded-xl bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-500 sm:block">
+                <div className="hidden rounded-lg bg-gray-100 dark:bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-gray-500 dark:text-gray-400 sm:block">
                   {navigator.platform?.toLowerCase?.().includes('mac') ? 'Cmd K' : 'Ctrl K'}
                 </div>
               </div>
@@ -3330,10 +3478,10 @@ function App() {
                         onClick={() => handleCommandPaletteSelect(item)}
                         onMouseEnter={() => setCommandPaletteIndex(index)}
                         className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition-all ${
-                          isActive ? 'bg-blue-50 text-blue-700 shadow-sm' : 'hover:bg-gray-50 text-gray-700'
+                          isActive ? 'bg-[#ff75ac]/15 text-[#ff75ac] dark:text-[#ff9bc8] shadow-sm' : 'hover:bg-gray-50 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
                         }`}
                       >
-                        <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                        <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${isActive ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white' : 'bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400'}`}>
                           <Icon size={18} />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -3349,7 +3497,7 @@ function App() {
                             {item.description || item.external?.title || item.source || ''}
                           </div>
                         </div>
-                        <ChevronRight size={16} className={isActive ? 'text-blue-500' : 'text-gray-300'} />
+                        <ChevronRight size={16} className={isActive ? 'text-[#ff75ac]' : 'text-gray-300 dark:text-gray-600'} />
                       </button>
                     );
                   })}
@@ -3359,7 +3507,7 @@ function App() {
           </div>
         </div>
       )}
-      <CharacterView 
+      <CharacterView lowResourceMode={window.__SAKI_RUNTIME__?.profile === 'light' || window.__SAKI_RUNTIME__?.animations === false}
         currentExpression={currentExpression}
         isOpen={isCharacterViewOpen}
         setIsOpen={setCharacterViewOpen}
@@ -3376,14 +3524,14 @@ function App() {
       />
       {approvalRequest && !isGenerating && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 px-4">
-          <div className="w-full max-w-xl rounded-3xl border border-white/20 bg-white/95 p-6 shadow-2xl backdrop-blur-xl">
+          <div className="w-full max-w-xl rounded-3xl border border-white/20 dark:border-white/10 bg-white/95 dark:bg-[#161822]/95 p-6 shadow-2xl backdrop-blur-xl text-gray-900 dark:text-gray-100">
             <div className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-600">
               {getLocalText('敏感操作确认', 'Sensitive Action')}
             </div>
-            <h2 className="mt-2 text-xl font-bold text-gray-900">
+            <h2 className="mt-2 text-xl font-bold text-gray-900 dark:text-white">
               {getLocalText('需要你的确认', 'Approval required')}
             </h2>
-            <p className="mt-2 text-sm leading-6 text-gray-600">
+            <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
               {getLocalText(
                 '当前处于默认权限。下面这项敏感操作只有在你确认后才会继续执行。',
                 'Default permission is active. This sensitive action will continue only after you approve it.'
@@ -3391,11 +3539,11 @@ function App() {
             </p>
 
             <div className="mt-5 space-y-3">
-              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+              <div className="rounded-2xl bg-gray-50 dark:bg-white/5 px-4 py-3">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
                   {getLocalText('工具', 'Tool')}
                 </div>
-                <div className="mt-1 text-sm font-semibold text-gray-900">
+                <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
                   {approvalRequest.toolName || 'unknown'}
                 </div>
               </div>
@@ -3404,7 +3552,7 @@ function App() {
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
                   {getLocalText('原因', 'Reason')}
                 </div>
-                <div className="mt-1 text-sm leading-6 text-gray-700">
+                <div className="mt-1 text-sm leading-6 text-gray-700 dark:text-gray-200">
                   {getApprovalReasonText(approvalRequest)}
                 </div>
               </div>
@@ -3437,6 +3585,7 @@ function App() {
         </div>
       )}
     </div>
+    </Suspense>
   );
 }
 

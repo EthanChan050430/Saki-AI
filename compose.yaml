@@ -1,0 +1,27 @@
+services:
+  saki:
+    build: .
+    image: saki-ai:light
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SAKI_PORT:-5480}:5480"
+    environment:
+      SAKI_PROFILE: light
+      SAKI_EMBEDDINGS: keyword
+      SAKI_CRAWLER: static
+      QQBOT_AUTO_CONNECT: "0"
+      NODE_OPTIONS: "--max-old-space-size=${SAKI_HEAP_MB:-384}"
+    volumes:
+      - saki-data:/app/data
+    mem_limit: ${SAKI_MEMORY_LIMIT:-768m}
+    cpus: ${SAKI_CPUS:-1.0}
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  saki-data:

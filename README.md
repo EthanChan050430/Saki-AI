@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Node.js](https://img.shields.io/badge/Node.js-v18.0%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-v22.12%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![React](https://img.shields.io/badge/React-18.2-61DAFB?logo=react&logoColor=black)](https://reactjs.org/)
 [![Vite](https://img.shields.io/badge/Vite-5.0-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38B2AC?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
@@ -17,7 +17,7 @@
 
 </div>
 
-Saki AI Agent is a **Local AI Agent, Desktop Application, and Windows AI Assistant** designed for Chinese users, emphasizing ease of use. It focuses on **Low-barrier Deployment, Low Token Cost, Low Resource Usage, and Enhanced Security by Default**: The application core can be deployed with just `2 hCPU / 200 MB`, delivers good results with small `8B-12B` local models, recommends the local model `glm-4.7-flash`, and provides **Sandboxed Execution, Sensitive Action Approval, and File Versioning**.
+Saki AI Agent is a **Local AI Agent, Desktop Application, and Windows AI Assistant** designed for Chinese users, emphasizing ease of use. It focuses on **Low-barrier Deployment, Low Token Cost, Low Resource Usage, and Enhanced Security by Default**: The application core supports a lightweight single-service deployment, delivers good results with small `8B-12B` local models, recommends the local model `glm-4.7-flash`, and provides **Sandboxed Execution, Sensitive Action Approval, and File Versioning**.
 
 > **Keywords**: Local AI Agent, OpenClaw Alternative, Ollama, Windows AI Assistant, Desktop AI Workspace, Low-resource Deployment, Sandbox, Security, File Versioning
 
@@ -88,14 +88,13 @@ Saki's goal is not to negate OpenClaw, but to <span style="color: #ff6f61; font-
 
 ---
 
-## 🏆 Core Advantages: 2 hCPU / 200 MB, 8B-12B Local Models, Security Sandbox
+## 🏆 Core Advantages: Lightweight Deployment, Small Models, Security Sandbox
 
 ### 1. Lightweight Deployment
 
-Saki's **application core** is lightweight. For basic Web/API services, it can be deployed with as little as `2 hCPU` and `200 MB` of RAM.  
-This means you don't need to prepare a "heavy-duty AI server" first to get the desktop Agent system up and running.
+Saki's production mode serves the UI and API from one backend service on port `5480`, without a persistent Vite server. Local embeddings and browser rendering are optional; light releases omit approximately 437 MiB of animation frames. Build on a workstation and copy a prepared release to a small server.
 
-> **Note**: The `2 hCPU / 200 MB` mentioned here refers to the resource consumption of this project's own application services; if you also need to run Ollama, Stable Diffusion, GPT-SoVITS, or other model services on the same machine, those models will require additional CPU/RAM/VRAM.
+See the [low-resource deployment guide](docs/deployment.md) for setup, measured idle usage, feature tradeoffs and Docker configuration. Model inference and task peaks require additional resources.
 
 ### 2. Small Models Can Deliver
 
@@ -110,6 +109,14 @@ In practical use, small `8B-12B` models can cover a wide range of local assistan
 
 The currently recommended local model path for this project is **`glm-4.7-flash`**.  
 It offers a good balance between Chinese comprehension, speed, cost-effectiveness, and daily usability, making it suitable for long-term local deployment. It also helps address the common OpenClaw issue of "heavy reliance on cloud models leading to ever-increasing token costs."
+
+### Conversation checkpoints
+
+Hover over a conversation turn to reveal **Restore checkpoint**. New turns save a file snapshot before the agent starts. Restoring rewinds that user message and every later message, puts the original prompt and attachments back into the composer, and restores the affected workspaces. Snapshots include terminal edits, deletions, renames, new files, binary files, hidden files, and dependency files; they do not rely on Git or on the agent's file-edit tools.
+
+Checkpoint scope excludes `.git` metadata, application session/history storage, and the checkpoint store itself. Files outside the selected workspaces, external services, and running processes are not rewound. Symlink targets outside a workspace are not followed. Messages created before this feature have no recoverable terminal snapshot.
+
+Backups use deduplicated local content under `~/.saki-ai/checkpoints`. Set `CHECKPOINT_STORE_DIR` to change that location. The default per-snapshot limits are 100,000 entries and 2 GiB; `CHECKPOINT_MAX_FILES` and `CHECKPOINT_MAX_BYTES` override them. If a complete snapshot cannot be saved, the task stops before agent actions. Restoration requires the local agent authentication token, refuses busy workspaces, and keeps recovery snapshots while restoring files and conversation state.
 
 ### 3. Higher Security Defaults
 
@@ -179,10 +186,10 @@ Drag and drop files directly into the chat to start a conversation. The underlyi
 ### ⚡ Agent Performance Core
 *   **Prompt Cache Friendly Context**: Removed dynamic metrics from prompt headers to ensure 100% static prompt prefixes, enabling downstream LLMs to trigger prompt caching for faster TTFT and reduced costs.
 *   **Speculative Parallel Tool Execution**: Pre-fetches slow network operations (`search`, `browse`) in parallel before entering the serial tool matching loop, maximizing execution efficiency.
-*   **Asynchronous Embedding Pre-warming**: Initializes xenova transformers feature-extraction pipeline in the background during server boot, eliminating multi-second first-run vector search latency.
+*   **On-demand Embeddings**: Light deployments use keyword memory search without a local model. Standard deployments load the optional embedding pipeline only when needed; prewarming requires explicit configuration.
 
 ### 🚀 Hybrid-Powered Crawler Engine
-Built-in dual-mode crawler based on **Puppeteer** and **Cheerio**. Employs a shared persistent browser instance using the singleton pattern; new crawls open and close separate Page instances instead of launching/stopping Chromium each time, saving **1-3 seconds of process spin-up overhead**.
+Built-in dual-mode crawler based on **Puppeteer** and **Cheerio**. Light deployments use HTTP extraction. Optional browser rendering reuses a shared browser, closes pages after each crawl, and shuts the browser down after 60 seconds of inactivity.
 
 ### 📄 Deep Parsing for All Document Formats
 Integrated professional-grade parsing chain covering PDF, modern Office (`.docx`, `.xlsx`, `.pptx`), and legacy Word (`.doc`). Employs multi-layer text extraction technology to restore complex document structures.
@@ -205,31 +212,23 @@ Uses the LightMem solution, striking a balance between "effectiveness" and "effi
 
 ### Prerequisites
 *   **OS**: Windows 10/11 (Recommended), macOS, Linux
-*   **Runtime**: [Node.js](https://nodejs.org/) (v18 or higher)
+*   **Runtime**: [Node.js](https://nodejs.org/) (v22.12 or higher)
 
-> **Lightweight Deployment Note**: Saki's Web/API service core can be deployed with as little as `2 hCPU` and `200 MB` RAM. Additional resources are required if running Ollama, Stable Diffusion, GPT-SoVITS, or other model services on the same machine, per those services' requirements.
+> **Low-resource deployment**: [Detailed guide / 低资源部署指南](docs/deployment.md). Production starts one Web/API service in the light profile. Build requirements and model inference usage are separate from idle service usage.
 
 ### 1. Windows Startup
-For both initial installation and daily use, you only need to do this:
 
-1.  Find the **`start.bat`** file in the project root directory.
-2.  **Double-click to run**.
-    *   The script will automatically check the environment.
-    *   Automatically installs frontend (`frontend/`) and backend (`backend/`) dependencies.
-    *   Automatically starts both the Web and API services simultaneously.
-3.  Open your browser to `http://localhost:5482`.
+Double-click **start.bat**, or run **npm start** in the project root. The first source checkout startup installs dependencies and builds the frontend once. Subsequent launches reuse the prepared frontend and installed dependencies.
 
-> To access from other devices on the LAN or public internet, use `http://<Your-IP-Address>:5482` and ensure port 5482 is allowed through the firewall.
+Open **http://127.0.0.1:5480** (HTTPS if local certificates are configured). Local model services and QQ Bot do not start automatically. For LAN access set **AGENT_HOST=0.0.0.0** in the root .env file and use port 5480.
+
+For small machines, build elsewhere with **npm run release:prepare**, copy the generated release directory to the target, then run **node scripts/launch.cjs** there. The target installs only backend production dependencies; no frontend build is required.
 
 ### 2. macOS/Linux Startup
-1.  Open a terminal, navigate to the project root directory.
-2.  Run the following commands:
-    bash
-    chmod +x deploy.sh
-    ./deploy.sh
 
+Run **node scripts/launch.cjs** in the root directory, or use **bash deploy.sh start** to run in the background. **bash deploy.sh status**, **logs**, **stop**, and **restart** manage the service. Failed installation or startup returns an error instead of silently continuing.
 
-> The first run for dependency installation may take a few minutes. Please do not close the window before seeing "Services stopped."
+Use **npm run dev** only for development with Vite hot reload (port 5482).
 
 ### 3. Windows Configuration Wizard
 If you want to step-by-step configure models, search, image generation, TTS, QQBot, and Windows auto-start policies, you can run:
@@ -345,7 +344,7 @@ This project uses a modern frontend-backend separated architecture with a clear 
 ## ❓ Frequently Asked Questions (FAQ)
 
 **Q: Why can't the browser connect after startup?**  
-A: Check the terminal window for errors. It's often because ports 5480 (backend) or 5482 (frontend) are occupied, or the firewall is blocking them. Try closing other processes or opening the firewall ports and try again.
+A: Check the terminal window for errors. Production uses port 5480 for both UI and API; development uses 5482 for Vite. Check for port conflicts and firewall rules, and use HTTPS if local certificates are configured.
 
 **Q: How do I switch models?**  
 A: After configuring the corresponding model service, available models will automatically appear in the top selector. Select and save, Saki will switch automatically. If you have multiple cloud API keys configured, you can enable "Show all enabled API models" in the settings, and the top list will display models from all enabled channels.

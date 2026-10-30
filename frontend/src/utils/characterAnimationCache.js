@@ -237,7 +237,10 @@ export const releaseAllAnimationPlaybackFrames = () => {
   });
 };
 
-export const schedulePersistentAnimationWarmup = () => {
+// 高频默认动作，仅预热轻量高频动作，避免全量下载数百兆序列帧拖垮网络与内存
+const ESSENTIAL_WARMUP_ANIMATIONS = ['idle_breath', 'hello'];
+
+export const schedulePersistentAnimationWarmup = (types = ESSENTIAL_WARMUP_ANIMATIONS) => {
   if (warmupScheduled || !canUsePersistentCache()) {
     return;
   }
@@ -252,9 +255,10 @@ export const schedulePersistentAnimationWarmup = () => {
       }
 
       let cacheState = readCacheState();
+      const targetTypes = Array.isArray(types) && types.length > 0 ? types : ESSENTIAL_WARMUP_ANIMATIONS;
 
-      for (const type of Object.keys(ANIMATION_FRAME_MANIFEST)) {
-        if (isAnimationPersisted(cacheState, type)) {
+      for (const type of targetTypes) {
+        if (!ANIMATION_FRAME_MANIFEST[type] || isAnimationPersisted(cacheState, type)) {
           continue;
         }
 

@@ -5,7 +5,7 @@ import { X, CheckCircle2, Circle, Loader2, FileText, Download, Presentation, Lay
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import html2canvas from 'html2canvas';
+const html2canvas = async (...args) => (await import('html2canvas')).default(...args);
 import { BACKEND_URL } from '../utils/backendUrl';
 const PPT_CAPTURE_STYLE = `
   .ppt-capture-surface {
@@ -1015,26 +1015,26 @@ export default function PPTView({ data, isEmbedded = true }) {
   if (isPreviewMode && finalHtml) {
     const previewView = (focusMode = false) => (
       <div className={`flex flex-col overflow-hidden bg-white shadow-2xl animate-in fade-in zoom-in duration-300 ${focusMode ? 'h-full rounded-[2rem]' : 'h-[600px] rounded-2xl border'}`}>
-        <div className="p-4 border-b flex items-center justify-between bg-gradient-to-r from-orange-50 to-white">
+        <div className="px-4 py-2.5 border-b flex items-center justify-between bg-gradient-to-r from-orange-50 to-white shrink-0">
           <div className="flex items-center gap-2">
-            <Presentation size={20} className="text-orange-600" />
-            <span className="font-bold text-gray-800">{pptTitle} - 预览</span>
+            <Presentation size={17} className="text-orange-600" />
+            <span className="text-sm font-bold text-gray-800">{pptTitle} - 预览</span>
           </div>
           <div className="flex items-center gap-2">
             {renderFocusButton(focusMode)}
             <button
               onClick={downloadEditablePptx}
               disabled={editableDownloading || downloading}
-              className={`flex items-center gap-2 px-3 py-1.5 bg-white text-orange-700 border border-orange-200 rounded-lg text-xs font-bold hover:bg-orange-50 transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 px-2.5 py-1 bg-white text-orange-700 border border-orange-200 rounded-lg text-xs font-bold hover:bg-orange-50 transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {editableDownloading ? (
                 <>
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2 size={13} className="animate-spin" />
                   正在生成可编辑版...
                 </>
               ) : (
                 <>
-                  <FileText size={14} />
+                  <FileText size={13} />
                   下载可编辑 PPTX
                 </>
               )}
@@ -1042,25 +1042,25 @@ export default function PPTView({ data, isEmbedded = true }) {
             <button
               onClick={downloadPptx}
               disabled={downloading || editableDownloading}
-              className={`flex items-center gap-2 px-3 py-1.5 bg-orange-600 text-white rounded-lg text-xs font-bold hover:bg-orange-700 transition-all shadow-md active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 px-2.5 py-1 bg-orange-600 text-white rounded-lg text-xs font-bold hover:bg-orange-700 transition-all shadow-md active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {downloading ? (
                 <>
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2 size={13} className="animate-spin" />
                   正在导出...
                 </>
               ) : (
                 <>
-                  <Download size={14} />
+                  <Download size={13} />
                   下载 PPTX
                 </>
               )}
             </button>
             <button
               onClick={() => setIsPreviewMode(false)}
-              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+              className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
             >
-              <X size={20} />
+              <X size={16} />
             </button>
           </div>
         </div>
@@ -1111,39 +1111,39 @@ export default function PPTView({ data, isEmbedded = true }) {
       <div className="absolute right-4 top-4 z-10">
         {renderFocusButton(false)}
       </div>
-      <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
+      <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-gray-100">
         <div className="flex items-center gap-2">
-          <div className="p-2 bg-orange-100 rounded-lg">
-            <Presentation size={18} className="text-orange-600" />
+          <div className="p-1.5 bg-orange-100 rounded-lg">
+            <Presentation size={16} className="text-orange-600" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-gray-800">{pptTitle}</h3>
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">{status === 'completed' ? '已完成' : '智能生成中...'}</p>
+            <h3 className="text-sm font-bold text-gray-800 leading-tight">{pptTitle}</h3>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold leading-tight mt-0.5">{status === 'completed' ? '已完成' : '智能生成中...'}</p>
           </div>
         </div>
         {status === 'completed' && (
           <div className="flex gap-2">
             <button
               onClick={() => setIsPreviewMode(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold transition-all"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold transition-all"
             >
-              <Monitor size={14} />
+              <Monitor size={13} />
               全屏预览
             </button>
             <button
               onClick={downloadEditablePptx}
               disabled={editableDownloading || downloading}
-              className={`flex items-center gap-1.5 px-3 py-1.5 bg-white border border-orange-200 hover:bg-orange-50 text-orange-700 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 px-2.5 py-1 bg-white border border-orange-200 hover:bg-orange-50 text-orange-700 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              {editableDownloading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+              {editableDownloading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
               {editableDownloading ? '正在生成可编辑版...' : '下载可编辑 PPTX'}
             </button>
             <button
               onClick={downloadPptx}
               disabled={downloading || editableDownloading}
-              className={`flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 px-2.5 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
               {downloading ? '正在导出...' : '下载 PPTX'}
             </button>
           </div>
@@ -1152,22 +1152,22 @@ export default function PPTView({ data, isEmbedded = true }) {
 
       <div className="flex flex-col h-full overflow-hidden">
         {/* Step Navigation */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-4 mb-4 scrollbar-hide border-b border-gray-50">
+        <div className="flex items-center gap-1 overflow-x-auto pb-2.5 mb-3 scrollbar-hide border-b border-gray-50">
           {steps.map((step, idx) => (
             <button
               key={idx}
               onClick={() => setActiveStepIndex(idx)}
-              className={`flex flex-col items-center min-w-[80px] p-2 rounded-xl transition-all relative ${activeStepIndex === idx ? 'bg-orange-50 ring-1 ring-orange-200' : 'hover:bg-gray-50'}`}
+              className={`flex flex-col items-center min-w-[72px] p-1.5 rounded-xl transition-all relative ${activeStepIndex === idx ? 'bg-orange-50 ring-1 ring-orange-200' : 'hover:bg-gray-50'}`}
             >
-              <div className={`mb-1.5 ${activeStepIndex === idx ? 'text-orange-600' : 'text-gray-400'}`}>
-                {step.status === 'completed' ? <CheckCircle2 size={16} className="text-green-500" /> :
-                  step.status === 'running' ? <Loader2 size={16} className="animate-spin text-orange-500" /> :
-                    <Circle size={16} />}
+              <div className={`mb-1 ${activeStepIndex === idx ? 'text-orange-600' : 'text-gray-400'}`}>
+                {step.status === 'completed' ? <CheckCircle2 size={14} className="text-green-500" /> :
+                  step.status === 'running' ? <Loader2 size={14} className="animate-spin text-orange-500" /> :
+                    <Circle size={14} />}
               </div>
               <span className={`text-[9px] font-bold text-center line-clamp-1 ${activeStepIndex === idx ? 'text-orange-700' : 'text-gray-500'}`}>
                 {step.title}
               </span>
-              {activeStepIndex === idx && <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-orange-500 rounded-full" />}
+              {activeStepIndex === idx && <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-orange-500 rounded-full" />}
             </button>
           ))}
         </div>
@@ -1206,7 +1206,7 @@ export default function PPTView({ data, isEmbedded = true }) {
                 className={`flex-1 flex flex-col bg-white rounded-xl border border-gray-100 overflow-hidden shadow-inner ${!activeStep?.thinking ? 'w-full' : ''}`}
                 style={{ maxHeight: '540px' }}
               >
-                <div className="px-4 py-2 border-b border-gray-50 bg-gray-50/50 flex items-center justify-between">
+                <div className="px-3.5 py-1.5 border-b border-gray-50 bg-gray-50/50 flex items-center justify-between">
                   <span className="text-[10px] font-bold text-gray-400 uppercase">{t('slide_preview', { page: activeStepIndex + 1 })}</span>
                   <div className="flex gap-1">
                     {[1, 2, 3].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-gray-200" />)}

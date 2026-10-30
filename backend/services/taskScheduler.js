@@ -1,7 +1,8 @@
 const fs = require('fs-extra');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, '../../data');
+const DATA_DIR = require('./runtime').runtime.dataDir;
+fs.ensureDirSync(DATA_DIR);
 const TASKS_FILE = path.join(DATA_DIR, 'hosted_tasks.json');
 
 // Ensure tasks file exists
@@ -20,6 +21,16 @@ class TaskScheduler {
             await fs.ensureFile(TASKS_FILE);
             const content = await fs.readJson(TASKS_FILE).catch(() => []);
             this.tasks = Array.isArray(content) ? content : [];
+            const staleBefore = Date.now() - 15 * 60 * 1000;
+            let recovered = false;
+            this.tasks.forEach(task => {
+                if (task.status === 'running' && (!task.claimedAt || task.claimedAt < staleBefore)) {
+                    task.status = 'active';
+                    task.claimedAt = null;
+                    recovered = true;
+                }
+            });
+            if (recovered) await this.saveTasks();
         } catch (e) {
             console.error('Error loading hosted tasks:', e);
             this.tasks = [];
@@ -98,6 +109,7 @@ class TaskScheduler {
         if (task) {
             task.lastRun = Date.now();
             task.triggerNow = false;
+            task.claimedAt = null;
             task.status = 'active'; // Reset from 'running' state
 
             // If time was 'now', convert it to current time so it becomes a regular schedule
@@ -127,6 +139,7 @@ class TaskScheduler {
         const task = this.tasks.find(t => t.id === id);
         if (task) {
             task.status = status;
+            task.claimedAt = status === 'running' ? Date.now() : null;
             await this.saveTasks();
         }
     }
@@ -134,9 +147,17 @@ class TaskScheduler {
     getDueTasks() {
         const now = new Date();
         const dueTasks = [];
+        const calendarDay = value => {
+            const date = value instanceof Date ? value : new Date(value);
+            return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        };
+        const calendarMonth = value => {
+            const date = value instanceof Date ? value : new Date(value);
+            return `${date.getFullYear()}-${date.getMonth()}`;
+        };
 
         this.tasks.forEach(task => {
-            if (task.status !== 'active' && !task.triggerNow) return;
+            if (task.status !== 'active') return;
 
             let isDue = false;
             
@@ -157,7 +178,7 @@ class TaskScheduler {
                     } else if (task.scheduleType === 'daily') {
                         const [h, m] = task.time.split(':').map(Number);
                         if (now.getHours() === h && now.getMinutes() === m) {
-                            if (!lastRun || lastRun.getDate() !== now.getDate()) {
+                            if (!lastRun || calendarDay(lastRun) !== calendarDay(now)) {
                                 isDue = true;
                             }
                         }
@@ -165,7 +186,7 @@ class TaskScheduler {
                         const [d, timeStr] = task.time.split(' ');
                         const [h, m] = timeStr.split(':').map(Number);
                         if (now.getDay() === Number(d) && now.getHours() === h && now.getMinutes() === m) {
-                            if (!lastRun || lastRun.getDate() !== now.getDate()) {
+                            if (!lastRun || calendarDay(lastRun) !== calendarDay(now)) {
                                 isDue = true;
                             }
                         }
@@ -173,7 +194,7 @@ class TaskScheduler {
                         const [date, timeStr] = task.time.split(' ');
                         const [h, m] = timeStr.split(':').map(Number);
                         if (now.getDate() === Number(date) && now.getHours() === h && now.getMinutes() === m) {
-                            if (!lastRun || lastRun.getDate() !== now.getDate()) {
+                            if (!lastRun || calendarMonth(lastRun) !== calendarMonth(now)) {
                                 isDue = true;
                             }
                         }
@@ -184,10 +205,18 @@ class TaskScheduler {
             }
 
             if (isDue) {
+                task.status = 'running';
+                task.triggerNow = false;
+                task.claimedAt = Date.now();
                 dueTasks.push(task);
             }
         });
 
+        if (dueTasks.length > 0) {
+            this.saveTasks().catch(error => {
+                console.error('Error claiming scheduled tasks:', error);
+            });
+        }
         return dueTasks;
     }
 }

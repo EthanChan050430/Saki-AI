@@ -6,6 +6,12 @@ export const API_CHAT_PROVIDERS = [
     apiKeyField: 'openaiApiKey',
   },
   {
+    id: 'nvidia',
+    name: 'NVIDIA',
+    sub: 'NVIDIA NIM',
+    apiKeyField: 'nvidiaApiKey',
+  },
+  {
     id: 'deepseek',
     name: 'Deepseek',
     sub: '深度求索',

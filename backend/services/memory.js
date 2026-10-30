@@ -674,10 +674,10 @@ function scoreQuery(memory, query = '') {
 }
 
 class MemoryService {
-    constructor({ dataDir, memoriesDir }) {
+    constructor({ dataDir, memoriesDir, workspaceDir, embeddingMode = process.env.SAKI_EMBEDDINGS || 'lazy' }) {
         this.dataDir = dataDir;
         this.memoriesDir = memoriesDir;
-        this.workspaceDir = path.resolve(dataDir, '..');
+        this.workspaceDir = workspaceDir || path.resolve(dataDir, '..');
         this.storePath = path.join(dataDir, 'memory_store.json');
         this.vectorStorePath = path.join(dataDir, 'memory_vectors.json');
         this.shortTermPath = path.join(dataDir, 'memory_short_term.json');
@@ -695,7 +695,8 @@ class MemoryService {
         this.embeddingModelName = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
         this.embeddingExtractor = null;
         this.embeddingExtractorPromise = null;
-        this.embeddingDisabled = false;
+        this.embeddingMode = embeddingMode;
+        this.embeddingDisabled = embeddingMode === 'keyword';
         this.initialized = false;
     }
 
@@ -720,7 +721,7 @@ class MemoryService {
         await this.importLegacyTxtMemories();
         
         // Pre-warm the embedding model asynchronously in the background so it is ready
-        this.getEmbeddingExtractor().catch(err => {
+        if (this.embeddingMode === 'warm') this.getEmbeddingExtractor().catch(err => {
             console.warn('[Memory] Failed to pre-warm embedding model:', err.message);
         });
 

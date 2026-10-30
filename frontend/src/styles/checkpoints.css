@@ -1,0 +1,12 @@
+.saki-chat-message { min-width: 0; }
+.saki-checkpoint-boundary { display: flex; align-items: center; gap: 13px; min-height: 27px; margin: 0 0 16px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
+.saki-checkpoint-boundary.is-visible, .saki-checkpoint-boundary:focus-within { opacity: 1; pointer-events: auto; }
+.saki-checkpoint-rule { height: 1px; flex: 1; min-width: 12px; background: var(--control-border); opacity: .8; }
+.saki-checkpoint-button { display: inline-flex; align-items: center; justify-content: center; gap: 12px; flex-shrink: 0; padding: 4px 7px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; line-height: 1.5; border-radius: 5px; cursor: pointer; }
+.saki-checkpoint-button:hover { color: var(--text-dark); background: var(--surface-bg-light); }
+.saki-checkpoint-button:disabled { cursor: not-allowed; opacity: .55; }
+.saki-checkpoint-dot { color: var(--text-tertiary); }
+.saki-checkpoint-spinner { animation: saki-checkpoint-spin 1s linear infinite; }
+@keyframes saki-checkpoint-spin { to { transform: rotate(360deg); } }
+@media (hover: none) { .saki-checkpoint-boundary { opacity: 1; pointer-events: auto; } }
+@media (prefers-reduced-motion: reduce) { .saki-checkpoint-boundary { transition: none; } .saki-checkpoint-spinner { animation: none; } }

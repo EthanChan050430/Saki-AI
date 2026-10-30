@@ -238,7 +238,7 @@ class OfflineReflectionService {
         this.memoryService = memoryService;
         this.emitEvent = emitEvent;
         this.statePath = path.join(this.dataDir, 'offline_reflection_state.json');
-        this.reflectionDir = path.join(path.resolve(this.dataDir, '..'), 'memory', 'offline-reflections');
+        this.reflectionDir = path.join(memoryService?.workspaceDir || path.resolve(this.dataDir, '..'), 'memory', 'offline-reflections');
         this.running = false;
     }
 
