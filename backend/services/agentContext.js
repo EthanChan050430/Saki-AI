@@ -13,7 +13,18 @@ function preview(text = '', limit = 700) {
 }
 
 function summarizeMessage(message) {
-    if (!Array.isArray(message.parts)) return preview(message.content, 900);
+    if (!Array.isArray(message.parts)) {
+        const content = Array.isArray(message.content)
+            ? message.content.map(block => {
+                if (block.type === 'text') return block.text;
+                if (block.type === 'tool_use') return `tool_use id=${block.id} tool=${block.name} input=${JSON.stringify(block.input)}`;
+                if (block.type === 'tool_result') return `tool_result id=${block.tool_use_id}${block.is_error ? ' is_error=true' : ''} content=${JSON.stringify(block.content)}`;
+                return JSON.stringify(block);
+            }).join(' | ')
+            : typeof message.content === 'object' ? JSON.stringify(message.content) : message.content;
+        const calls = (message.tool_calls || []).map(call => `tool_call id=${call.id} tool=${call.function?.name || call.name} args=${typeof call.function?.arguments === 'string' ? call.function.arguments : JSON.stringify(call.function?.arguments || call.arguments)}`);
+        return preview([message.tool_call_id ? `tool_result id=${message.tool_call_id}` : '', content, ...calls].filter(Boolean).join(' | '), 900);
+    }
     return message.parts.filter(part => part.type !== 'reasoning').map(part => {
         if (part.type !== 'action') return preview(part.content, 600);
         const metadata = part.fileMetadata || {};
@@ -69,6 +80,29 @@ function truncateToolObservation(observation, { toolName = '', args = [], maxCha
     return text.slice(0, head) + marker + (tail > 0 ? text.slice(-tail) : '');
 }
 
+function isToolResultMessage(message) {
+    if (message?.role === 'tool') return true;
+    return message?.role === 'user' && Array.isArray(message.content)
+        && message.content.some(block => block?.type === 'tool_result');
+}
+
+function isToolCallMessage(message) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+    return message?.role === 'assistant' && Array.isArray(message.content)
+        && message.content.some(block => block?.type === 'tool_use');
+}
+
+// Never keep a tool result whose call was summarized, or a call whose result was summarized.
+function alignCompactionSuffix(candidates, keep) {
+    let start = Math.max(0, candidates.length - keep);
+    while (start > 0 && isToolResultMessage(candidates[start])) start -= 1;
+    if (isToolCallMessage(candidates[start]) && !isToolResultMessage(candidates[start + 1])) {
+        start = Math.min(candidates.length, start + 2);
+    }
+    while (start < candidates.length && isToolResultMessage(candidates[start])) start += 1;
+    return start;
+}
+
 function compactLoopMessages(messages, { systemText = '', budgetTokens = 32000, currentTask = '' } = {}) {
     const count = list => estimateTokenCount(systemText) + list.reduce((sum, message) => sum + estimateTokenCount(JSON.stringify(message)), 0);
     const before = count(messages);
@@ -84,8 +118,9 @@ function compactLoopMessages(messages, { systemText = '', budgetTokens = 32000, 
     let keep = Math.min(6, Math.max(2, candidates.length - 1));
     let result;
     while (true) {
-        const older = candidates.slice(0, -keep);
-        const recent = candidates.slice(-keep);
+        const suffixStart = alignCompactionSuffix(candidates, keep);
+        const older = candidates.slice(0, suffixStart);
+        const recent = candidates.slice(suffixStart);
         const summary = buildBackgroundDigest({
             olderMessages: older, currentTask, maxChars: Math.max(1000, Math.min(12000, Math.floor(budgetTokens * 0.3))),
         });

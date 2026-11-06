@@ -27,6 +27,8 @@ const BUILTIN_TOOLS = [
     ['inspectOpenHubSkill', ['slug'], 'Inspect a remote skill before installing.'],
     ['readSkill', ['name'], 'Read a skill by display name, key, slug, or title fragment.'],
     ['installSkill', ['sourceType', 'sourceOrName', 'content'], 'Install a skill from openhub, git, local, or manual. Manual uses a name and content.'],
+    ['listPlugins', [], 'List installed plugins with their status, bundled skills and MCP capabilities.'],
+    ['getPluginDetails', ['pluginId'], 'Get detailed information about an installed plugin.'],
     ['listMemories', [], 'List durable memories.', undefined, 'memory'],
     ['searchMemories', ['query'], 'Search durable memories.', 'query', 'memory'],
     ['readMemory', ['filename'], 'Read a complete memory.', undefined, 'memory'],

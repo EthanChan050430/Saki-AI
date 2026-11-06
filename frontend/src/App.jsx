@@ -9,14 +9,16 @@ const ThirdPartyChatModal = React.lazy(() => import('./components/ThirdPartyChat
 const FileManagerModal = React.lazy(() => import('./components/FileManagerModal'));
 const MemoryManagerModal = React.lazy(() => import('./components/MemoryManagerModal'));
 const SkillManagerModal = React.lazy(() => import('./components/SkillManagerModal'));
+const PluginMarketplaceModal = React.lazy(() => import('./components/PluginMarketplaceModal'));
 const HostedTasksModal = React.lazy(() => import('./components/HostedTasksModal'));
 const CharacterView = React.lazy(() => import('./components/CharacterView'));
 const CherryBlossoms = React.lazy(() => import('./components/CherryBlossoms'));
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen } from 'lucide-react';
+import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes } from 'lucide-react';
 import { BACKEND_URL } from './utils/backendUrl';
+import { applyTextStreamEvent } from './utils/streamText';
 import {
   API_CHAT_PROVIDER_IDS,
   API_PROVIDER_DEFAULTS,
@@ -29,6 +31,13 @@ import { getChatBackgroundSource } from './utils/chatAppearance';
 import { attachCheckpoint, restoreCheckpoint } from './utils/checkpoints';
 import { createStreamUpdateScheduler } from './utils/sseStream';
 import { calculateContextStatusFromMessages } from './utils/contextUsage';
+import { localize, localizeWith } from './utils/localize';
+import { QUEUE_STORAGE_KEY, restoreQueues, createChatQueueStore, mergeSteeringEvent, canAdvanceQueue } from './utils/chatQueue';
+import { createEpochGuard, loadChatSnapshot, readCachedConfig, cacheConfig, persistConfig, getDispatchConfig, applyStreamingActions } from './utils/chatRuntime.js';
+const CONFIG_CACHE = {
+  getItem: key => localStorage.getItem(key),
+  setItem: (key, value) => localStorage.setItem(key, value),
+};
 const MODELS_CACHE_KEY = 'agent_models_combined_v4';
 const MODEL_FETCH_DEBOUNCE_MS = 250;
 const AGENT_PERMISSION_MODE_DEFAULT = 'default';
@@ -87,8 +96,8 @@ function normalizePermissionMode(value) {
     : AGENT_PERMISSION_MODE_DEFAULT;
 }
 
-function pickLocalizedText(language, zhText, enText) {
-  return String(language || '').toLowerCase().startsWith('zh') ? zhText : enText;
+function pickLocalizedText(language, zhText, enText, jaText) {
+  return localizeWith(language, zhText, enText, jaText);
 }
 
 function extractAssistantTextParts(message = {}) {
@@ -373,7 +382,7 @@ function normalizeTaskTodoPayload(payload = {}, previousTodo = null) {
 }
 
 function applyStreamDeltaToMessage(m, data, options = {}, onExpressionChange) {
-  const parts = [...(m.parts || [])];
+  let parts = [...(m.parts || [])];
   if (data.reasoning) {
     const lastIndex = parts.length - 1;
     if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
@@ -383,16 +392,9 @@ function applyStreamDeltaToMessage(m, data, options = {}, onExpressionChange) {
       parts.push({ type: 'reasoning', content: data.reasoning });
     }
   }
-  if (data.text) {
-    const lastIndex = parts.length - 1;
-    let newContent = data.text;
-    if (lastIndex >= 0 && parts[lastIndex].type === 'text') {
-      const updatedContent = parts[lastIndex].content + data.text;
-      parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
-      newContent = updatedContent;
-    } else {
-      parts.push({ type: 'text', content: data.text });
-    }
+  if (data.text || data.textReplacement) {
+    parts = applyTextStreamEvent(parts, data);
+    const newContent = parts.at(-1)?.type === 'text' ? parts.at(-1).content : '';
     if (!options.useWeb && onExpressionChange) {
       const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
       const expressionMatches = [...newContent.matchAll(expressionRegex)];
@@ -511,7 +513,10 @@ function createRollbackPayloads(assistantMessage = {}) {
 }
 
 function createCuteGreetingMessage() {
-  const content = '[expression:happy.png]嗨嗨，我来啦~ 今天想先聊什么呀？(๑˃▽˂๑) 不管是想认真搞点事情，还是随便唠唠，我都陪你呀～[expression:shy.png]';
+  const content = localize(
+    '[expression:happy.png]嗨嗨，我来啦~ 今天想先聊什么呀？(๑˃▽˂๑) 不管是想认真搞点事情，还是随便唠唠，我都陪你呀～[expression:shy.png]',
+    "[expression:happy.png]Hi hi, I'm here~ What shall we talk about first today? (๑˃▽˂๑) Whether you want to get something done or just chat, I'll keep you company~[expression:shy.png]",
+  );
   return {
     role: 'assistant',
     id: `greeting_${Date.now()}`,
@@ -617,9 +622,14 @@ function App() {
   }, [theme]);
   const [history, setHistory] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessagesState] = useState([]);
   const [currentPendingRequest, setCurrentPendingRequest] = useState(null);
   const latestMessagesRef = useRef([]);
+  const setMessages = useCallback(value => {
+    const next = typeof value === 'function' ? value(latestMessagesRef.current) : value;
+    latestMessagesRef.current = next;
+    setMessagesState(next);
+  }, []);
   const [restoringCheckpointId, setRestoringCheckpointId] = useState(null);
   const checkpointRestoreRef = useRef(false);
   const currentChatIdRef = useRef(currentChatId);
@@ -627,12 +637,33 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [contextStatus, setContextStatus] = useState(null);
   const abortControllerRef = useRef(null);
+  const bgPollRef = useRef(null);
+  const historySaveRef = useRef(new Map());
   const [isMobileViewport, setIsMobileViewport] = useState(isMobileViewportWidth());
   const mobileViewportRef = useRef(isMobileViewportWidth());
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
   const [composerPreset, setComposerPreset] = useState(null);
+  const [queues, setQueues] = useState(() => {
+    try { return restoreQueues(localStorage.getItem(QUEUE_STORAGE_KEY)); } catch { return {}; }
+  });
+  const [queueStorageError, setQueueStorageError] = useState('');
+  const queueStoreRef = useRef(null);
+  if (!queueStoreRef.current) queueStoreRef.current = createChatQueueStore(queues, next => {
+    setQueues(next);
+    try {
+      localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(next));
+      setQueueStorageError('');
+    } catch { setQueueStorageError('浏览器保存失败（可能空间不足），队列仅在本页有效。'); }
+  });
+  const queueStore = queueStoreRef.current;
+  const runningRef = useRef(null);
+  const loadingChatRef = useRef(false);
+  const chatEpochRef = useRef(null);
+  if (!chatEpochRef.current) chatEpochRef.current = createEpochGuard();
+  const pendingRef = useRef(currentPendingRequest);
+  pendingRef.current = currentPendingRequest;
   const [isOnboardingActive, setIsOnboardingActive] = useState(false);
   const [onboardingStepIndex, setOnboardingStepIndex] = useState(0);
   const commandPaletteInputRef = useRef(null);
@@ -640,9 +671,6 @@ function App() {
   const [deepReadingData, setDeepReadingData] = useState(null);
   const [isStoryGlassOverlayOpen, setIsStoryGlassOverlayOpen] = useState(false);
 
-  useEffect(() => {
-    latestMessagesRef.current = messages;
-  }, [messages]);
   const [models, setModels] = useState([decorateModel({ name: 'llama3', label: 'llama3', provider: 'ollama' })]);
   const [isSidebarOpen, setSidebarOpen] = useState(!isMobileViewportWidth());
   const [isSettingsOpen, setSettingsOpen] = useState(false);
@@ -651,6 +679,7 @@ function App() {
   const [isFileManagerOpen, setIsFileManagerOpen] = useState(false);
   const [isMemoryManagerOpen, setIsMemoryManagerOpen] = useState(false);
   const [isSkillManagerOpen, setIsSkillManagerOpen] = useState(false);
+  const [isPluginMarketplaceOpen, setIsPluginMarketplaceOpen] = useState(false);
   const [isHostedTasksOpen, setIsHostedTasksOpen] = useState(false);
   const [desktopUtilityWindows, setDesktopUtilityWindows] = useState([]);
   const [fileManagerMode, setFileManagerMode] = useState('manage'); // 'manage' or 'select'
@@ -692,6 +721,7 @@ function App() {
     setIsFileManagerOpen(false);
     setIsMemoryManagerOpen(false);
     setIsSkillManagerOpen(false);
+    setIsPluginMarketplaceOpen(false);
     setIsHostedTasksOpen(false);
   };
 
@@ -786,6 +816,15 @@ function App() {
     }
     closePrimaryModals();
     setIsSkillManagerOpen(true);
+  };
+
+  const openPluginMarketplaceModal = () => {
+    if (useDesktopUtilityWindows) {
+      openDesktopUtilityWindow('plugins');
+      return;
+    }
+    closePrimaryModals();
+    setIsPluginMarketplaceOpen(true);
   };
 
   const openHostedTasksModal = () => {
@@ -886,6 +925,21 @@ function App() {
 
     closePrimaryModals();
     setIsSkillManagerOpen(true);
+  };
+
+  const togglePluginMarketplaceModal = () => {
+    if (useDesktopUtilityWindows) {
+      toggleDesktopUtilityWindow('plugins');
+      return;
+    }
+
+    if (isPluginMarketplaceOpen) {
+      setIsPluginMarketplaceOpen(false);
+      return;
+    }
+
+    closePrimaryModals();
+    setIsPluginMarketplaceOpen(true);
   };
 
   const toggleHostedTasksModal = () => {
@@ -1013,7 +1067,7 @@ function App() {
   }, [messages, isMusicPlaying, isGenerating]);
 
   const [config, setConfig] = useState(() => {
-    const saved = localStorage.getItem('agent_config');
+    const saved = readCachedConfig(CONFIG_CACHE);
     const defaultConfig = {
       provider: 'ollama',
       model: 'llama3',
@@ -1043,7 +1097,7 @@ function App() {
     };
 
     if (saved) {
-      const parsed = migrateApiProviderConfig(JSON.parse(saved));
+      const parsed = migrateApiProviderConfig(saved);
       let migrated = false;
       // Migration for background and avatar
       if (!parsed.chatBackgroundImage || parsed.chatBackgroundImage === '') {
@@ -1097,6 +1151,8 @@ function App() {
     }
     return defaultConfig;
   });
+  const configRef = useRef(config);
+  configRef.current = config;
 
   useEffect(() => {
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -1309,10 +1365,10 @@ function App() {
 
   useEffect(() => {
     // Stale-while-revalidate for config
-    const cachedConfig = localStorage.getItem('agent_config');
+    const cachedConfig = readCachedConfig(CONFIG_CACHE);
     if (cachedConfig) {
       try {
-        const parsed = migrateApiProviderConfig(JSON.parse(cachedConfig));
+        const parsed = migrateApiProviderConfig(cachedConfig);
         parsed.agentPermissionMode = normalizePermissionMode(parsed.agentPermissionMode);
         // Do not overwrite everything immediately to avoid flicker, but provide some data
         setConfig(prev => ({ ...prev, ...parsed }));
@@ -1327,30 +1383,27 @@ function App() {
           agentPermissionMode: normalizePermissionMode(res.data.agentPermissionMode),
         });
         setConfig(prev => ({ ...prev, ...normalizedConfig }));
-        localStorage.setItem('agent_config', JSON.stringify(normalizedConfig));
+        cacheConfig(normalizedConfig, CONFIG_CACHE);
       }
       setIsConfigLoaded(true);
     }).catch(err => {
       console.error('Failed to load global config:', err);
       setIsConfigLoaded(true);
     });
+    return () => {
+      if (bgPollRef.current) {
+        clearInterval(bgPollRef.current);
+        bgPollRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
     if (!isConfigLoaded) return;
 
-    // Cache to localStorage
-    try {
-      localStorage.setItem('agent_config', JSON.stringify(config));
-      // Also sync to backend
-      axios.post(`${BACKEND_URL}/api/config`, config).catch(err => {
-        console.error('Failed to save global config to backend:', err);
-      });
-    } catch (e) {
-      if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-        console.error('LocalStorage quota exceeded!', e);
-      }
-    }
+    persistConfig(config, CONFIG_CACHE, value => axios.post(`${BACKEND_URL}/api/config`, value)).catch(err => {
+      console.error('Failed to save global config to backend:', err);
+    });
   }, [config, isConfigLoaded]);
 
   useEffect(() => {
@@ -1560,7 +1613,9 @@ function App() {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    return new Intl.DateTimeFormat(String(uiLanguage || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US', {
+    const lang = String(uiLanguage || '').toLowerCase();
+    const locale = lang.startsWith('zh') ? 'zh-CN' : lang.startsWith('ja') ? 'ja-JP' : 'en-US';
+    return new Intl.DateTimeFormat(locale, {
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
@@ -1644,6 +1699,7 @@ function App() {
           refreshHistory();
           if (data.chatId && currentChatId === data.chatId && !isGenerating) {
             const res = await axios.get(`${BACKEND_URL}/api/history/${data.chatId}`);
+            if (currentChatIdRef.current !== data.chatId || runningRef.current || loadingChatRef.current) return;
             const loadedMessages = res.data.messages || [];
             setMessages(loadedMessages);
             latestMessagesRef.current = loadedMessages;
@@ -1661,10 +1717,42 @@ function App() {
     };
   }, [currentChatId, isGenerating]);
 
-  const confirmLeaveActiveResearch = () => {
-    if (!deepReadingData) return true;
-    return window.confirm("褰撳墠娣卞害闃呰灏氭湭瀹屾垚锛屽垏鎹㈣亰澶╁皢瀵艰嚧鏁版嵁涓㈠け銆傜‘瀹氳缁х画鍚楋紵");
+  const startBgPoll = (chatId) => {
+    const epochCurrent = chatEpochRef.current.capture();
+    const isCurrent = () => epochCurrent() && currentChatIdRef.current === chatId;
+    queueStore.pause(chatId, '后台运行恢复中；结束后请确认记录并继续队列。');
+    if (bgPollRef.current) clearInterval(bgPollRef.current);
+    bgPollRef.current = setInterval(() => {
+      if (!isCurrent()) {
+        clearInterval(bgPollRef.current);
+        bgPollRef.current = null;
+        return;
+      }
+      axios.get(`${BACKEND_URL}/api/history/${chatId}`)
+        .then(response => {
+          if (!isCurrent() || runningRef.current) return null;
+          const msgs = response.data.messages || [];
+          setMessages(msgs);
+          latestMessagesRef.current = msgs;
+          pendingRef.current = response.data.pendingRequest || null;
+          setCurrentPendingRequest(response.data.pendingRequest || null);
+          const cs = calculateContextStatusFromMessages(msgs, configRef.current);
+          setContextStatus(cs);
+          return axios.get(`${BACKEND_URL}/api/chat/running`);
+        })
+        .then(r => {
+          if (!isCurrent()) return;
+          if (r && !(r.data.running || []).includes(chatId)) {
+            setIsGenerating(false);
+            clearInterval(bgPollRef.current);
+            bgPollRef.current = null;
+          }
+        })
+        .catch(() => {});
+    }, 1500);
   };
+
+  const confirmLeaveActiveResearch = () => true;
 
   const buildPendingRequest = (text, files, options, assistantMsgId) => ({
     type: options.useWeb
@@ -1705,7 +1793,7 @@ function App() {
 
   const startNewChat = () => {
     if (deepReadingData) {
-      if (!window.confirm("当前深度阅读尚未完成，切换聊天将导致数据丢失。确定要继续吗？")) {
+      if (!window.confirm(localizeWith(uiLanguage, "当前深度阅读尚未完成，切换聊天将导致数据丢失。确定要继续吗？", "The current deep reading session is not finished yet. Switching chats will lose that data. Continue?"))) {
         return;
       }
       setDeepReadingData(null);
@@ -1721,7 +1809,7 @@ function App() {
 
   const loadChat = (chatId) => {
     if (deepReadingData) {
-      if (!window.confirm("当前深度阅读尚未完成，切换聊天将导致数据丢失。确定要继续吗？")) {
+      if (!window.confirm(localizeWith(uiLanguage, "当前深度阅读尚未完成，切换聊天将导致数据丢失。确定要继续吗？", "The current deep reading session is not finished yet. Switching chats will lose that data. Continue?"))) {
         return;
       }
       setDeepReadingData(null);
@@ -2010,7 +2098,7 @@ function App() {
               continue;
             }
 
-            if (data.reasoning || data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
+            if (data.reasoning || data.text || data.textReplacement || data.action || data.observation || data.fileMetadata || data.generatedFile) {
               setAnimationTrigger(prev => {
                 if (prev && prev.type === 'thinking') {
                   return { type: 'stop', timestamp: Date.now() };
@@ -2050,6 +2138,8 @@ function App() {
         streamScheduler.flushNow();
         streamScheduler.cancel();
       }
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
       setIsGenerating(false);
       const keepStoryGlassTasting = options.useStoryGlass && storyGlassTastingStarted;
       if (activityAnimation === 'thinking') {
@@ -2074,21 +2164,28 @@ function App() {
 
   const persistChatState = (chatId, currentMessages, pendingRequest = null) => {
     if (!chatId) return;
-    return axios.post(`${BACKEND_URL}/api/history`, {
+    const payload = {
       chatId,
       messages: currentMessages,
       pendingRequest,
       clientSavedAt: Date.now()
-    }).then(() => {
+    };
+    const previous = historySaveRef.current.get(chatId) || Promise.resolve();
+    const save = previous.catch(() => {}).then(() => axios.post(`${BACKEND_URL}/api/history`, payload)).then(() => {
       refreshHistory();
     });
+    historySaveRef.current.set(chatId, save);
+    // Most callers are optimistic; the terminal caller still awaits the original rejection.
+    save.catch(() => queueStore.pause(chatId, '聊天记录保存失败，队列已暂停。'));
+    return save;
   };
 
   const handleStartNewChat = () => {
-    if (!confirmLeaveActiveResearch()) return;
+    detachChatRun();
     setDeepReadingData(null);
     setCurrentPendingRequest(null);
     const newChatId = Date.now().toString();
+    currentChatIdRef.current = newChatId;
     const greetingMessages = [createCuteGreetingMessage()];
     setCurrentChatId(newChatId);
     setContextStatus(calculateContextStatusFromMessages(greetingMessages, config));
@@ -2098,15 +2195,39 @@ function App() {
   };
 
   const handleLoadChat = (chatId) => {
-    if (!confirmLeaveActiveResearch()) return;
+    detachChatRun();
+    const epochCurrent = chatEpochRef.current.capture();
+    const isCurrent = () => epochCurrent() && currentChatIdRef.current === chatId;
+    loadingChatRef.current = true;
+    setCurrentPendingRequest(null);
+    pendingRef.current = null;
     setDeepReadingData(null);
     setCurrentChatId(chatId);
-    axios.get(`${BACKEND_URL}/api/history/${chatId}`).then(res => {
-      const loadedMessages = res.data.messages || [];
-      setMessages(loadedMessages);
-      latestMessagesRef.current = loadedMessages;
-      setCurrentPendingRequest(res.data.pendingRequest || null);
-      setContextStatus(calculateContextStatusFromMessages(loadedMessages, config));
+    currentChatIdRef.current = chatId;
+    return loadChatSnapshot({
+      isCurrent,
+      loadHistory: () => axios.get(`${BACKEND_URL}/api/history/${chatId}`),
+      applyHistory: response => {
+        const msgs = response.data.messages || [];
+        setMessages(msgs);
+        latestMessagesRef.current = msgs;
+        pendingRef.current = response.data.pendingRequest || null;
+        setCurrentPendingRequest(response.data.pendingRequest || null);
+        const cs = calculateContextStatusFromMessages(msgs, configRef.current);
+        setContextStatus(cs);
+      },
+      loadRunning: () => axios.get(`${BACKEND_URL}/api/chat/running`),
+      applyRunning: r => {
+        loadingChatRef.current = false;
+        if (r && (r.data.running || []).includes(chatId)) {
+          setIsGenerating(true);
+          startBgPoll(chatId);
+        }
+      },
+      onError: err => {
+        loadingChatRef.current = false;
+        console.error('Failed to load chat:', err);
+      },
     });
   };
 
@@ -2242,12 +2363,20 @@ function App() {
     resumeState = null,
     approvalDecision = null
   }) => {
+    // Old stream finalizers can drain the queue through an old render closure.
+    // Snapshot current model / credentials / permissions only at actual dispatch.
+    const config = getDispatchConfig(configRef, options);
     const generationStartTime = Date.now();
+    const run = { chatId: activeChatId, assistantMsgId, stopped: false };
+    runningRef.current = run;
+    pendingRef.current = pendingRequest;
     setCurrentPendingRequest(pendingRequest);
     setIsGenerating(true);
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let completed = false;
+    let runOutcome = null;
+    let streamError = false;
     let shouldClearPending = false;
     let nextPendingRequest = pendingRequest;
     let storyGlassTastingStarted = false;
@@ -2311,8 +2440,11 @@ function App() {
 
       while (true) {
         const { done, value } = await reader.read();
+        if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) {
+          await reader.cancel();
+          return;
+        }
         if (done) {
-          completed = true;
           break;
         }
 
@@ -2334,6 +2466,25 @@ function App() {
 
           try {
             const data = JSON.parse(dataStr);
+
+            if (data.type === 'steering') {
+              if (String(data.assistantMsgId) === String(assistantMsgId)) {
+                const updated = mergeSteeringEvent(latestMessagesRef.current, data);
+                latestMessagesRef.current = updated;
+                setMessages(updated);
+              }
+              continue;
+            }
+            if (data.type === 'runOutcome' && String(data.assistantMsgId) === String(assistantMsgId)) {
+              runOutcome = data.outcome;
+              if (data.approvalRequest) nextPendingRequest = { ...nextPendingRequest, approvalRequest: data.approvalRequest };
+              if (data.outcome !== 'completed') queueStore.pause(activeChatId);
+              continue;
+            }
+            if (data.type === 'error' || data.error || /^\s*(执行失败|错误[:：]|Error:)/i.test(data.text || '')) {
+              streamError = true;
+              queueStore.pause(activeChatId, String(data.error || data.text || '流响应错误'));
+            }
 
             if (data.type === 'checkpoint' && data.checkpoint) {
               setMessages(previous => {
@@ -2439,6 +2590,7 @@ function App() {
             }
 
             if (data.approvalRequest) {
+              queueStore.pause(activeChatId, '等待审批，队列已暂停。');
               nextPendingRequest = {
                 ...(nextPendingRequest || pendingRequest || {}),
                 approvalRequest: data.approvalRequest
@@ -2448,7 +2600,12 @@ function App() {
               continue;
             }
 
-            if (data.reasoning || data.text || data.action || data.observation || data.fileMetadata || data.generatedFile) {
+            if (Array.isArray(data.streamingActions)) {
+              setMessages(previous => previous.map(message => message.id === assistantMsgId
+                ? applyStreamingActions(message, data) : message));
+            }
+
+            if (data.reasoning || data.text || data.textReplacement || data.action || data.observation || data.fileMetadata || data.generatedFile) {
               setAnimationTrigger(prev => {
                 if (prev && prev.type === 'thinking') {
                   return { type: 'stop', timestamp: Date.now() };
@@ -2459,7 +2616,7 @@ function App() {
               setMessages(prev => {
                 const updated = prev.map(m => {
                   if (m.id === assistantMsgId) {
-                    const parts = Array.isArray(m.parts) ? [...m.parts] : [];
+                    let parts = Array.isArray(m.parts) ? [...m.parts] : [];
                     let rawText = m.rawText || '';
                     if (data.reasoning) {
                       const lastIndex = parts.length - 1;
@@ -2471,19 +2628,15 @@ function App() {
                         parts.push(reasoningPart);
                       }
                     }
-                    if (data.text) {
-                      const lastIndex = parts.length - 1;
-                      let newContent = data.text;
-                      if (lastIndex >= 0 && parts[lastIndex].type === 'text') {
-                        const updatedContent = parts[lastIndex].content + data.text;
-                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
-                        newContent = updatedContent;
+                    if (data.text || data.textReplacement) {
+                      parts = applyTextStreamEvent(parts, data);
+                      const newContent = parts.at(-1)?.type === 'text' ? parts.at(-1).content : '';
+                      if (data.textReplacement) {
+                        const count = Math.max(0, Math.floor(Number(data.textReplacement.length) || 0));
+                        rawText = rawText.slice(0, Math.max(0, rawText.length - count)) + String(data.textReplacement.text ?? '');
                       } else {
-                        parts.push({ type: 'text', content: data.text });
-                        newContent = data.text;
+                        rawText += data.text;
                       }
-
-                      rawText += data.text;
 
                       if (!options.useWeb) {
                         const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
@@ -2518,7 +2671,7 @@ function App() {
                     const generatedFiles = data.generatedFile
                       ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
                       : (m.generatedFiles || []);
-                    return { ...m, parts, generatedFiles, rawText, status: 'streaming' };
+                    return { ...applyStreamingActions(m, data), parts, generatedFiles, rawText, status: 'streaming' };
                   }
                   return m;
                 });
@@ -2528,12 +2681,16 @@ function App() {
             }
           } catch (e) {
             console.warn('Failed to parse SSE line:', trimmedLine, e);
+            streamError = true;
           }
         }
 
         if (stopSignalReceived) break;
       }
     } catch (error) {
+      if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+      streamError = true;
+      queueStore.pause(activeChatId);
       if (error.name === 'AbortError') {
         shouldClearPending = true;
         console.log('Generation aborted by user');
@@ -2564,6 +2721,9 @@ function App() {
         });
       }
     } finally {
+      if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
       setIsGenerating(false);
       const keepStoryGlassTasting = options.useStoryGlass && storyGlassTastingStarted;
       if (activityAnimation === 'thinking') {
@@ -2582,39 +2742,54 @@ function App() {
 
       setDeepReadingData(null);
       abortControllerRef.current = null;
-      const finalPendingRequest = completed || shouldClearPending ? null : nextPendingRequest;
+      const awaitingApproval = runOutcome === 'awaitingApproval' || Boolean(nextPendingRequest?.approvalRequest);
+      const finalAssistant = latestMessagesRef.current.find(message => String(message.id) === String(assistantMsgId));
+      streamError ||= finalAssistant?.status === 'error' || isLikelyModelConfigFailure(extractAssistantTextParts(finalAssistant));
+      const successful = canAdvanceQueue({ outcome: runOutcome, done: completed, error: streamError, approval: awaitingApproval, stopped: run.stopped });
+      if (!successful) queueStore.pause(activeChatId, awaitingApproval ? '等待审批，队列已暂停。' : '任务未成功完成，队列已暂停。');
+      const finalPendingRequest = awaitingApproval ? nextPendingRequest : (completed || shouldClearPending || runOutcome ? null : nextPendingRequest);
       const durationMs = Date.now() - generationStartTime;
-      setMessages(prevMsgs => {
-        const newMsgs = prevMsgs.map(message => (
+      const newMsgs = latestMessagesRef.current.map(message => (
           message.id === assistantMsgId
             ? (() => {
                 const enhancedMessage = maybeAppendModelSettingsGuidance(message, uiLanguage);
                 return {
-                  ...enhancedMessage,
+                  ...applyStreamingActions(enhancedMessage, {}, true),
+                  runOutcome,
                   generationDurationMs: durationMs,
-                  status: completed
+                  status: successful
                     ? (enhancedMessage.status === 'error' ? 'error' : 'done')
-                    : (enhancedMessage.status === 'error' ? 'error' : 'interrupted')
+                    : (streamError || runOutcome === 'error' || enhancedMessage.status === 'error' ? 'error' : 'interrupted')
                 };
               })()
             : message
         ));
-        latestMessagesRef.current = newMsgs;
-        persistChatState(activeChatId, newMsgs, finalPendingRequest);
-        return newMsgs;
-      });
+      latestMessagesRef.current = newMsgs;
+      setMessages(newMsgs);
+      pendingRef.current = finalPendingRequest;
       setCurrentPendingRequest(finalPendingRequest);
+      let saved = true;
+      try { await persistChatState(activeChatId, newMsgs, finalPendingRequest); }
+      catch {
+        saved = false;
+        queueStore.pause(activeChatId, '聊天记录保存失败，队列已暂停，请确认后继续。');
+      }
+      if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+      runningRef.current = null;
+      if (successful && saved) void drainQueue(activeChatId);
     }
   };
 
   const sendMessageWithContext = async ({ text, files = [], options = {}, baseMessages = null }) => {
-    if (isGenerating || checkpointRestoreRef.current) return;
+    if (runningRef.current || bgPollRef.current || loadingChatRef.current || checkpointRestoreRef.current) return false;
+    const config = getDispatchConfig(configRef, options);
 
-    let activeChatId = currentChatId;
+    let activeChatId = currentChatIdRef.current;
     if (!activeChatId) {
       activeChatId = Date.now().toString();
       setCurrentChatId(activeChatId);
     }
+    currentChatIdRef.current = activeChatId;
 
     const historyBase = Array.isArray(baseMessages) ? baseMessages : (latestMessagesRef.current || []);
     const normalizedOptions = {
@@ -2664,6 +2839,7 @@ function App() {
       options: normalizedOptions,
       pendingRequest
     });
+    return true;
   };
 
   const handleRestoreCheckpoint = async (message) => {
@@ -2697,7 +2873,63 @@ function App() {
   };
 
   const handleSendMessage = async (text, files = [], options = {}) => {
-    await sendMessageWithContext({ text, files, options });
+    if (loadingChatRef.current || checkpointRestoreRef.current) return false;
+    const chatId = currentChatIdRef.current || ensureActiveChat();
+    currentChatIdRef.current = chatId;
+    const payload = { text, files, options: { ...options, workspacePath: options.workspacePath ?? config.workspacePath ?? '' } };
+    if (runningRef.current || isGenerating || pendingRef.current || queueStore.get(chatId).paused || queueStore.get(chatId).items.length) {
+      queueStore.enqueue(chatId, payload);
+      if (!runningRef.current && !isGenerating && !pendingRef.current) void drainQueue(chatId);
+      return true;
+    }
+    void sendMessageWithContext(payload);
+    return true;
+  };
+
+  const drainQueue = async (chatId) => {
+    if (currentChatIdRef.current !== chatId || runningRef.current || bgPollRef.current || loadingChatRef.current || pendingRef.current || checkpointRestoreRef.current) return;
+    const item = queueStore.take(chatId);
+    if (!item) return;
+    // No await between reservation and send: history is read by sendMessageWithContext at dispatch time.
+    queueStore.remove(chatId, item.id, true);
+    const sent = await sendMessageWithContext({ text: item.text, files: item.files, options: item.options });
+    if (sent === false) {
+      queueStore.pause(chatId, '发送尚未就绪，队列已暂停。');
+      queueStore.prepend(chatId, item);
+    }
+  };
+
+  const handleQueueRemove = (itemId, edit = false) => {
+    const chatId = currentChatIdRef.current;
+    const item = queueStore.remove(chatId, itemId);
+    if (item && edit) {
+      queueStore.pause(chatId, '已撤回到输入框；修改后请重新发送入队，再继续队列。');
+      setComposerPreset({ timestamp: Date.now(), text: item.text, files: item.files, options: item.options });
+    }
+  };
+
+  const handleQueueSteer = async (itemId) => {
+    const chatId = currentChatIdRef.current;
+    const pending = pendingRef.current;
+    if (!isGenerating || !pending?.assistantMsgId || pending.approvalRequest || loadingChatRef.current) return;
+    const item = queueStore.claim(chatId, itemId);
+    if (!item) return;
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/chat/stream/${encodeURIComponent(chatId)}/steer`, {
+        assistantMsgId: pending.assistantMsgId, text: item.text, files: item.files,
+      });
+      if (response.status !== 202) throw new Error('引导未被接受');
+      if (currentChatIdRef.current === chatId) {
+        const updated = mergeSteeringEvent(latestMessagesRef.current, response.data);
+        latestMessagesRef.current = updated;
+        setMessages(updated);
+      }
+      queueStore.remove(chatId, itemId, true);
+    } catch (error) {
+      queueStore.release(chatId, itemId, String(error.response?.data?.error || error.response?.data?.text || error.message));
+      queueStore.pause(chatId, '引导失败，已保留队列项，请确认后重试或继续队列。');
+    }
+    if (currentChatIdRef.current === chatId) void drainQueue(chatId);
   };
 
   const handleAppendStoryGlassConversation = (turns = [], metadata = {}) => {
@@ -2795,10 +3027,15 @@ function App() {
 
   const handleContinuePendingChat = async (chatId) => {
     if (isGenerating || checkpointRestoreRef.current) return;
-    if (!confirmLeaveActiveResearch()) return;
+    const originChatId = currentChatIdRef.current;
+    loadingChatRef.current = true;
+    queueStore.pause(chatId, '恢复任务后请确认并继续队列。');
 
     try {
       const res = await axios.get(`${BACKEND_URL}/api/history/${chatId}`);
+      if (currentChatIdRef.current !== originChatId) return;
+      loadingChatRef.current = false;
+      currentChatIdRef.current = chatId;
       const sessionMessages = res.data.messages || [];
       const pendingRequest = res.data.pendingRequest || null;
 
@@ -2849,11 +3086,14 @@ function App() {
       });
     } catch (error) {
       console.error('Failed to continue chat:', error);
+    } finally {
+      if (currentChatIdRef.current === chatId || currentChatIdRef.current === originChatId) loadingChatRef.current = false;
     }
   };
 
   const handleCancelPendingChat = async (chatId) => {
     if (!chatId) return;
+    queueStore.pause(chatId, '已取消待续任务，队列已暂停。');
 
     if (String(currentChatId) === String(chatId) && isGenerating) {
       stopGeneration();
@@ -2891,6 +3131,7 @@ function App() {
   };
 
   const handleApprovalDecision = async (approved) => {
+    queueStore.pause(currentChatIdRef.current, '审批后请确认并继续队列。');
     if (isGenerating || checkpointRestoreRef.current) return;
 
     const pendingRequest = currentPendingRequest;
@@ -2952,10 +3193,45 @@ function App() {
   };
 
   const stopGeneration = () => {
+    const chatId = currentChatIdRef.current;
+    queueStore.pause(chatId, '已停止，队列已暂停。');
+    if (runningRef.current) runningRef.current.stopped = true;
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    if (chatId) {
+      axios.post(`${BACKEND_URL}/api/chat/stream/${chatId}/stop`).then(() => {
+        if (currentChatIdRef.current !== chatId || runningRef.current) return;
+        // Poll-only runs have no local stream finally block; refresh their stopped state.
+        return axios.get(`${BACKEND_URL}/api/history/${chatId}`).then(response => {
+          if (currentChatIdRef.current !== chatId || runningRef.current) return;
+          setMessages(response.data.messages || []);
+          pendingRef.current = response.data.pendingRequest || null;
+          setCurrentPendingRequest(pendingRef.current);
+          setIsGenerating(false);
+        });
+      }).catch(() => {
+        if (currentChatIdRef.current === chatId && !runningRef.current) startBgPoll(chatId);
+      });
+    }
+    clearInterval(bgPollRef.current);
+    bgPollRef.current = null;
   };
+
+  function detachChatRun() {
+    chatEpochRef.current.invalidate();
+    const previous = currentChatIdRef.current;
+    if (previous) queueStore.pause(previous, '切换会话后队列已暂停。');
+    runningRef.current = null;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    clearInterval(bgPollRef.current);
+    bgPollRef.current = null;
+    loadingChatRef.current = false;
+    pendingRef.current = null;
+    setIsGenerating(false);
+    setComposerPreset(null);
+  }
 
   const handleSkipAction = async (actionId) => {
     if (!actionId) return false;
@@ -3033,6 +3309,14 @@ function App() {
       run: openMemoryManagerModal
     },
     {
+      id: 'plugins',
+      label: getLocalText('插件市场', 'Plugin marketplace'),
+      description: getLocalText('浏览并安装绑定 MCP 与专属技能的插件', 'Browse and install MCP + Skill plugins'),
+      icon: Boxes,
+      keywords: 'plugins mcp marketplace market 插件 扩展',
+      run: openPluginMarketplaceModal
+    },
+    {
       id: 'skills',
       label: getLocalText('技能系统', 'Skill system'),
       description: getLocalText('查看和管理技能', 'Review and manage skills'),
@@ -3090,6 +3374,7 @@ function App() {
         ...(isFeatureGuideOpen ? ['guide'] : []),
         ...(isMemoryManagerOpen ? ['memory'] : []),
         ...(isSkillManagerOpen ? ['skill'] : []),
+        ...(isPluginMarketplaceOpen ? ['plugins'] : []),
         ...(isHostedTasksOpen ? ['hosted'] : []),
         ...(isFileManagerOpen ? ['files'] : []),
         ...(isThirdPartyChatModalOpen ? ['third-party'] : []),
@@ -3188,6 +3473,14 @@ function App() {
             windowed={true}
           />
         );
+      case 'plugins':
+        return (
+          <PluginMarketplaceModal
+            isOpen={true}
+            onClose={() => closeDesktopUtilityWindow('plugins')}
+            windowed={true}
+          />
+        );
       case 'hosted':
         return (
           <HostedTasksModal
@@ -3237,6 +3530,7 @@ function App() {
         onToggleFileManager={() => toggleFileManagerModal('manage')}
         onToggleMemoryManager={toggleMemoryManagerModal}
         onToggleSkillManager={toggleSkillManagerModal}
+        onTogglePluginMarketplace={togglePluginMarketplaceModal}
         onToggleHostedTasks={toggleHostedTasksModal}
         onToggleThirdPartyChats={toggleThirdPartyChatModal}
         activeUtilityKeys={activeUtilityKeys}
@@ -3266,6 +3560,15 @@ function App() {
             <Chat
                messages={messages}
                onSend={handleSendMessage}
+               queue={queues[currentChatId]}
+               queueStorageError={queueStorageError}
+               onQueueRemove={handleQueueRemove}
+               onQueueSteer={handleQueueSteer}
+               onQueueResume={() => {
+                 if (loadingChatRef.current || pendingRef.current?.approvalRequest) return;
+                 queueStore.resume(currentChatIdRef.current);
+                 void drainQueue(currentChatIdRef.current);
+               }}
                isGenerating={isGenerating}
                onStop={stopGeneration}
                onCancelPendingChat={handleCancelPendingChat}
@@ -3420,6 +3723,13 @@ function App() {
               key="skill-modal"
               isOpen={true}
               onClose={() => setIsSkillManagerOpen(false)}
+            />
+          )}
+          {!useDesktopUtilityWindows && isPluginMarketplaceOpen && (
+            <PluginMarketplaceModal
+              key="plugin-marketplace-modal"
+              isOpen={true}
+              onClose={() => setIsPluginMarketplaceOpen(false)}
             />
           )}
           {!useDesktopUtilityWindows && isHostedTasksOpen && (

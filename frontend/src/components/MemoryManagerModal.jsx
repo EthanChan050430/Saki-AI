@@ -5,9 +5,21 @@ import { motion } from 'framer-motion';
 import axios from 'axios';
 import { BACKEND_URL } from '../utils/backendUrl';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
+import { localizeWith } from '../utils/localize';
+
+const CATEGORY_JA = {
+  project: 'プロジェクト',
+  general: '一般',
+  preference: '好み',
+  person: '人物',
+  fact: '事実',
+  skill: 'スキル',
+  knowledge: '知識',
+};
 
 export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windowed = false }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [memories, setMemories] = useState([]);
   const [systemMeta, setSystemMeta] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -96,11 +108,11 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
     if (!fullChat.messages) return;
 
     const chatContent = fullChat.messages
-      .map(m => `${m.role === 'user' ? '用户' : 'Agent'}: ${m.content || m.parts?.map(p => p.content).join('')}`)
+      .map(m => `${m.role === 'user' ? getLocalText('用户', 'User') : 'Agent'}: ${m.content || m.parts?.map(p => p.content).join('')}`)
       .join('\n');
     setEditData(prev => ({
       ...prev,
-      content: prev.content + (prev.content ? '\n\n' : '') + `--- 来自对话: ${fullChat.title || fullChat.id} ---\n` + chatContent
+      content: prev.content + (prev.content ? '\n\n' : '') + getLocalText(`--- 来自对话: ${fullChat.title || fullChat.id} ---\n`, `--- From conversation: ${fullChat.title || fullChat.id} ---\n`) + chatContent
     }));
     setShowHistorySelector(false);
   };
@@ -221,21 +233,21 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                   {systemMeta && (
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                       <div className="rounded-2xl border border-saki-pink/15 bg-saki-pink/10 px-4 py-3">
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--accent-text)]">Long-Term</div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--accent-text)]">{getLocalText('长期记忆', 'Long-Term', '長期記憶')}</div>
                         <div className="mt-1 text-2xl font-bold text-[var(--text-dark)]">{systemMeta.longTermCount ?? 0}</div>
                       </div>
                       <div className="rounded-2xl border border-saki-pink/15 bg-saki-pink/10 px-4 py-3">
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--accent-text)]">Short-Term</div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--accent-text)]">{getLocalText('短期记忆', 'Short-Term', '短期記憶')}</div>
                         <div className="mt-1 text-2xl font-bold text-[var(--text-dark)]">{systemMeta.shortTermTopicCount ?? 0}</div>
                       </div>
                       <div className="rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3">
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-500">Sleep Queue</div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-500">{getLocalText('睡眠队列', 'Sleep Queue', '睡眠キュー')}</div>
                         <div className="mt-1 text-2xl font-bold text-[var(--text-dark)]">{systemMeta.pendingQueueSize ?? 0}</div>
                       </div>
                       <div className="rounded-2xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] px-4 py-3">
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Last Sleep</div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">{getLocalText('上次睡眠', 'Last Sleep', '前回の睡眠')}</div>
                         <div className="mt-1 text-xs font-semibold text-[var(--text-dark)] break-all">
-                          {systemMeta.lastSleepCycleAt || 'Not run yet'}
+                          {systemMeta.lastSleepCycleAt || getLocalText('尚未运行', 'Not run yet', '未実行')}
                         </div>
                       </div>
                     </div>
@@ -273,17 +285,17 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                           <div className="flex items-center gap-2 flex-wrap">
                             {memory.category && (
                               <span className="px-2 py-1 rounded-full bg-saki-pink/10 text-[var(--accent-text)] text-[10px] font-bold uppercase tracking-wide">
-                                {memory.category}
+                                {getLocalText(memory.category, memory.category, CATEGORY_JA[String(memory.category).toLowerCase()] || memory.category)}
                               </span>
                             )}
                             {memory.auto && (
                               <span className="px-2 py-1 rounded-full bg-orange-50 text-orange-600 text-[10px] font-bold uppercase tracking-wide">
-                                auto
+                                {getLocalText('自动', 'auto', '自動')}
                               </span>
                             )}
                             {typeof memory.importance === 'number' && (
                               <span className="px-2 py-1 rounded-full bg-[var(--surface-bg-light)] text-[var(--text-secondary)] text-[10px] font-bold uppercase tracking-wide">
-                                imp {memory.importance}
+                                {getLocalText('重要度', 'imp', '重要度')} {memory.importance}
                               </span>
                             )}
                           </div>
@@ -330,7 +342,7 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                        <History size={18} className="text-[var(--text-tertiary)] group-hover:text-[var(--accent-text)]" />
                        <div className="text-left min-w-0">
                          <div className="text-sm font-bold text-[var(--text-dark)] truncate">{chat.title || chat.id}</div>
-                         <div className="text-[10px] text-[var(--text-tertiary)] mt-0.5">{chat.messagesCount || chat.messages?.length || 0} 条消息</div>
+                         <div className="text-[10px] text-[var(--text-tertiary)] mt-0.5">{chat.messagesCount || chat.messages?.length || 0} {getLocalText('条消息', 'messages')}</div>
                        </div>
                     </div>
                     <ChevronRight size={16} className="text-[var(--text-tertiary)] group-hover:text-[var(--accent-text)]" />

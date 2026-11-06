@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
+import { localizeWith } from '../utils/localize';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -221,9 +222,12 @@ function buildDerivedSteps(data, getLocalText, metricMeta) {
   const sourceStats = data.sourceStats || {};
   const sentiment = data.sentiment || {};
   const progress = clamp(Number(data.progress) || 0, 0, 100);
-  const languageLabel = String(data.language || '').toLowerCase().startsWith('zh')
-    ? getLocalText('中文', 'Chinese')
-    : getLocalText('英文', 'English');
+  const sourceLangCode = String(data.language || '').toLowerCase();
+  const languageLabel = sourceLangCode.startsWith('ja')
+    ? getLocalText('日文', 'Japanese', '日本語')
+    : sourceLangCode.startsWith('zh')
+      ? getLocalText('中文', 'Chinese', '中国語')
+      : getLocalText('英文', 'English', '英語');
   const currentStage = String(data.currentStage || '');
   const currentIndexMap = {
     extracting: 0,
@@ -516,8 +520,8 @@ function CollapsibleSection({
 
 export default function CredibilityCheckView({ data, isEmbedded = true }) {
   const safeData = data || {};
-  const language = String(safeData.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
-  const getLocalText = (zhText, enText) => (language === 'zh' ? zhText : enText);
+  const language = safeData.language || '';
+  const getLocalText = (zhText, enText, jaText) => localizeWith(language, zhText, enText, jaText);
   const metrics = safeData.metrics || {};
   const metricMeta = getMetricMeta(getLocalText);
   const tone = scoreTone(Number(safeData.score) || 0);

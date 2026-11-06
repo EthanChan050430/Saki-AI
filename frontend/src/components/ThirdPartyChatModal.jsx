@@ -4,6 +4,7 @@ import { AlertCircle, Bot, CheckCircle2, MessageCircle, RefreshCw, X } from 'luc
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { getFeatureLocale } from '../utils/featureLocale';
+import { localizeWith } from '../utils/localize';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 
 function buildDraft(config) {
@@ -45,24 +46,15 @@ function StatusPill({ status, ui }) {
 export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig, backendUrl, windowed = false }) {
   const { i18n } = useTranslation();
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language).thirdParty;
-  const isZh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  const sttUi = isZh
-    ? {
-        title: '\u8bed\u97f3\u8f6c\u6587\u5b57\uff08STT\uff09',
-        desc: 'QQ \u6536\u5230\u8bed\u97f3\u540e\uff0c\u5148\u8f6c\u6210\u6587\u5b57\u518d\u4ea4\u7ed9 AI\u3002\u7559\u7a7a\u65f6\u4f1a\u56de\u9000\u5230\u5168\u5c40 API \u914d\u7f6e\u3002',
-        baseUrl: 'STT API \u5730\u5740',
-        baseUrlPlaceholder: '\u4f8b\u5982: https://api.openai.com/v1',
-        apiKeyPlaceholder: '\u7559\u7a7a\u5219\u5c1d\u8bd5\u4f7f\u7528\u5168\u5c40 API Key',
-        model: 'STT \u6a21\u578b',
-      }
-    : {
-        title: 'Speech to Text (STT)',
-        desc: 'When QQ receives voice, transcribe it before sending it to the AI. Leave blank to fall back to the global API config.',
-        baseUrl: 'STT API Base URL',
-        baseUrlPlaceholder: 'e.g. https://api.openai.com/v1',
-        apiKeyPlaceholder: 'Leave blank to try the global API key',
-        model: 'STT Model',
-      };
+  const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
+  const sttUi = {
+    title: tx('语音转文字（STT）', 'Speech to Text (STT)'),
+    desc: tx('QQ 收到语音后，先转成文字再交给 AI。留空时会回退到全局 API 配置。', 'When QQ receives voice, transcribe it before sending it to the AI. Leave blank to fall back to the global API config.'),
+    baseUrl: tx('STT API 地址', 'STT API Base URL'),
+    baseUrlPlaceholder: tx('例如: https://api.openai.com/v1', 'e.g. https://api.openai.com/v1'),
+    apiKeyPlaceholder: tx('留空则尝试使用全局 API Key', 'Leave blank to try the global API key'),
+    model: tx('STT 模型', 'STT Model'),
+  };
   const [selectedApp, setSelectedApp] = useState('qqbot');
   const [draft, setDraft] = useState(() => buildDraft(config));
   const [status, setStatus] = useState(null);
@@ -226,10 +218,10 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-[var(--surface-bg)] px-3 py-1 border border-saki-pink/15">
-                    Provider: {status?.activeProvider || config.provider || '-'}
+                    {tx('提供方', 'Provider', 'プロバイダー')}: {status?.activeProvider || config.provider || '-'}
                   </span>
                   <span className="rounded-full bg-[var(--surface-bg)] px-3 py-1 border border-saki-pink/15">
-                    Model: {status?.activeModel || config.model || '-'}
+                    {tx('模型', 'Model', 'モデル')}: {status?.activeModel || config.model || '-'}
                   </span>
                 </div>
               </div>
@@ -250,7 +242,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="sm:col-span-2">
-                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">App ID</label>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">{tx('App ID', 'App ID', 'App ID')}</label>
                     <input
                       value={draft.appId}
                       onChange={(e) => handleChange('appId', e.target.value)}
@@ -259,7 +251,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                     />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Client Secret</label>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">{tx('Client Secret', 'Client Secret', 'クライアントシークレット')}</label>
                     <input
                       type="password"
                       value={draft.clientSecret}
@@ -317,7 +309,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                     </div>
                     <div className="sm:col-span-2">
                       <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
-                        {isZh ? 'STT API Key' : 'STT API Key'}
+                        {tx('STT API Key', 'STT API Key')}
                       </label>
                       <input
                         type="password"

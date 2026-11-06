@@ -9,6 +9,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { BACKEND_URL } from '../utils/backendUrl';
+import { localizeWith } from '../utils/localize';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -154,8 +155,7 @@ export default function StoryGlassView({
 }) {
   const { i18n } = useTranslation();
   const [detailsOpen, setDetailsOpen] = useState(true);
-  const localeIsZh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  const getLocalText = (zhText, enText) => (localeIsZh ? zhText : enText);
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
 
   const progress = clamp(Number(data.progress) || 0, 0, 100);
   const tags = toList(data.storyTags, 5);

@@ -11,6 +11,7 @@ import AgentMessageParts, { ThinkingBlock } from './AgentActivity';
 import CodeChangesSummary from './CodeChangesSummary';
 import CheckpointRestoreBar from './CheckpointRestoreBar';
 import { checkpointOwners } from '../utils/checkpoints';
+import { localize, localizeWith, isChineseLanguage, isJapaneseLanguage } from '../utils/localize';
 import ErrorBoundary from './ErrorBoundary';
 import ChatMessageItem from './ChatMessageItem';
 import ChatTurnNavigator from './ChatTurnNavigator';
@@ -24,7 +25,7 @@ const Mermaid = React.lazy(() => import('./Mermaid'));
 const DiffModal = React.lazy(() => import('./DiffModal'));
 const AiCustomizationModal = React.lazy(() => import('./AiCustomizationModal'));
 import botAvatar from '../head.png';
-import { getChatProviderLabel, MODEL_PROVIDER_ORDER } from '../utils/chatProviderConfig';
+import { getChatProviderName, MODEL_PROVIDER_ORDER } from '../utils/chatProviderConfig';
 
 const MODEL_PROVIDER_LOGOS = {
   ollama: 'https://cdn.simpleicons.org/ollama',
@@ -1562,11 +1563,11 @@ const getDrawingProviderLabel = (provider = '') => {
     case 'github':
       return 'GitHub Copilot API';
     case 'custom':
-      return '自定义 API';
+      return localize('自定义 API', 'Custom API');
     case 'none':
-      return '未启用';
+      return localize('未启用', 'Disabled');
     default:
-      return provider || '绘图 API';
+      return provider || localize('绘图 API', 'Image API');
   }
 };
 
@@ -1659,9 +1660,16 @@ function StoryGlassArchiveCard({ message = {}, onOpen, getLocalText }) {
   );
 }
 
+import { isComposerComposing } from '../utils/chatQueue';
+
 export default function Chat({
   messages,
   onSend,
+  queue,
+  queueStorageError,
+  onQueueRemove,
+  onQueueSteer,
+  onQueueResume,
   isGenerating,
   onStop,
   onCancelPendingChat,
@@ -1697,9 +1705,7 @@ export default function Chat({
 }) {
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage || i18n.language || 'en-US';
-  const getLocalText = (zhText, enText) => (
-    String(uiLanguage || '').toLowerCase().startsWith('zh') ? zhText : enText
-  );
+  const getLocalText = (zhText, enText, jaText) => localizeWith(uiLanguage, zhText, enText, jaText);
   const permissionMode = config?.agentPermissionMode === AGENT_PERMISSION_MODE_FULL
     ? AGENT_PERMISSION_MODE_FULL
     : AGENT_PERMISSION_MODE_DEFAULT;
@@ -1738,6 +1744,8 @@ export default function Chat({
   const modelMenuRef = useRef(null);
   const dragDepthRef = useRef(0);
   const textareaRef = useRef(null);
+  const composingRef = useRef(false);
+  const restoredOptionsRef = useRef(null);
   const storyGlassModeChangeRef = useRef(onStoryGlassModeChange);
   const previousStoryGlassModeRef = useRef(useStoryGlass);
   const trimmedInput = input.trimStart();
@@ -1823,7 +1831,36 @@ export default function Chat({
   }, []);
 
   const starterSparks = useMemo(() => {
-    const isZh = String(uiLanguage || '').toLowerCase().startsWith('zh');
+    const isZh = isChineseLanguage(uiLanguage);
+    const isJa = isJapaneseLanguage(uiLanguage);
+    if (isJa) {
+      return [
+        {
+          icon: Feather,
+          title: '文章の推敲',
+          desc: '論理の流れを整え、表現を磨く',
+          prompt: '次の内容を推敲して整え、主旨と文章表現を明確にしてください：\n'
+        },
+        {
+          icon: Cpu,
+          title: 'アーキテクチャ設計',
+          desc: 'システム設計を検討し、技術選定を比較する',
+          prompt: 'あるシステムや機能の設計案を検討したいので、次の方向性を比較衡量する必要があります：\n'
+        },
+        {
+          icon: BookOpen,
+          title: '深い読解',
+          desc: '長文や文献を分解し、論点を抽出する',
+          prompt: 'この資料の要点と論証の流れを抽出して深く分析してください：\n'
+        },
+        {
+          icon: Sparkles,
+          title: '着想の散歩',
+          desc: '断片的な考えを捉え、多様な視点とぶつける',
+          prompt: '最近の断片的な考えを共有します。異なる視点から発想を広げ、思考を整理してください：\n'
+        }
+      ];
+    }
     if (isZh) {
       return [
         {
@@ -1880,6 +1917,14 @@ export default function Chat({
     ];
   }, [uiLanguage]);
 
+  const headingParts = useMemo(() => {
+    const isJa = isJapaneseLanguage(uiLanguage);
+    const isZh = isChineseLanguage(uiLanguage);
+    if (isJa) return { prefix: 'ここで', accent: 'ひらめきと思考', suffix: 'が形になる' };
+    if (isZh) return { prefix: '让', accent: '灵感与思考', suffix: '在此沉淀' };
+    return { prefix: 'Where ', accent: 'ideas & reasoning', suffix: ' take shape' };
+  }, [uiLanguage]);
+
   // Handle external file selection (e.g. from Workspace)
   useEffect(() => {
     if (externalFile) {
@@ -1894,6 +1939,8 @@ export default function Chat({
     setFiles(Array.isArray(composerPreset.files) ? composerPreset.files : []);
     if (composerPreset.options) {
       const options = composerPreset.options;
+      restoredOptionsRef.current = options;
+      setStoryGlassPreferences(options.storyGlassPreferences || DEFAULT_STORY_GLASS_PREFERENCES);
       setUseWeb(Boolean(options.useWeb)); setUseMcp(Boolean(options.useMcp));
       setUseSd(Boolean(options.useSd)); setUseMemory(Boolean(options.useMemory));
       setUsePpt(Boolean(options.usePpt)); setUseTruthCheck(Boolean(options.useTruthCheck));
@@ -2118,21 +2165,16 @@ export default function Chat({
     prevMessageCountRef.current = messages.length;
   }, [messages, isGenerating]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (restoringCheckpointId) return;
-    if (isGenerating) {
-      onStop();
-      return;
-    }
-    if (currentPendingRequest?.assistantMsgId) {
-      onCancelPendingChat?.(currentChatId);
-      return;
-    }
     const payload = buildSendPayload();
     if (!payload) return;
-    onSend(payload.text, files, payload.options);
+    const sent = onSend(payload.text, files, payload.options);
+    // App reserves the queue/run synchronously; don't clear rejected drafts.
+    if (await sent === false) return;
     setInput('');
     setFiles([]);
+    restoredOptionsRef.current = null;
     if (isRecording) stopRecording();
   };
 
@@ -2400,7 +2442,8 @@ export default function Chat({
 
   const buildSendPayload = () => {
     const baseOptions = {
-      useSearch: config.searchEnabled,
+      workspacePath: restoredOptionsRef.current?.workspacePath ?? config.workspacePath ?? '',
+      useSearch: restoredOptionsRef.current?.useSearch ?? config.searchEnabled,
       useWeb,
       useMcp,
       useSd,
@@ -2626,9 +2669,9 @@ export default function Chat({
         finishPlainSpeech();
         if (showErrors) {
           if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
-            alert('无法连接到 GPT-SoVITS 服务。请确保已通过 start.bat 或手动启动服务，并检查设置中的 API 地址是否正确（默认 http://127.0.0.1:9880）。');
+            alert(localize('无法连接到 GPT-SoVITS 服务。请确保已通过 start.bat 或手动启动服务，并检查设置中的 API 地址是否正确（默认 http://127.0.0.1:9880）。', 'Cannot reach the GPT-SoVITS service. Make sure the service is running (via start.bat or manually) and check that the API address in settings is correct (default http://127.0.0.1:9880).'));
           } else {
-            alert('GPT-SoVITS 错误: ' + err.message);
+            alert(localize('GPT-SoVITS 错误: ', 'GPT-SoVITS error: ') + err.message);
           }
         }
       }
@@ -2839,10 +2882,11 @@ export default function Chat({
 
                 {/* Main Heading & Subtitle */}
                 <h2 className="mt-2 text-2xl sm:text-3xl font-light tracking-tight text-[var(--text-dark)] text-center leading-snug">
-                  {getLocalText(
-                    <span>让<span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">灵感与思考</span>在此沉淀</span>,
-                    <span>Where <span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">ideas & reasoning</span> take shape</span>
-                  )}
+                  {headingParts.prefix}
+                  <span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">
+                    {headingParts.accent}
+                  </span>
+                  {headingParts.suffix}
                 </h2>
                 <p className="mt-2 text-xs sm:text-sm text-[var(--text-secondary)] text-center max-w-md mx-auto leading-relaxed font-normal">
                   {getLocalText(
@@ -2987,6 +3031,35 @@ export default function Chat({
             />
           )}
           <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
+          {(queue?.items?.length > 0 || queue?.note || queueStorageError) && (
+            <section aria-label={getLocalText('消息队列', 'Message queue')} className="mb-3 rounded-2xl border border-[var(--control-border)] bg-[var(--control-bg)] p-3 text-xs text-[var(--text-dark)]">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <strong>{getLocalText('待发送队列', 'Queued messages')} · {queue?.items?.length || 0} {queue?.paused ? getLocalText('（已暂停）', '(paused)') : ''}</strong>
+                {queue?.paused && <button type="button" onClick={onQueueResume} disabled={Boolean(currentPendingRequest?.assistantMsgId) || Boolean(restoringCheckpointId)} className="text-saki-pink disabled:opacity-40">{getLocalText('继续队列', 'Continue queue')}</button>}
+              </div>
+              <p className="opacity-60 mb-2">{getLocalText('队列仅保存在当前浏览器，刷新后默认暂停。运行中 Enter 默认入队。', 'Saved in this browser only; paused after refresh. Enter queues while running.')}</p>
+              {queue?.note && <p role="status" className="mb-2">{queue.note}</p>}
+              {queueStorageError && <p role="alert" className="text-rose-500">{queueStorageError}</p>}
+              <ol className="max-h-44 overflow-y-auto space-y-2">
+                {(queue?.items || []).map((item, index) => (
+                  <li key={item.id} className="rounded-xl border border-[var(--control-border)] p-2">
+                    <div className="flex gap-2 items-start">
+                      <span className="opacity-50">{index + 1}.</span>
+                      <div className="min-w-0 flex-1"><p className="whitespace-pre-wrap break-words line-clamp-3">{item.text || getLocalText('附件消息', 'Attachments')}</p>
+                        {item.files?.length > 0 && <p className="opacity-60 break-words">{item.files.map(file => file.name || file.filename).join(', ')}</p>}
+                        {item.error && <p role="alert" className="text-rose-500 mt-1">{item.error}</p>}
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button type="button" disabled={item.busy || !isGenerating || !currentPendingRequest?.assistantMsgId || Boolean(currentPendingRequest?.approvalRequest)} onClick={() => onQueueSteer?.(item.id)} className="text-saki-pink disabled:opacity-40">{item.busy ? getLocalText('处理中', 'Sending') : getLocalText('引导', 'Steer')}</button>
+                        <button type="button" disabled={item.busy} onClick={() => onQueueRemove?.(item.id, true)} className="disabled:opacity-40">{getLocalText('编辑', 'Edit')}</button>
+                        <button type="button" disabled={item.busy} onClick={() => onQueueRemove?.(item.id)} className="disabled:opacity-40">{getLocalText('撤回', 'Withdraw')}</button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
           <div
             className="saki-input-shell relative flex items-end gap-2 bg-[var(--control-bg)] dark:bg-[#161824]/65 backdrop-blur-2xl border border-[var(--control-border)]  rounded-2xl focus-within:border-[#ff75ac]/60 focus-within:ring-2 focus-within:ring-[#ff75ac]/20 transition-all p-2 flex-wrap shadow-lg dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]"
             data-onboarding-id="chat-composer"
@@ -3014,10 +3087,10 @@ export default function Chat({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold">
-                            {String(uiLanguage || '').toLowerCase().startsWith('zh') ? command.labels.zh : command.labels.en}
+                            {localizeWith(uiLanguage, command.labels.zh, command.labels.en)}
                           </div>
                           <div className="truncate text-xs text-[var(--text-secondary)]">
-                            {String(uiLanguage || '').toLowerCase().startsWith('zh') ? command.descriptions.zh : command.descriptions.en}
+                            {localizeWith(uiLanguage, command.descriptions.zh, command.descriptions.en)}
                           </div>
                         </div>
                       </button>
@@ -3153,7 +3226,7 @@ export default function Chat({
                           {MODEL_PROVIDER_ORDER.map(provider => {
                             const providerModels = (models || []).filter(item => item.provider === provider);
                             if (!providerModels.length) return null;
-                            const providerLabel = getChatProviderLabel(provider);
+                            const providerLabel = getChatProviderName(provider, uiLanguage);
                             const logoUrl = MODEL_PROVIDER_LOGOS[provider];
                             return (
                               <button
@@ -3247,7 +3320,7 @@ export default function Chat({
                           </button>
                           <div className="min-w-0">
                             <div className="truncate text-sm font-bold text-[var(--text-dark)]">{modelDetails.label || modelDetails.name}</div>
-                            <div className="text-[11px] text-[var(--text-tertiary)]">{getChatProviderLabel(modelDetails.provider)}</div>
+                            <div className="text-[11px] text-[var(--text-tertiary)]">{getChatProviderName(modelDetails.provider, uiLanguage)}</div>
                           </div>
                         </div>
                         <div className="pt-4">
@@ -3271,7 +3344,7 @@ export default function Chat({
                         </div>
                         {modelDetails.contextWindow ? (
                           <div className="mt-4 flex items-center justify-between text-sm">
-                            <span className="font-semibold text-[var(--text-dark)]">Max context</span>
+                            <span className="font-semibold text-[var(--text-dark)]">{getLocalText('最大上下文', 'Max context', '最大コンテキスト')}</span>
                             <span className="text-[var(--text-secondary)]">{modelDetails.contextWindow}</span>
                           </div>
                         ) : null}
@@ -3525,22 +3598,22 @@ export default function Chat({
                             <div className="rounded-lg bg-[var(--surface-inset)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
                               <div className="font-semibold text-[var(--text-dark)]">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
                               <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                                Model: {activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || 'not configured'}
+                                {getLocalText('模型', 'Model', 'モデル')}: {activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || getLocalText('未配置', 'not configured', '未設定')}
                               </div>
                               {activeDrawingStatus.endpoint && (
                                 <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                                  Endpoint: {activeDrawingStatus.endpoint}
+                                  {getLocalText('接口地址', 'Endpoint', 'エンドポイント')}: {activeDrawingStatus.endpoint}
                                 </div>
                               )}
                               {typeof activeDrawingStatus.modelCount === 'number' && activeDrawingStatus.connected && (
                                 <div className="mt-1 text-[10px] text-emerald-600">
-                                  Available models: {activeDrawingStatus.modelCount}
+                                  {getLocalText('可用模型', 'Available models', '利用可能なモデル')}: {activeDrawingStatus.modelCount}
                                 </div>
                               )}
                             </div>
                             {activeDrawingStatus.connected ? (
                               <div className="text-[10px] text-emerald-600 font-medium">
-                                API is connected and ready for drawing.
+                                {getLocalText('API 已连接，可以开始绘图。', 'API is connected and ready for drawing.', 'API に接続済み、描画の準備ができました。')}
                               </div>
                             ) : (
                               <div className="text-[11px] text-red-400 bg-red-50 p-2 rounded-lg break-all">
@@ -3767,8 +3840,11 @@ export default function Chat({
                 if (!input) e.target.placeholder = t('ask_placeholder');
               }}
               onChange={(e) => setInput(e.target.value)}
+              onCompositionStart={() => { composingRef.current = true; }}
+              onCompositionEnd={() => { composingRef.current = false; }}
               onPaste={handlePaste}
               onKeyDown={(e) => {
+                if (isComposerComposing(e, composingRef.current)) return;
                 if (slashSuggestions.length > 0 && e.key === 'ArrowDown') {
                   e.preventDefault();
                   setSlashIndex(prev => Math.min(prev + 1, slashSuggestions.length - 1));
@@ -3810,11 +3886,13 @@ export default function Chat({
             <button
               onClick={handleSend}
               disabled={Boolean(restoringCheckpointId)}
-              className={`p-2.5 rounded-full transition-all active:scale-95 ${isGenerating || currentPendingRequest?.assistantMsgId ? 'bg-red-500/80 text-white shadow-lg' : (input.trim() || files.length > 0 ? 'bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_6px_20px_rgba(255,117,172,0.35)] hover:opacity-95' : 'bg-[var(--control-bg)]  text-[var(--text-tertiary)] ')}`}
-              title={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('结束生成', 'Stop generation') : getLocalText('发送', 'Send')}
+              className="p-2.5 rounded-full transition-all active:scale-95 bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white"
+              aria-label={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
+              title={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
             >
-              {isGenerating || currentPendingRequest?.assistantMsgId ? <div className="w-4 h-4 bg-white rounded-sm" /> : <ArrowUp size={20} />}
+              <ArrowUp size={20} />
             </button>
+            {(isGenerating || currentPendingRequest?.assistantMsgId) && <button type="button" onClick={() => isGenerating ? onStop?.() : onCancelPendingChat?.(currentChatId)} aria-label={getLocalText('结束生成', 'Stop generation')} title={getLocalText('结束生成', 'Stop generation')} className="p-3 rounded-full bg-red-500/80 text-white"><span className="block w-4 h-4 bg-white rounded-sm" /></button>}
           </div>
           <div className="flex items-center justify-center gap-1.5 text-[10px] text-[var(--text-tertiary)] opacity-65 tracking-wide mt-2 select-none">
             <span className="w-1 h-1 rounded-full bg-[var(--text-tertiary)] opacity-50" />
@@ -3994,7 +4072,7 @@ function MessageBubbleToolbar({
             onOpenDiagnostics?.();
           }}
           className="pointer-events-auto inline-flex items-center gap-1.5 rounded-xl px-2 py-1.5 text-[10px] font-semibold text-gray-500 hover:bg-gray-100 hover:text-slate-800 transition-all active:scale-95 cursor-pointer"
-          title={labels.diagnostics || "查看消息诊断详细日志"}
+          title={labels.diagnostics || localize("查看消息诊断详细日志", "View detailed message diagnostics")}
         >
           <svg width="14" height="14" className="transform -rotate-90">
             {/* Background Circle */}
@@ -4252,7 +4330,6 @@ function ToolbarButton({ onClick, label, icon: Icon, active = false, destructive
 function RichCodeBlock({ language, value }) {
   const { i18n } = useTranslation();
   const [isCopied, setIsCopied] = useState(false);
-  const localeIsZh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
   const label = (language || 'text').toUpperCase();
   const lineCount = String(value || '').split(/\r?\n/).length;
 
@@ -4276,9 +4353,9 @@ function RichCodeBlock({ language, value }) {
             <FileText size={11} className="text-sky-500" />
             <span className="tracking-[0.18em] text-slate-500">{label}</span>
             <span className="h-1 w-1 rounded-full bg-slate-300" />
-            <span>{localeIsZh ? '代码块' : 'Code Block'}</span>
+            <span>{localize('代码块', 'Code Block')}</span>
             <span className="h-1 w-1 rounded-full bg-slate-300" />
-            <span className="text-slate-400">{localeIsZh ? `${lineCount} 行` : `${lineCount} lines`}</span>
+            <span className="text-slate-400">{localize(`${lineCount} 行`, `${lineCount} lines`)}</span>
           </div>
         </div>
         <button
@@ -4290,7 +4367,7 @@ function RichCodeBlock({ language, value }) {
           }`}
         >
           {isCopied ? <Check size={12} /> : <Copy size={12} />}
-          {isCopied ? (localeIsZh ? '已复制' : 'Copied') : (localeIsZh ? '复制' : 'Copy')}
+          {isCopied ? localize('已复制', 'Copied') : localize('复制', 'Copy')}
         </button>
       </div>
       <div className="bg-[radial-gradient(circle_at_top_left,rgba(255,117,172,0.08),transparent_32%),linear-gradient(180deg,rgba(248,250,252,0.82),rgba(241,245,249,0.94))] dark:bg-[radial-gradient(circle_at_top_left,rgba(255,117,172,0.08),transparent_32%),linear-gradient(180deg,rgba(18,19,26,0.92),rgba(14,15,20,0.98))] p-1.5">
@@ -4542,9 +4619,7 @@ function MusicFileCard({ file, onDownload }) {
   const noiseBufferRef = useRef(null);
   const spec = file?.musicSpec;
   const summary = file?.summary || {};
-  const getLocalText = (zhText, enText) => (
-    String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh') ? zhText : enText
-  );
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
 
   const stopPlayback = () => {
     if (stopTimerRef.current) {
@@ -4655,7 +4730,7 @@ function MusicFileCard({ file, onDownload }) {
           </div>
           <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-emerald-700">
             <span className="rounded-full bg-white/80 px-2 py-0.5">{summary.tempo || spec?.tempo || 92} BPM</span>
-            <span className="rounded-full bg-white/80 px-2 py-0.5">{summary.bars || spec?.bars || 8} bars</span>
+            <span className="rounded-full bg-white/80 px-2 py-0.5">{summary.bars || spec?.bars || 8} {getLocalText('小节', 'bars', '小節')}</span>
             <span className="rounded-full bg-white/80 px-2 py-0.5">{summary.key || spec?.key || 'Unknown key'}</span>
           </div>
           <div className="mt-2 text-[11px] text-gray-500 leading-relaxed">

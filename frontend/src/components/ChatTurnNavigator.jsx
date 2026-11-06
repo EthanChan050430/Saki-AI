@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { parseTurns } from '../utils/chatTurnParser.js';
+import { localizeWith } from '../utils/localize.js';
 
 export { parseTurns };
 
@@ -8,6 +10,7 @@ export default function ChatTurnNavigator({
   containerRef,
   minTurns = 3,
 }) {
+  const { i18n } = useTranslation();
   const [activeTurnIndex, setActiveTurnIndex] = useState(0);
   const [hoveredTurnIndex, setHoveredTurnIndex] = useState(null);
   const [isHovered, setIsHovered] = useState(false);
@@ -222,7 +225,7 @@ export default function ChatTurnNavigator({
                 onClick={() => scrollToTurn(turn)}
                 onMouseEnter={() => setHoveredTurnIndex(idx)}
                 className="group relative p-1 focus:outline-none flex items-center justify-center cursor-pointer"
-                aria-label={`跳转到第 ${idx + 1} 轮对话: ${turn.previewText}`}
+                aria-label={localizeWith(i18n.resolvedLanguage || i18n.language, `跳转到第 ${idx + 1} 轮对话: ${turn.previewText}`, `Jump to conversation turn ${idx + 1}: ${turn.previewText}`)}
                 title={turn.previewText}
               >
                 <div

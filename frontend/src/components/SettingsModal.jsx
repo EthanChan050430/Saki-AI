@@ -8,26 +8,26 @@ import { BACKEND_URL } from '../utils/backendUrl';
 import {
   CHAT_PROVIDER_OPTIONS,
   getApiProviderMeta,
-  getChatProviderLabel,
+  getChatProviderName,
+  getChatProviderSubtitle,
   getProviderApiKey,
   getProviderBaseUrl,
   isApiProviderEnabled,
 } from '../utils/chatProviderConfig';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 import { CHAT_BACKGROUNDS, getChatBackgroundPreset, getChatBackgroundSource, selectChatBackground } from '../utils/chatAppearance';
+import { localizeWith } from '../utils/localize';
 
 export default function SettingsModal({ config, setConfig, onClose, models, windowed = false }) {
   const { t, i18n } = useTranslation();
   const backgroundPreset = getChatBackgroundPreset(config);
   const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
-  const getLocalText = (zhText, enText) => (
-    String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh') ? zhText : enText
-  );
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const activeApiProvider = getApiProviderMeta(config.provider);
   const activeProviderApiKey = activeApiProvider ? getProviderApiKey(config, activeApiProvider.id) : '';
   const activeProviderBaseUrl = activeApiProvider ? getProviderBaseUrl(config, activeApiProvider.id) : '';
   const configuredApiCount = CHAT_PROVIDER_OPTIONS.filter(provider => isApiProviderEnabled(config, provider.id)).length;
-  const getProviderSubText = (provider) => provider.subKey ? t(provider.subKey) : provider.sub;
+  const getProviderSubText = (provider) => provider.subKey ? t(provider.subKey) : getChatProviderSubtitle(provider, i18n.resolvedLanguage || i18n.language);
   const updateActiveProviderApiKey = (value) => {
     if (!activeApiProvider) return;
     setConfig({
@@ -325,7 +325,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   className={`p-3 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-[#ff75ac] bg-[#ff75ac]/10 dark:bg-[#ff75ac]/15' : 'border-[var(--surface-border-subtle)]  hover:border-[#ff75ac]/40 '}`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <div className="min-w-0 flex-1 font-bold text-[var(--text-dark)]  text-sm whitespace-nowrap overflow-hidden text-ellipsis">{p.name}</div>
+                    <div className="min-w-0 flex-1 font-bold text-[var(--text-dark)]  text-sm whitespace-nowrap overflow-hidden text-ellipsis">{getChatProviderName(p.id, i18n.resolvedLanguage || i18n.language)}</div>
                     {isApiProviderEnabled(config, p.id) && (
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
                     )}
@@ -340,7 +340,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 {activeApiProvider.id === 'custom' && (
                   <div>
-                    <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Base URL</label>
+                    <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{getLocalText('基础地址', 'Base URL', 'ベース URL')}</label>
                     <input 
                       type="text"
                       className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
@@ -351,7 +351,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{activeApiProvider.name} API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{activeApiProvider.name} {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
                   <div className="relative">
                     <input 
                       type="password"
@@ -404,7 +404,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             )}
             {config.provider === 'lmstudio' && (
               <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl">
-                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">LMStudio Endpoint</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">LMStudio {getLocalText('端点', 'Endpoint', 'エンドポイント')}</label>
                 <input 
                    type="text"
                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
@@ -412,7 +412,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                    value={config.lmstudioUrl || ''}
                    onChange={(e) => setConfig({...config, lmstudioUrl: e.target.value})}
                 />
-                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">Local LMStudio server endpoint (default: http://localhost:1234)</p>
+                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{getLocalText('本地 LMStudio 服务端点（默认：http://localhost:1234）', 'Local LMStudio server endpoint (default: http://localhost:1234)', 'ローカル LMStudio サーバーのエンドポイント（既定: http://localhost:1234）')}</p>
               </div>
             )}
             {config.provider === 'copilot' && (
@@ -460,7 +460,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       </div>
                       <div>
                         <div className="text-sm font-bold text-[var(--text-dark)]">{t('github_authorized')}</div>
-                        <div className="text-[10px] text-[var(--text-secondary)] truncate w-32">Token: {config.copilotToken.slice(0, 8)}...</div>
+                        <div className="text-[10px] text-[var(--text-secondary)] truncate w-32">{getLocalText('令牌', 'Token', 'トークン')}: {config.copilotToken.slice(0, 8)}...</div>
                       </div>
                     </div>
                     <button 
@@ -484,10 +484,10 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {[
                 { id: 'off', name: t('none'), sub: t('disabled') },
-                { id: 'searxng', name: 'SearxNG', sub: '(Local)' },
-                { id: 'google', name: 'Google', sub: 'Custom Search' },
+                { id: 'searxng', name: 'SearxNG', sub: getLocalText('本地', '(Local)', 'ローカル') },
+                { id: 'google', name: 'Google', sub: getLocalText('自定义搜索', 'Custom Search', 'カスタム検索') },
                 { id: 'bing', name: 'Bing', sub: 'Azure' },
-                { id: 'duckduckgo', name: 'DuckDuckGo', sub: '(Free)' },
+                { id: 'duckduckgo', name: 'DuckDuckGo', sub: getLocalText('免费', '(Free)', '無料') },
               ].map(s => (
                 <button 
                   key={s.id}
@@ -519,7 +519,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             {config.searchEngine === 'google' && (
               <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
                   <input 
                     type="password"
                     className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
@@ -544,7 +544,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             {config.searchEngine === 'bing' && (
               <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Bing API Key</label>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Bing {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
                   <input 
                     type="password"
                     className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
@@ -658,7 +658,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                  ) : config.drawingProvider === 'custom' ? (
                     <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                       <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Base URL</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('基础地址', 'Base URL', 'ベース URL')}</label>
                         <input 
                           type="text"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
@@ -668,7 +668,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">API Key</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('API 密钥', 'API Key', 'API キー')}</label>
                         <input 
                           type="password"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
@@ -678,7 +678,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Model ID</label>
+                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('模型 ID', 'Model ID', 'モデル ID')}</label>
                         <input 
                           type="text"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
@@ -711,7 +711,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                          <option value="">{t('disable_drawing')}</option>
                          {models?.filter(m => m.provider !== 'custom').map(m => (
                            <option key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
-                             {getChatProviderLabel(m.provider)}: {m.name}
+                             {getChatProviderName(m.provider, i18n.resolvedLanguage || i18n.language)}: {m.name}
                            </option>
                          ))}
                        </select>
@@ -750,7 +750,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               {config.ttsProvider === 'gpt-sovits' && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
                   <div>
-                    <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">API URL</label>
+                    <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('API 地址', 'API URL', 'API URL')}</label>
                     <div className="flex gap-2">
                       <input 
                         type="text"
@@ -771,7 +771,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">GPT Model</label>
+                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">GPT {getLocalText('模型', 'Model', 'モデル')}</label>
                       <select 
                         className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsGptModel || ''}
@@ -787,7 +787,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">SoVITS Model</label>
+                      <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">SoVITS {getLocalText('模型', 'Model', 'モデル')}</label>
                       <select 
                         className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsSovitsModel || ''}
@@ -966,7 +966,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </div>
                 <select
                   value={i18n.language}
-                  onChange={(e) => i18n.changeLanguage(e.target.value)}
+                  onChange={(e) => { localStorage.setItem('saki_user_lang', e.target.value); i18n.changeLanguage(e.target.value); }}
                   className="border rounded-lg px-2 py-1.5 text-xs outline-none bg-[var(--surface-bg)] min-w-[120px]"
                 >
                   <option value="zh-CN">简体中文</option>

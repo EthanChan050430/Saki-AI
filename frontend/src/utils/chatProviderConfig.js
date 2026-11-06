@@ -15,11 +15,15 @@ export const API_CHAT_PROVIDERS = [
     id: 'deepseek',
     name: 'Deepseek',
     sub: '深度求索',
+    subEn: 'DeepSeek',
+    subJa: 'DeepSeek',
     apiKeyField: 'deepseekApiKey',
   },
   {
     id: 'zhipu',
     name: '智谱 AI',
+    nameEn: 'Zhipu AI',
+    nameJa: 'Zhipu AI',
     sub: 'GLM',
     apiKeyField: 'zhipuApiKey',
   },
@@ -33,6 +37,8 @@ export const API_CHAT_PROVIDERS = [
     id: 'minimax',
     name: 'MiniMax',
     sub: '海螺 AI',
+    subEn: 'Hailuo AI',
+    subJa: 'Hailuo AI',
     apiKeyField: 'minimaxApiKey',
   },
   {
@@ -45,18 +51,28 @@ export const API_CHAT_PROVIDERS = [
     id: 'moonshot',
     name: 'Moonshot AI',
     sub: '月之暗面',
+    subEn: 'Moonshot',
+    subJa: 'Moonshot',
     apiKeyField: 'moonshotApiKey',
   },
   {
     id: 'tongyi',
     name: '通义',
+    nameEn: 'Tongyi',
+    nameJa: 'Tongyi',
     sub: '阿里 Qwen',
+    subEn: 'Alibaba Qwen',
+    subJa: 'Alibaba Qwen',
     apiKeyField: 'tongyiApiKey',
   },
   {
     id: 'doubao',
     name: '豆包',
+    nameEn: 'Doubao',
+    nameJa: 'Doubao',
     sub: '字节跳动',
+    subEn: 'ByteDance',
+    subJa: 'ByteDance',
     apiKeyField: 'doubaoApiKey',
   },
   {
@@ -141,6 +157,12 @@ export function isApiProviderEnabled(config = {}, provider = '') {
 
 export function migrateApiProviderConfig(config = {}) {
   const next = { ...(config || {}) };
+  const activeProvider = normalizeChatProviderId(next.provider);
+  const activeMeta = getApiProviderMeta(activeProvider);
+  // Migrate before supplying defaults. An explicit empty key/URL means disabled.
+  if (activeMeta && next[activeMeta.apiKeyField] === undefined) {
+    next[activeMeta.apiKeyField] = String(next.apiKey || '').trim();
+  }
 
   for (const provider of API_CHAT_PROVIDERS) {
     if (next[provider.apiKeyField] === undefined) {
@@ -155,18 +177,6 @@ export function migrateApiProviderConfig(config = {}) {
     next.showAllEnabledApiModels = false;
   }
 
-  const activeProvider = normalizeChatProviderId(next.provider);
-  const activeMeta = getApiProviderMeta(activeProvider);
-  const legacyApiKey = String(next.apiKey || '').trim();
-
-  if (activeMeta && legacyApiKey && !String(next[activeMeta.apiKeyField] || '').trim()) {
-    next[activeMeta.apiKeyField] = legacyApiKey;
-  }
-
-  if (activeProvider === 'custom' && !String(next.customApiBaseUrl || '').trim() && next.apiBaseUrl) {
-    next.customApiBaseUrl = next.apiBaseUrl;
-  }
-
   return next;
 }
 
@@ -177,4 +187,25 @@ export function getChatProviderLabel(provider = '') {
   if (normalized === 'copilot') return 'GitHub Models';
   const apiMeta = getApiProviderMeta(normalized);
   return apiMeta?.name || normalized;
+}
+
+const pickVariant = (language, zh, en, ja) => {
+  const lang = String(language || '').toLowerCase();
+  if (lang.startsWith('zh')) return zh;
+  if (lang.startsWith('ja')) return ja ?? en ?? zh;
+  return en ?? zh;
+};
+
+/** Localized provider title for the provider picker / model list. */
+export function getChatProviderName(provider = '', language = '') {
+  const meta = getApiProviderMeta(provider) || CHAT_PROVIDER_OPTIONS.find((item) => item.id === normalizeChatProviderId(provider));
+  if (!meta) return getChatProviderLabel(provider);
+  return pickVariant(language, meta.name, meta.nameEn ?? meta.name, meta.nameJa ?? meta.nameEn ?? meta.name);
+}
+
+/** Localized provider subtitle (the muted second line under the name). */
+export function getChatProviderSubtitle(provider = {}, language = '') {
+  if (!provider) return '';
+  if (provider.subKey) return provider.subKey;
+  return pickVariant(language, provider.sub, provider.subEn ?? provider.sub, provider.subJa ?? provider.subEn ?? provider.sub);
 }

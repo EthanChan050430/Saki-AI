@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import StoryGlassView from './StoryGlassView';
+import { localizeWith, isChineseLanguage, isJapaneseLanguage } from '../utils/localize';
 
 const STORY_GLASS_BACKGROUND = '/assets/gushibei.png';
 const STORY_GLASS_BUBBLE_IMAGE = '/assets/bubble.png';
@@ -272,8 +273,10 @@ function normalizeStoryFlavorSignalLabel(label = '') {
     .slice(0, 12);
 }
 
-function pushUniqueSignal(signals, signal, localeIsZh) {
-  const label = normalizeStoryFlavorSignalLabel(localeIsZh ? signal.zh || signal.label : signal.en || signal.label);
+function pushUniqueSignal(signals, signal, language) {
+  const label = normalizeStoryFlavorSignalLabel(
+    localizeWith(language, signal.zh || signal.label, signal.en || signal.label),
+  );
   if (!label || signals.some((item) => item.label.toLowerCase() === label.toLowerCase())) return;
   signals.push({
     label,
@@ -300,12 +303,12 @@ function getSignalItems(value = []) {
     .filter((item) => item?.label);
 }
 
-function getStoryFlavorSignals({ text = '', data = null, latestDecision = null, readinessScore = 0, localeIsZh = true } = {}) {
+function getStoryFlavorSignals({ text = '', data = null, latestDecision = null, readinessScore = 0, language = 'zh-CN' } = {}) {
   const signals = [];
   const normalizedText = String(text || '');
   const decisionSignals = getSignalItems(latestDecision?.flavorSignals || latestDecision?.storyFlavors || latestDecision?.flavors);
 
-  decisionSignals.forEach((signal) => pushUniqueSignal(signals, signal, localeIsZh));
+  decisionSignals.forEach((signal) => pushUniqueSignal(signals, signal, language));
 
   if (signals.length <= 0 && data) {
     const dataTags = [
@@ -324,23 +327,23 @@ function getStoryFlavorSignals({ text = '', data = null, latestDecision = null, 
         zh: label,
         en: label,
         tone: STORY_FLAVOR_SIGNAL_LIBRARY[index % STORY_FLAVOR_SIGNAL_LIBRARY.length]?.tone || 'amber',
-      }, localeIsZh);
+      }, language);
     });
   }
 
   if (signals.length <= 0 && latestDecision?.fallbackSignals) {
     STORY_SIGNAL_KEYWORDS.forEach((signal) => {
       if (signal.test.test(normalizedText)) {
-        pushUniqueSignal(signals, signal, localeIsZh);
+        pushUniqueSignal(signals, signal, language);
       }
     });
   }
 
   const decisionMood = String(latestDecision?.mood || '').toLowerCase();
   if (signals.length > 0 && decisionMood.includes('ready')) {
-    pushUniqueSignal(signals, { zh: '杯口已成', en: 'glass ready', tone: 'gold' }, localeIsZh);
+    pushUniqueSignal(signals, { zh: '杯口已成', en: 'glass ready', tone: 'gold' }, language);
   } else if (signals.length > 0 && (decisionMood.includes('touch') || decisionMood.includes('hold'))) {
-    pushUniqueSignal(signals, { zh: '被触动', en: 'touched', tone: 'rose' }, localeIsZh);
+    pushUniqueSignal(signals, { zh: '被触动', en: 'touched', tone: 'rose' }, language);
   }
 
   const visibleCount = readinessScore >= 70 ? 8 : readinessScore >= 38 ? 6 : 4;
@@ -410,7 +413,7 @@ function getDecisionMoodMeta(decision = null, getLocalText) {
   return null;
 }
 
-function getVoiceToneMeta({ text = '', isListening = false, readinessScore = 0, localeIsZh = true } = {}) {
+function getVoiceToneMeta({ text = '', isListening = false, readinessScore = 0, language = 'zh-CN' } = {}) {
   const normalized = String(text || '').trim();
   const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) || []).length;
   const latinWords = (normalized.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g) || []).length;
@@ -419,22 +422,23 @@ function getVoiceToneMeta({ text = '', isListening = false, readinessScore = 0, 
   const hasSoft = /累|困|难过|委屈|安静|tired|sad|quiet/i.test(normalized);
   const hasTension = /紧张|害怕|焦虑|突然|崩溃|nervous|afraid|anxious|suddenly/i.test(normalized);
 
-  let label = localeIsZh ? '正在成形' : 'taking shape';
+  const tx = (zhText, enText) => localizeWith(language, zhText, enText);
+  let label = tx('正在成形', 'taking shape');
   let tone = 'mint';
   if (hasTension) {
-    label = localeIsZh ? '语气偏紧' : 'tense edge';
+    label = tx('语气偏紧', 'tense edge');
     tone = 'blue';
   } else if (hasLaugh) {
-    label = localeIsZh ? '语气变亮' : 'brighter voice';
+    label = tx('语气变亮', 'brighter voice');
     tone = 'gold';
   } else if (hasSoft) {
-    label = localeIsZh ? '语气放低' : 'softer voice';
+    label = tx('语气放低', 'softer voice');
     tone = 'rose';
   } else if (readinessScore >= 70 || lengthScore > 120) {
-    label = localeIsZh ? '余韵变浓' : 'aftertaste rising';
+    label = tx('余韵变浓', 'aftertaste rising');
     tone = 'amber';
   } else if (!isListening) {
-    label = localeIsZh ? '停顿里有味道' : 'a pause with flavor';
+    label = tx('停顿里有味道', 'a pause with flavor');
     tone = 'slate';
   }
 
@@ -796,7 +800,10 @@ function StoryGlassShelf({
             const quote = String(data.featuredQuote || data.sakiComment || '').trim();
             const tags = Array.isArray(data.storyTags) ? data.storyTags.slice(0, 3).filter(Boolean) : [];
             const servedAt = item.createdAt
-              ? new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+              ? new Date(item.createdAt).toLocaleDateString(
+                  isJapaneseLanguage(activeLanguage) ? 'ja-JP' : isChineseLanguage(activeLanguage) ? 'zh-CN' : 'en-US',
+                  { month: 'short', day: 'numeric' },
+                )
               : '';
 
             return (
@@ -1282,8 +1289,11 @@ export default function StoryGlassOverlay({
   onArchiveConversation,
 }) {
   const { i18n } = useTranslation();
-  const localeIsZh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  const getLocalText = useCallback((zhText, enText) => (localeIsZh ? zhText : enText), [localeIsZh]);
+  const activeLanguage = i18n.resolvedLanguage || i18n.language;
+  const getLocalText = useCallback(
+    (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText),
+    [i18n.language, i18n.resolvedLanguage],
+  );
 
   const [transcript, setTranscript] = useState('');
   const [interimText, setInterimText] = useState('');
@@ -2121,14 +2131,14 @@ export default function StoryGlassOverlay({
     data: storyGlassData,
     latestDecision,
     readinessScore: isCompleted ? 100 : readiness.score,
-    localeIsZh,
-  }), [finalTranscript, isCompleted, latestDecision, liveTranscript, localeIsZh, readiness.score, storyGlassData, submittedStory]);
+    language: activeLanguage,
+  }), [finalTranscript, isCompleted, latestDecision, liveTranscript, activeLanguage, readiness.score, storyGlassData, submittedStory]);
   const voiceToneMeta = useMemo(() => getVoiceToneMeta({
     text: liveTranscript || finalTranscript,
     isListening,
     readinessScore: readiness.score,
-    localeIsZh,
-  }), [finalTranscript, isListening, liveTranscript, localeIsZh, readiness.score]);
+    language: activeLanguage,
+  }), [finalTranscript, isListening, liveTranscript, activeLanguage, readiness.score]);
   const decisionMoodMeta = useMemo(
     () => getDecisionMoodMeta(latestDecision, getLocalText),
     [getLocalText, latestDecision]

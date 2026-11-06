@@ -222,7 +222,29 @@ const resources = {
       "slide_preview": "幻灯片预览 - 第 {{page}} 页",
       "voice_input": "语音输入",
       "voice_stop": "停止录音",
-      "browser_not_support_speech": "您的浏览器不支持语音识别功能。"
+      "browser_not_support_speech": "您的浏览器不支持语音识别功能。",
+      "plugin_marketplace": "插件市场",
+      "plugin_marketplace_desc": "浏览并安装插件以扩展 Saki 的功能。",
+      "language": "语言",
+      "search": "搜索",
+      "toggle_sidebar": "收起或展开侧边栏",
+      "switch_to_light": "切换至浅色模式",
+      "switch_to_dark": "切换至深色模式",
+      "music_mode": "音乐电台模式",
+      "stop_music": "停止音乐",
+      "save_settings": "保存设置",
+      "drag_tip": "拖拽文件到此处或点击上传",
+      "drag_tip_mobile": "点击上传文件",
+      "edit_ai_settings": "编辑 AI 设置",
+      "prompt_slimming_desc": "精简提示词，保留核心指令",
+      "prompt_slimming_title": "提示词瘦身",
+      "restore_default_avatar": "恢复默认头像",
+      "restore_default_prompt": "恢复默认提示词",
+      "prompt_hint": "调整上述设定可以重塑 Saki 的回复语气、口头禅以及回答规范。",
+      "saki_profile": "Saki 人设",
+      "saki_profile_desc": "定义 Saki 的性格、语气与回复风格",
+      "speaking_style": "说话风格",
+      "uploading": "上传中…"
     }
   },
   "zh-TW": {
@@ -415,12 +437,63 @@ const resources = {
       "slide_preview": "幻燈片預覽 - 第 {{page}} 頁",
       "voice_input": "語音輸入",
       "voice_stop": "停止錄音",
-      "browser_not_support_speech": "您的瀏覽器不支持語音識別功能。"
+      "browser_not_support_speech": "您的瀏覽器不支持語音識別功能。",
+      "export_md": "匯出 Markdown",
+      "delete_move_trash_confirm": "確定要將 {{name}} 移至資源回收筒嗎？",
+      "permanent_delete_confirm": "確定要永久刪除此檔案嗎？刪除後無法復原！",
+      "restore_fail": "還原失敗",
+      "trash_file_cleared": "檔案已被清理或不存在",
+      "search_trash_placeholder": "在資源回收筒中搜尋...",
+      "trash_empty": "資源回收筒空空如也",
+      "trash": "資源回收筒",
+      "files": "檔案列表",
+      "folder": "資料夾",
+      "go_up": "上一層",
+      "open": "開啟",
+      "restore": "復原",
+      "permanent_delete": "永久刪除",
+      "restore_action": "還原被刪除的檔案",
+      "restore_action_label": "還原檔案",
+      "custom_api": "自訂介面",
+      "api_key_tip": "API Key 將被安全地儲存並僅用於與對應平台通訊。",
+      "custom_drawing": "自訂 API",
+      "custom_drawing_tip": "支援呼叫 OpenAI 標準的 /v1/images/generations 介面。",
+      "tts_settings": "語音合成 (TTS)",
+      "browser_tts": "瀏覽器預設",
+      "refer_audio": "參考音訊",
+      "upload_refer_audio": "上傳參考音訊",
+      "refer_text": "參考音訊文字",
+      "refer_text_placeholder": "在此輸入參考音訊所說的話...",
+      "refresh_models": "重新整理模型列表",
+      "plugin_marketplace": "外掛市集",
+      "plugin_marketplace_desc": "瀏覽並安裝外掛以擴充 Saki 的功能。",
+      "language": "語言",
+      "search": "搜尋",
+      "toggle_sidebar": "收合或展開側邊欄",
+      "switch_to_light": "切換至淺色模式",
+      "switch_to_dark": "切換至深色模式",
+      "music_mode": "音樂電台模式",
+      "stop_music": "停止音樂",
+      "save_settings": "儲存設定",
+      "drag_tip": "拖曳檔案到此處或點擊上傳",
+      "drag_tip_mobile": "點擊上傳檔案",
+      "edit_ai_settings": "編輯 AI 設定",
+      "prompt_slimming_desc": "精簡提示詞，保留核心指令",
+      "prompt_slimming_title": "提示詞瘦身",
+      "restore_default_avatar": "恢復預設頭像",
+      "restore_default_prompt": "恢復預設提示詞",
+      "prompt_hint": "调整上述設定可以重塑 Saki 的回覆語氣、口頭禪以及回答規範。",
+      "saki_profile": "Saki 人設",
+      "saki_profile_desc": "定義 Saki 的性格、語氣與回覆風格",
+      "speaking_style": "說話風格",
+      "uploading": "上傳中…"
     }
   },
   "en-US": {
     translation: {
       "settings": "Settings",
+      "plugin_marketplace": "Plugin Marketplace",
+      "plugin_marketplace_desc": "Extensions binding MCP servers and specialized workflow skills",
       "language": "Language",
       "system_prompt": "System Prompt",
       "mcp_config": "MCP Config",
@@ -613,7 +686,50 @@ const resources = {
       "path_label": "Path",
       "content_label": "Content",
       "smart_ppt": "Smart PPT",
-      "none": "None"
+      "none": "None",
+      "export_md": "Export Markdown",
+      "custom_drawing": "Custom API",
+      "custom_drawing_tip": "Supports calling OpenAI standard /v1/images/generations endpoint.",
+      "close_window": "Close Window",
+      "export_fail": "Failed to export image, please retry",
+      "tts_settings": "TTS Settings",
+      "browser_tts": "Browser Default",
+      "refer_audio": "Refer Audio",
+      "upload_refer_audio": "Upload Refer Audio",
+      "refer_text": "Refer Text",
+      "refer_text_placeholder": "Enter what the refer audio said...",
+      "refresh_models": "Refresh Models",
+      "search_engine_config": "Search Engine Config",
+      "searxng_url": "SearxNG URL",
+      "searxng_url_tip": "Default: http://127.0.0.1:8080 (must include protocol)",
+      "disabled": "Disabled",
+      "ppt_generating_content": "Generating slide content...",
+      "ppt_completed": "PPT Completed",
+      "design_thinking": "Design Thinking",
+      "slide_preview": "Slide Preview - Page {{page}}",
+      "voice_input": "Voice Input",
+      "voice_stop": "Stop Recording",
+      "browser_not_support_speech": "Your browser does not support speech recognition.",
+      "language": "Language",
+      "search": "Search",
+      "toggle_sidebar": "Toggle sidebar",
+      "switch_to_light": "Switch to light mode",
+      "switch_to_dark": "Switch to dark mode",
+      "music_mode": "Dance & Radio Mode",
+      "stop_music": "Stop Music",
+      "save_settings": "Save settings",
+      "drag_tip": "Drag files here or click to upload",
+      "drag_tip_mobile": "Tap to upload files",
+      "edit_ai_settings": "Edit AI settings",
+      "prompt_slimming_desc": "Trim the prompt while keeping its core instructions",
+      "prompt_slimming_title": "Prompt Slimming",
+      "restore_default_avatar": "Restore default avatar",
+      "restore_default_prompt": "Restore default prompt",
+      "prompt_hint": "These settings reshape Saki's tone, catchphrases and answer guidelines.",
+      "saki_profile": "Saki Persona",
+      "saki_profile_desc": "Define Saki's personality, tone and reply style",
+      "speaking_style": "Speaking Style",
+      "uploading": "Uploading…"
     }
   },
   "en-GB": {
@@ -807,7 +923,55 @@ const resources = {
       "slide_preview": "Slide Preview - Page {{page}}",
       "voice_input": "Voice Input",
       "voice_stop": "Stop Recording",
-      "browser_not_support_speech": "Your browser does not support speech recognition."
+      "browser_not_support_speech": "Your browser does not support speech recognition.",
+      "export_md": "Export Markdown",
+      "delete_move_trash_confirm": "Move {{name}} to trash?",
+      "permanent_delete_confirm": "Permanently delete this file? This cannot be undone!",
+      "restore_fail": "Restore failed",
+      "trash_file_cleared": "File cleared or does not exist",
+      "search_trash_placeholder": "Search trash...",
+      "trash_empty": "Trash is empty",
+      "trash": "Trash",
+      "files": "Files",
+      "folder": "Folder",
+      "go_up": "Go up",
+      "open": "Open",
+      "restore": "Restore",
+      "permanent_delete": "Erase",
+      "restore_action": "Restore deleted file",
+      "restore_action_label": "Restore File",
+      "custom_api": "Custom API",
+      "api_key_tip": "API Keys are stored safely and only used for provider communication.",
+      "custom_drawing": "Custom API",
+      "custom_drawing_tip": "Supports calling OpenAI standard /v1/images/generations endpoint.",
+      "close_window": "Close Window",
+      "export_fail": "Failed to export image, please retry",
+      "search_engine_config": "Search Engine Config",
+      "searxng_url": "SearxNG URL",
+      "searxng_url_tip": "Default: http://127.0.0.1:8080 (must include protocol)",
+      "disabled": "Disabled",
+      "plugin_marketplace": "Plugin Marketplace",
+      "plugin_marketplace_desc": "Extensions binding MCP servers and specialized workflow skills",
+      "language": "Language",
+      "search": "Search",
+      "toggle_sidebar": "Toggle sidebar",
+      "switch_to_light": "Switch to light mode",
+      "switch_to_dark": "Switch to dark mode",
+      "music_mode": "Dance & Radio Mode",
+      "stop_music": "Stop Music",
+      "save_settings": "Save settings",
+      "drag_tip": "Drag files here or click to upload",
+      "drag_tip_mobile": "Tap to upload files",
+      "edit_ai_settings": "Edit AI settings",
+      "prompt_slimming_desc": "Trim the prompt while keeping its core instructions",
+      "prompt_slimming_title": "Prompt Slimming",
+      "restore_default_avatar": "Restore default avatar",
+      "restore_default_prompt": "Restore default prompt",
+      "prompt_hint": "These settings reshape Saki's tone, catchphrases and answer guidelines.",
+      "saki_profile": "Saki Persona",
+      "saki_profile_desc": "Define Saki's personality, tone and reply style",
+      "speaking_style": "Speaking Style",
+      "uploading": "Uploading…"
     }
   },
   "ja": {
@@ -984,7 +1148,72 @@ const resources = {
       "ppt_generating_content": "スライドのコンテンツを生成中...",
       "ppt_completed": "PPT 作成完了",
       "design_thinking": "デザイン思考",
-      "slide_preview": "スライドプレビュー - {{page}} ページ"
+      "slide_preview": "スライドプレビュー - {{page}} ページ",
+      "export_md": "Markdownをエクスポート",
+      "delete_move_trash_confirm": "{{name}} をゴミ箱に移動しますか？",
+      "permanent_delete_confirm": "このファイルを完全に削除しますか？削除後は復元できません！",
+      "restore_fail": "復元に失敗しました",
+      "trash_file_cleared": "ファイルは削除済みか存在しません",
+      "search_trash_placeholder": "ゴミ箱内を検索...",
+      "trash_empty": "ゴミ箱は空です",
+      "trash": "ゴミ箱",
+      "files": "ファイル一覧",
+      "folder": "フォルダ",
+      "go_up": "上の階層へ",
+      "open": "開く",
+      "restore": "復元",
+      "permanent_delete": "完全に削除",
+      "restore_action": "削除したファイルを復元",
+      "restore_action_label": "ファイルを復元",
+      "custom_api": "カスタムAPI",
+      "api_key_tip": "APIキーは安全に保存され、対応するプラットフォームとの通信にのみ使用されます。",
+      "github_auth_desc": "GitHub Models ではアカウントの認証が必要です。下のボタンをクリックすると8桁の認証コードが表示されるので、開いたページで入力してください。",
+      "github_login_btn": "GitHub アカウントでログイン",
+      "enter_code_browser": "ブラウザで認証コードを入力してください",
+      "jump_verify": "今すぐ認証",
+      "waiting_auth": "Web での認証確認を待っています...",
+      "github_authorized": "GitHub 認証済み",
+      "relogin": "再ログイン",
+      "custom_drawing": "カスタム API",
+      "custom_drawing_tip": "OpenAI 標準の /v1/images/generations エンドポイントの呼び出しに対応しています。",
+      "close_window": "ウィンドウを閉じる",
+      "export_fail": "画像のエクスポートに失敗しました。再試行してください",
+      "tts_settings": "TTS設定",
+      "browser_tts": "ブラウザTTS",
+      "refer_audio": "参照音声",
+      "upload_refer_audio": "参照音声をアップロード",
+      "refer_text": "参照テキスト",
+      "refer_text_placeholder": "参照音声の内容を入力してください...",
+      "refresh_models": "モデルを更新",
+      "search_engine_config": "検索エンジン設定",
+      "searxng_url": "SearxNG URL",
+      "searxng_url_tip": "デフォルト: http://127.0.0.1:8080 (プロトコルを含める必要があります)",
+      "disabled": "無効",
+      "voice_input": "音声入力",
+      "voice_stop": "録音停止",
+      "browser_not_support_speech": "お使いのブラウザは音声認識に対応していません。",
+      "plugin_marketplace": "プラグインマーケット",
+      "plugin_marketplace_desc": "プラグインを閲覧・インストールして Saki の機能を拡張します。",
+      "language": "言語",
+      "search": "検索",
+      "toggle_sidebar": "サイドバーの表示切り替え",
+      "switch_to_light": "ライトモードに切り替え",
+      "switch_to_dark": "ダークモードに切り替え",
+      "music_mode": "ミュージックモード",
+      "stop_music": "音楽を停止",
+      "save_settings": "設定を保存",
+      "drag_tip": "ファイルをここにドラッグ、またはクリックしてアップロード",
+      "drag_tip_mobile": "タップしてファイルをアップロード",
+      "edit_ai_settings": "AI 設定を編集",
+      "prompt_slimming_desc": "プロンプトを簡潔にし、核心の指示を残します",
+      "prompt_slimming_title": "プロンプトのスリム化",
+      "restore_default_avatar": "既定のアバターに戻す",
+      "restore_default_prompt": "既定のプロンプトに戻す",
+      "prompt_hint": "ここの設定で Saki の口調・口ぐせ・回答ルールを調整できます。",
+      "saki_profile": "Saki のペルソナ",
+      "saki_profile_desc": "Saki の性格・口調・返答スタイルを定義します",
+      "speaking_style": "話し方",
+      "uploading": "アップロード中…"
     }
   },
   "fr": {
@@ -1161,21 +1390,150 @@ const resources = {
       "ppt_generating_content": "Génération du contenu de la diapositive...",
       "ppt_completed": "PPT Terminé",
       "design_thinking": "Réflexion de Design",
-      "slide_preview": "Aperçu de la Diapositive - Page {{page}}"
+      "slide_preview": "Aperçu de la Diapositive - Page {{page}}",
+      "export_md": "Exporter en Markdown",
+      "delete_move_trash_confirm": "Déplacer {{name}} vers la corbeille ?",
+      "permanent_delete_confirm": "Supprimer définitivement ce fichier ? Cette action est irréversible !",
+      "restore_fail": "Échec de la restauration",
+      "trash_file_cleared": "Fichier supprimé ou inexistant",
+      "search_trash_placeholder": "Rechercher dans la corbeille...",
+      "trash_empty": "La corbeille est vide",
+      "trash": "Corbeille",
+      "files": "Fichiers",
+      "folder": "Dossier",
+      "go_up": "Remonter",
+      "open": "Ouvrir",
+      "restore": "Restaurer",
+      "permanent_delete": "Supprimer définitivement",
+      "restore_action": "Restaurer le fichier supprimé",
+      "restore_action_label": "Restaurer le fichier",
+      "custom_api": "API personnalisée",
+      "api_key_tip": "Les clés API sont stockées en toute sécurité et utilisées uniquement pour communiquer avec le fournisseur.",
+      "github_auth_desc": "Obtenez un code à 8 chiffres pour autoriser via le navigateur.",
+      "github_login_btn": "Connexion GitHub",
+      "enter_code_browser": "Saisissez le code dans le navigateur",
+      "jump_verify": "Autoriser",
+      "waiting_auth": "En attente de l'autorisation...",
+      "github_authorized": "Autorisé",
+      "relogin": "Se reconnecter",
+      "custom_drawing": "API personnalisée",
+      "custom_drawing_tip": "Prend en charge l'endpoint standard OpenAI /v1/images/generations.",
+      "close_window": "Fermer la fenêtre",
+      "export_fail": "Échec de l'export de l'image, veuillez réessayer",
+      "tts_settings": "Paramètres TTS",
+      "browser_tts": "Navigateur par défaut",
+      "refer_audio": "Audio de référence",
+      "upload_refer_audio": "Téléverser l'audio de référence",
+      "refer_text": "Texte de référence",
+      "refer_text_placeholder": "Saisissez ce que dit l'audio de référence...",
+      "refresh_models": "Actualiser les modèles",
+      "search_engine_config": "Configuration du moteur de recherche",
+      "searxng_url": "URL SearxNG",
+      "searxng_url_tip": "Par défaut : http://127.0.0.1:8080 (le protocole est requis)",
+      "disabled": "Désactivé",
+      "voice_input": "Saisie vocale",
+      "voice_stop": "Arrêter l'enregistrement",
+      "browser_not_support_speech": "Votre navigateur ne prend pas en charge la reconnaissance vocale.",
+      "plugin_marketplace": "Marché des plugins",
+      "plugin_marketplace_desc": "Parcourez et installez des plugins pour étendre les fonctionnalités de Saki.",
+      "language": "Langue",
+      "search": "Rechercher",
+      "toggle_sidebar": "Afficher ou masquer la barre latérale",
+      "switch_to_light": "Passer en mode clair",
+      "switch_to_dark": "Passer en mode sombre",
+      "music_mode": "Mode danse & radio",
+      "stop_music": "Arrêter la musique",
+      "save_settings": "Enregistrer les paramètres",
+      "drag_tip": "Glissez des fichiers ici ou cliquez pour téléverser",
+      "drag_tip_mobile": "Appuyez pour téléverser des fichiers",
+      "edit_ai_settings": "Modifier les paramètres IA",
+      "prompt_slimming_desc": "Alléger le prompt en conservant les instructions essentielles",
+      "prompt_slimming_title": "Allègement du prompt",
+      "restore_default_avatar": "Réinitialiser l'avatar",
+      "restore_default_prompt": "Réinitialiser le prompt",
+      "prompt_hint": "Ces réglages modifient le ton, les tics de langage et les règles de réponse de Saki.",
+      "saki_profile": "Personnalité de Saki",
+      "saki_profile_desc": "Définir la personnalité, le ton et le style de réponse de Saki",
+      "speaking_style": "Style d'expression",
+      "uploading": "Téléversement…"
     }
   }
 };
 
 
-i18n
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    resources,
-    fallbackLng: "zh-CN",
-    interpolation: {
-      escapeValue: false
-    }
-  });
+const SAKI_LANG_KEY = "saki_user_lang";
+const SUPPORTED_LANGS = Object.keys(resources);
+
+function mapCountryToLang(country) {
+  if (!country) return "en-US";
+  const upper = String(country).toUpperCase();
+  if (["CN", "TW", "HK", "MO"].includes(upper)) return "zh-CN";
+  if (upper === "JP") return "ja";
+  return "en-US";
+}
+
+function pickStoredLang() {
+  try {
+    const v = localStorage.getItem(SAKI_LANG_KEY);
+    if (v && SUPPORTED_LANGS.includes(v)) return v;
+  } catch (e) {}
+  return null;
+}
+
+const initOptions = {
+  resources,
+  fallbackLng: "zh-CN",
+  supportedLngs: SUPPORTED_LANGS,
+  interpolation: {
+    escapeValue: false
+  },
+  detection: {
+    order: ["navigator"],
+    caches: []
+  }
+};
+
+const storedLang = pickStoredLang();
+if (storedLang) {
+  initOptions.lng = storedLang;
+}
+
+i18n.use(LanguageDetector).use(initReactI18next).init(initOptions);
+
+const syncHtmlLang = (lang) => {
+  try {
+    const code = String(lang || "").toLowerCase();
+    const htmlLang = code.startsWith("ja") ? "ja" : code.startsWith("en") ? "en" : "zh-CN";
+    if (document?.documentElement) document.documentElement.setAttribute("lang", htmlLang);
+  } catch (e) {}
+};
+syncHtmlLang(i18n.resolvedLanguage || i18n.language);
+i18n.on("languageChanged", syncHtmlLang);
+
+if (!storedLang) {
+  const applyIpLang = async () => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 2000);
+      const resp = await fetch("https://ipapi.co/json/", { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const lang = mapCountryToLang(data && data.country_code);
+      if (SUPPORTED_LANGS.includes(lang) && i18n.language !== lang) {
+        i18n.changeLanguage(lang);
+      }
+    } catch (e) {}
+  };
+  setTimeout(applyIpLang, 0);
+}
+
+export function changeSakiLang(lang) {
+  if (!SUPPORTED_LANGS.includes(lang)) return;
+  try {
+    localStorage.setItem(SAKI_LANG_KEY, lang);
+  } catch (e) {}
+  i18n.changeLanguage(lang);
+}
 
 export default i18n;

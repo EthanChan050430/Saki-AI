@@ -134,6 +134,15 @@ export const ChatMessageItem = memo(function ChatMessageItem({
           </button>
         )}
         <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : 'max-w-[85%]'} group/message ${m.role === 'user' ? 'order-1' : ''}`}>
+          {isAssistant && m.steeringMessages?.length > 0 && (
+            <div className="mb-2 space-y-1 text-xs" aria-label={getLocalText('运行引导', 'Run steering')}>
+              {m.steeringMessages.map(item => <div key={item.id} className="rounded-xl border border-[var(--control-border)] bg-[var(--control-bg)] px-3 py-2">
+                <span className="text-saki-pink mr-2">{item.status === 'applied' ? getLocalText('已应用', 'Applied') : getLocalText('已收到', 'Received')}</span>
+                <span className="whitespace-pre-wrap break-words">{item.text}</span>
+                {item.files?.length > 0 && <span className="opacity-60 ml-2">{item.files.map(file => file.name || file.filename).join(', ')}</span>}
+              </div>)}
+            </div>
+          )}
           {!(hideToolbar || editingMsgIdx === idx) && MessageBubbleToolbar && (
             <MessageBubbleToolbar
               align={m.role === 'user' ? 'end' : 'start'}
@@ -195,7 +204,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                     autoFocus
                   />
                   <div className="absolute bottom-2.5 right-4 text-[9px] font-semibold text-slate-400 font-mono pointer-events-none select-none">
-                    {estimateMessageTokens({ content: editingMsgText })} tokens
+                    {estimateMessageTokens({ content: editingMsgText })} {getLocalText('字符', 'tokens', 'トークン')}
                   </div>
                 </div>
                 <div className="flex justify-end items-center gap-2.5">

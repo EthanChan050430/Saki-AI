@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -10,10 +10,12 @@ import {
   Brain,
   Clock,
   Wrench,
+  Boxes,
   MessageCircle,
   Search,
 } from 'lucide-react';
 import { getFeatureLocale } from '../utils/featureLocale';
+import { localizeWith } from '../utils/localize';
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -37,6 +39,7 @@ export default function Sidebar({
   onToggleFileManager,
   onToggleMemoryManager,
   onToggleSkillManager,
+  onTogglePluginMarketplace,
   onToggleHostedTasks,
   onToggleThirdPartyChats,
   activeUtilityKeys = [],
@@ -44,8 +47,7 @@ export default function Sidebar({
 }) {
   const { t, i18n } = useTranslation();
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language);
-  const isChineseUi = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  const getLocalText = (zhText, enText) => (isChineseUi ? zhText : enText);
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [hasNewTaskResults, setHasNewTaskResults] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobile, setIsMobile] = useState(isMobileViewport());
@@ -96,7 +98,8 @@ export default function Sidebar({
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    const locale = isChineseUi ? 'zh-CN' : 'en-US';
+    const lang = String(i18n.resolvedLanguage || i18n.language || 'en-US').toLowerCase();
+    const locale = lang.startsWith('zh') ? 'zh-CN' : lang.startsWith('ja') ? 'ja-JP' : 'en-US';
     return new Intl.DateTimeFormat(locale, {
       month: 'short',
       day: 'numeric',
@@ -127,6 +130,15 @@ export default function Sidebar({
       icon: Wrench,
       onClick: () => {
         onToggleSkillManager?.();
+        handleMobileClose();
+      },
+    },
+    {
+      key: 'plugins',
+      label: getLocalText('插件市场', 'Marketplace'),
+      icon: Boxes,
+      onClick: () => {
+        onTogglePluginMarketplace?.();
         handleMobileClose();
       },
     },

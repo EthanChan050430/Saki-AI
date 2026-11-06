@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 const html2canvas = async (...args) => (await import('html2canvas')).default(...args);
 import { BACKEND_URL } from '../utils/backendUrl';
+import { localizeWith } from '../utils/localize';
 const PPT_CAPTURE_STYLE = `
   .ppt-capture-surface {
     width: 960px;
@@ -687,7 +688,8 @@ async function buildEditableSceneFromHtml(slideHtml, tempContainer) {
 }
 
 export default function PPTView({ data, isEmbedded = true }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [activeStepIndex, setActiveStepIndex] = useState(() => {
     // If we have data and it's already completed, start at page 1 (first slide) instead of page 0 (planning)
     const initialSteps = data?.steps || [];
@@ -706,7 +708,8 @@ export default function PPTView({ data, isEmbedded = true }) {
   const previewContainerRef = useRef(null);
 
   // Calculate if really running based on steps
-  let { steps = [], finalHtml = '', status = 'running', pptTitle = '演示文稿' } = data;
+  let { steps = [], finalHtml = '', status = 'running', pptTitle } = data;
+  pptTitle = pptTitle || tx('演示文稿', 'Presentation', 'プレゼンテーション');
 
   // Robust status check: if all steps are done but it says running, OR if it says completed but some steps are running
   const isAllDone = steps.length > 0 && steps.every(s =>
@@ -939,7 +942,7 @@ export default function PPTView({ data, isEmbedded = true }) {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Download failed:', error);
-      alert('导出 PPTX 失败，请重试');
+      alert(tx('导出 PPTX 失败，请重试', 'Failed to export PPTX, please try again', 'PPTX のエクスポートに失敗しました。もう一度お試しください'));
     } finally {
       if (tempContainer && tempContainer.parentNode) {
         tempContainer.parentNode.removeChild(tempContainer);
@@ -993,7 +996,7 @@ export default function PPTView({ data, isEmbedded = true }) {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Editable PPT download failed:', error);
-      alert('可编辑 PPTX 导出失败，请重试');
+      alert(tx('可编辑 PPTX 导出失败，请重试', 'Failed to export editable PPTX, please try again', '編集可能な PPTX のエクスポートに失敗しました。もう一度お試しください'));
     } finally {
       if (tempContainer && tempContainer.parentNode) {
         tempContainer.parentNode.removeChild(tempContainer);
@@ -1018,7 +1021,7 @@ export default function PPTView({ data, isEmbedded = true }) {
         <div className="px-4 py-2.5 border-b flex items-center justify-between bg-gradient-to-r from-orange-50 to-white shrink-0">
           <div className="flex items-center gap-2">
             <Presentation size={17} className="text-orange-600" />
-            <span className="text-sm font-bold text-gray-800">{pptTitle} - 预览</span>
+            <span className="text-sm font-bold text-gray-800">{pptTitle} - {tx('预览', 'Preview', 'プレビュー')}</span>
           </div>
           <div className="flex items-center gap-2">
             {renderFocusButton(focusMode)}
@@ -1030,12 +1033,12 @@ export default function PPTView({ data, isEmbedded = true }) {
               {editableDownloading ? (
                 <>
                   <Loader2 size={13} className="animate-spin" />
-                  正在生成可编辑版...
+                  {tx('正在生成可编辑版...', 'Generating editable version...', '編集可能版を生成中...')}
                 </>
               ) : (
                 <>
                   <FileText size={13} />
-                  下载可编辑 PPTX
+                  {tx('下载可编辑 PPTX', 'Download editable PPTX', '編集可能な PPTX をダウンロード')}
                 </>
               )}
             </button>
@@ -1047,12 +1050,12 @@ export default function PPTView({ data, isEmbedded = true }) {
               {downloading ? (
                 <>
                   <Loader2 size={13} className="animate-spin" />
-                  正在导出...
+                  {tx('正在导出...', 'Exporting...', 'エクスポート中...')}
                 </>
               ) : (
                 <>
                   <Download size={13} />
-                  下载 PPTX
+                  {tx('下载 PPTX', 'Download PPTX', 'PPTX をダウンロード')}
                 </>
               )}
             </button>
@@ -1118,7 +1121,7 @@ export default function PPTView({ data, isEmbedded = true }) {
           </div>
           <div>
             <h3 className="text-sm font-bold text-gray-800 leading-tight">{pptTitle}</h3>
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold leading-tight mt-0.5">{status === 'completed' ? '已完成' : '智能生成中...'}</p>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold leading-tight mt-0.5">{status === 'completed' ? tx('已完成', 'Completed', '完了') : tx('智能生成中...', 'Generating...', 'スマート生成中...')}</p>
           </div>
         </div>
         {status === 'completed' && (
@@ -1128,7 +1131,7 @@ export default function PPTView({ data, isEmbedded = true }) {
               className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold transition-all"
             >
               <Monitor size={13} />
-              全屏预览
+              {tx('全屏预览', 'Full screen preview', '全画面プレビュー')}
             </button>
             <button
               onClick={downloadEditablePptx}
@@ -1136,7 +1139,7 @@ export default function PPTView({ data, isEmbedded = true }) {
               className={`flex items-center gap-1.5 px-2.5 py-1 bg-white border border-orange-200 hover:bg-orange-50 text-orange-700 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {editableDownloading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
-              {editableDownloading ? '正在生成可编辑版...' : '下载可编辑 PPTX'}
+              {editableDownloading ? tx('正在生成可编辑版...', 'Generating editable version...', '編集可能版を生成中...') : tx('下载可编辑 PPTX', 'Download editable PPTX', '編集可能な PPTX をダウンロード')}
             </button>
             <button
               onClick={downloadPptx}
@@ -1144,7 +1147,7 @@ export default function PPTView({ data, isEmbedded = true }) {
               className={`flex items-center gap-1.5 px-2.5 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-              {downloading ? '正在导出...' : '下载 PPTX'}
+              {downloading ? tx('正在导出...', 'Exporting...', 'エクスポート中...') : tx('下载 PPTX', 'Download PPTX', 'PPTX をダウンロード')}
             </button>
           </div>
         )}
@@ -1251,7 +1254,7 @@ export default function PPTView({ data, isEmbedded = true }) {
             className="absolute right-6 top-6 z-20 flex items-center gap-1.5 rounded-xl border border-white/20 bg-white/90 px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm transition hover:bg-white"
           >
             <Minimize2 size={14} />
-            Exit Focus
+            {tx('退出专注', 'Exit Focus', 'フォーカスを終了')}
           </button>
           {mainView}
         </div>,
