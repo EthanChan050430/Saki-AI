@@ -8,10 +8,7 @@ const root = path.resolve(__dirname, '..');
 const full = process.argv.includes('--full');
 process.env.NODE_ENV ||= 'production';
 process.env.SAKI_PROFILE = full ? 'standard' : 'light';
-const outIndex = process.argv.indexOf('--out');
-if (outIndex >= 0 && !process.argv[outIndex + 1]) throw new Error('--out requires a directory');
-const target = outIndex >= 0 ? path.resolve(process.argv[outIndex + 1]) : path.join(root, 'release', 'saki-ai-' + new Date().toISOString().replace(/[:.]/g, '-'));
-if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error('Release output must be empty: ' + target);
+const target = path.join(root, 'release', 'saki-ai-' + new Date().toISOString().replace(/[:.]/g, '-'));
 fs.mkdirSync(target, { recursive: true });
 // Isolated build also verifies frontend/package.json is self-contained. Never clean a live Vite install.
 // Resolve Windows 8.3 temp paths before Vite computes paths relative to its root.
