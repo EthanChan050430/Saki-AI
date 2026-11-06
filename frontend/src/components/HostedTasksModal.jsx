@@ -1,9 +1,11 @@
+import { applyTextStreamEvent } from '../utils/streamText';
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Play, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle, MessageSquare, ChevronRight, Clock, Loader2, Search, Palette, Brain, Server } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Chat from './Chat';
 import { getFeatureLocale } from '../utils/featureLocale';
+import { localizeWith } from '../utils/localize';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 
 function upsertGeneratedFile(files = [], generatedFile) {
@@ -31,6 +33,7 @@ function getScheduleLabel(ui, scheduleType) {
 export default function HostedTasksModal({ isOpen, onClose, config, setConfig, BACKEND_URL, windowed = false }) {
   const { t, i18n } = useTranslation();
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language).hostedTasks;
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newTask, setNewTask] = useState({
@@ -139,17 +142,10 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
             setViewingChatSession(prev => {
               const newMsgs = prev.messages.map(m => {
                 if (m.id === assistantMsgId) {
-                  const parts = [...(m.parts || [])];
                   const textBit = data.text || data.content;
-
-                  if (textBit && data.type !== 'action') {
-                    const lastIdx = parts.length - 1;
-                    if (lastIdx >= 0 && parts[lastIdx].type === 'text') {
-                      parts[lastIdx] = { ...parts[lastIdx], content: parts[lastIdx].content + textBit };
-                    } else {
-                      parts.push({ type: 'text', content: textBit });
-                    }
-                  }
+                  let parts = data.type !== 'action'
+                    ? applyTextStreamEvent(m.parts || [], { ...data, text: textBit })
+                    : [...(m.parts || [])];
 
                   if (data.type === 'action' || data.action) {
                     parts.push({ type: 'action', data: data.data || data.action });
@@ -535,7 +531,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                       </button>
                     )}
                     <div className="px-2.5 py-0.5 bg-[var(--surface-bg)] border border-[var(--surface-border-subtle)] rounded-full shadow-sm text-[10px] font-bold text-[var(--text-tertiary)]">
-                      RECORDS
+                      {getLocalText('记录', 'RECORDS', '記録')}
                     </div>
                   </div>
                 </div>

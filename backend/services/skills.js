@@ -1,10 +1,13 @@
 const path = require('path');
 const fs = require('fs-extra');
-const { exec, execFile } = require('child_process');
+const { execFile } = require('child_process');
+const { AsyncLocalStorage } = require('async_hooks');
+const { createHash } = require('crypto');
 const { promisify } = require('util');
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+const storeOperations = new Map();
+const storeContext = new AsyncLocalStorage();
 const CLAWHUB_SOURCE_TYPES = new Set(['openhub', 'clawhub']);
 const DEFAULT_SYSTEM_SKILLS = [
     {
@@ -503,11 +506,15 @@ function parseSearchResults(text = '', limit = 8) {
         .slice(0, limit);
 }
 
-function quoteShellArg(arg = '') {
-    const value = String(arg);
-    if (!value) return '""';
-    if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) return value;
-    return `"${value.replace(/(["\\])/g, '\\$1')}"`;
+function buildClawHubInvocation(args, { platform = process.platform, npxCli = '' } = {}) {
+    if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
+        throw new Error('Invalid ClawHub arguments.');
+    }
+    if (platform === 'win32') {
+        if (!npxCli) throw new Error('Cannot locate npm npx-cli.js for shell-free ClawHub execution.');
+        return { command: process.execPath, args: [npxCli, '--yes', 'clawhub', ...args] };
+    }
+    return { command: 'npx', args: ['--yes', 'clawhub', ...args] };
 }
 
 class SkillService {
@@ -548,9 +555,20 @@ class SkillService {
 
     async runClawHub(args, options = {}) {
         try {
-            const command = ['npx', '--yes', 'clawhub', ...args].map(quoteShellArg).join(' ');
+            let npxCli = '';
+            if (process.platform === 'win32') {
+                const candidates = [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js')];
+                try {
+                    candidates.push(path.join(path.dirname(require.resolve('npm/package.json')), 'bin', 'npx-cli.js'));
+                } catch { /* npm is normally bundled next to node.exe, not a local dependency. */ }
+                for (const candidate of candidates) {
+                    if (await fs.pathExists(candidate)) { npxCli = candidate; break; }
+                }
+            }
+            const invocation = buildClawHubInvocation(args, { npxCli });
             const baseOptions = {
                 cwd: options.cwd || this.dataDir,
+                shell: false,
                 windowsHide: true,
                 maxBuffer: 4 * 1024 * 1024,
                 env: {
@@ -558,9 +576,7 @@ class SkillService {
                     FORCE_COLOR: '0',
                 },
             };
-            const result = process.platform === 'win32'
-                ? await execAsync(command, baseOptions)
-                : await execFileAsync('npx', ['--yes', 'clawhub', ...args], baseOptions);
+            const result = await execFileAsync(invocation.command, invocation.args, baseOptions);
 
             return {
                 stdout: result.stdout || '',
@@ -602,15 +618,15 @@ class SkillService {
 
     async ensureDefaultSkills() {
         const store = await fs.readJson(this.storePath).catch(() => ({ version: 1, skills: [] }));
-        const skills = Array.isArray(store.skills) ? store.skills : [];
+        let skills = Array.isArray(store.skills) ? store.skills : [];
         let changed = false;
 
         for (const defaultSkill of DEFAULT_SYSTEM_SKILLS) {
-            const matches = skills.filter(skill =>
+            const matches = skills.filter(skill => skill.sourceType !== 'plugin' && (
                 skill.id === defaultSkill.id ||
                 skill.slug === defaultSkill.id ||
                 normalizeSearchText(skill.name) === normalizeSearchText(defaultSkill.name)
-            );
+            ));
 
             let content = '';
             for (const candidateParts of defaultSkill.fileCandidates) {
@@ -632,7 +648,7 @@ class SkillService {
             await fs.writeFile(canonicalPath, content, 'utf8');
 
             const header = parseSkillHeader(content);
-            const primary = matches[0] || {};
+            const primary = matches.find(skill => skill.id === defaultSkill.id) || matches[0] || {};
             const now = new Date().toISOString();
             const canonicalSkill = {
                 ...primary,
@@ -673,17 +689,19 @@ class SkillService {
 
             const filteredSkills = skills.filter(skill =>
                 !(
+                    skill.sourceType !== 'plugin' && (
                     skill.id === defaultSkill.id ||
                     skill.slug === defaultSkill.id ||
                     normalizeSearchText(skill.name) === normalizeSearchText(defaultSkill.name)
-                )
+                ))
             );
             filteredSkills.unshift(canonicalSkill);
 
-            for (const duplicate of matches.slice(1)) {
-                await fs.remove(path.dirname(duplicate.path || '')).catch(() => {});
+            for (const duplicate of matches) {
+                await this.removeSkillDirectory(duplicate, filteredSkills);
             }
 
+            skills = filteredSkills;
             store.skills = filteredSkills;
             changed = true;
         }
@@ -760,7 +778,16 @@ class SkillService {
     async upsertSkill({ name, content, description = '', sourceType = 'manual', source = '', tags = [], sourceMeta = null }) {
         const store = await this.loadStore();
         const safeName = sanitizeName(name);
-        const slug = slugify(sourceMeta?.slug ? `${safeName}-${sourceMeta.slug}` : safeName);
+        const normalizedSourceType = normalizeSourceType(sourceType);
+        const isPlugin = normalizedSourceType === 'plugin';
+        if (isPlugin && (!sourceMeta?.pluginId || !sourceMeta?.skillDir)) {
+            throw new Error('Plugin skills require pluginId and skillDir.');
+        }
+        // A reserved dot prefix cannot be produced by manual-name slugification.
+        // Hash a structured pair to keep directory components bounded in length.
+        const slug = isPlugin
+            ? `plugin.${createHash('sha256').update(JSON.stringify([sourceMeta.pluginId, sourceMeta.skillDir])).digest('hex')}`
+            : slugify(sourceMeta?.slug ? `${safeName}-${sourceMeta.slug}` : safeName);
         const header = parseSkillHeader(content);
         const fileName = `${safeName}.md`;
         const skillDir = path.join(this.skillsDir, slug);
@@ -768,16 +795,18 @@ class SkillService {
         await fs.ensureDir(skillDir);
         await fs.writeFile(filePath, content, 'utf8');
 
-        const normalizedSourceType = normalizeSourceType(sourceType);
-        const existing = store.skills.find(skill =>
+        const existing = store.skills.find(skill => isPlugin
+            ? skill.sourceType === 'plugin' && skill.sourceMeta?.pluginId === sourceMeta.pluginId && skill.sourceMeta?.skillDir === sourceMeta.skillDir
+            : skill.sourceType !== 'plugin' && (
             skill.slug === slug ||
             skill.name === safeName ||
             (
                 sourceMeta?.slug &&
                 skill.sourceMeta?.slug &&
                 skill.sourceMeta.slug === sourceMeta.slug
-            )
+            ))
         );
+        const previous = existing ? { ...existing } : null;
         const payload = {
             id: slug,
             slug,
@@ -815,6 +844,7 @@ class SkillService {
         }
 
         await this.saveStore(store);
+        if (previous && previous.path !== filePath) await this.removeSkillDirectory(previous, store.skills);
         return this.getSkill(slug);
     }
 
@@ -976,7 +1006,7 @@ class SkillService {
         return null;
     }
 
-    async deleteSkill(identifier) {
+    async deleteSkill(identifier, { force = false } = {}) {
         const store = await this.loadStore();
         const index = store.skills.findIndex(skill =>
             skill.id === identifier ||
@@ -987,18 +1017,80 @@ class SkillService {
         );
         if (index === -1) return false;
         const skill = store.skills[index];
-        if (skill.canDelete === false || skill.isDefault || skill.isSystem) {
+        if (!force && (skill.canDelete === false || skill.isDefault || skill.isSystem)) {
             throw new Error(`Skill '${skill.name}' is protected and cannot be deleted.`);
         }
         store.skills.splice(index, 1);
-        await fs.remove(path.dirname(skill.path)).catch(() => {});
+        await this.removeSkillDirectory(skill, store.skills);
         await this.saveStore(store);
         return true;
     }
+
+    async removeSkillDirectory(skill, retainedSkills = []) {
+        if (!skill?.path || !path.isAbsolute(skill.path)) return;
+        const root = path.resolve(this.skillsDir);
+        const directory = path.dirname(path.resolve(skill.path));
+        // Only owned, direct child directories; never '.', the root, or external paths.
+        if (path.dirname(directory) !== root || directory === root) return;
+        if (DEFAULT_SYSTEM_SKILLS.some(item => path.join(root, item.id) === directory)) return;
+        if (retainedSkills.some(item => item.path && path.dirname(path.resolve(item.path)) === directory)) return;
+        const stat = await fs.lstat(directory).catch(() => null);
+        if (!stat?.isDirectory() || stat.isSymbolicLink()) return;
+        if (await fs.realpath(directory) !== path.join(await fs.realpath(root), path.basename(directory))) return;
+        await fs.remove(directory);
+    }
+
+    async removeSkillsByPlugin(pluginId, retainedSkillDirs = []) {
+        if (!pluginId) return 0;
+        const store = await this.loadStore();
+        const shouldRemove = s => s.sourceType === 'plugin' && s.sourceMeta?.pluginId === pluginId && !retainedSkillDirs.includes(s.sourceMeta?.skillDir);
+        const toRemove = store.skills.filter(shouldRemove);
+        if (toRemove.length === 0) return 0;
+        store.skills = store.skills.filter(s => !shouldRemove(s));
+        for (const skill of toRemove) {
+            await this.removeSkillDirectory(skill, store.skills);
+        }
+        await this.saveStore(store);
+        return toRemove.length;
+    }
+
+    async setSkillsEnabledByPlugin(pluginId, enabled) {
+        if (!pluginId) return 0;
+        const store = await this.loadStore();
+        let updated = 0;
+        for (const skill of store.skills) {
+            if (skill.sourceType === 'plugin' && skill.sourceMeta?.pluginId === pluginId) {
+                skill.enabled = Boolean(enabled);
+                skill.updatedAt = new Date().toISOString();
+                updated++;
+            }
+        }
+        if (updated > 0) {
+            await this.saveStore(store);
+        }
+        return updated;
+    }
+}
+
+// Serialize whole operations (including reads and filesystem changes), across service
+// instances sharing a store. Reentrant calls must not wait on their own operation.
+for (const method of ['init', 'loadStore', 'saveStore', 'ensureDefaultSkills', 'upsertSkill', 'setSkillEnabled', 'deleteSkill', 'removeSkillsByPlugin', 'setSkillsEnabledByPlugin']) {
+    const original = SkillService.prototype[method];
+    SkillService.prototype[method] = function (...args) {
+        const key = path.resolve(this.storePath);
+        if (storeContext.getStore() === key) return original.apply(this, args);
+        const result = (storeOperations.get(key) || Promise.resolve()).then(() =>
+            storeContext.run(key, () => original.apply(this, args)));
+        const tail = result.catch(() => {});
+        storeOperations.set(key, tail);
+        tail.then(() => { if (storeOperations.get(key) === tail) storeOperations.delete(key); });
+        return result;
+    };
 }
 
 module.exports = {
     SkillService,
+    buildClawHubInvocation,
     normalizeSourceType,
     previewText,
 };

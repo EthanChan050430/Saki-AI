@@ -13,6 +13,7 @@ import {
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
+import { localizeWith, isChineseLanguage } from '../utils/localize';
 
 function GuideEntry({ entry }) {
   return (
@@ -47,8 +48,8 @@ function GuideEntry({ entry }) {
 
 export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, windowed = false }) {
   const { i18n } = useTranslation();
-  const isZh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  const getLocalText = (zhText, enText) => (isZh ? zhText : enText);
+  const isZh = isChineseLanguage(i18n.resolvedLanguage || i18n.language);
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const scrollAreaRef = useRef(null);
   const sectionRefs = useRef({});
 

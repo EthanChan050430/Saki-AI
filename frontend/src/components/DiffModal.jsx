@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X, RotateCcw, FileCode, AlertCircle } from 'lucide-react';
 import { diffLines } from 'diff';
+import { localizeWith } from '../utils/localize';
 
 const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSelectFile }) => {
   const { t, i18n } = useTranslation();
-  const zh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
+  const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const dialogRef = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -100,7 +101,7 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
             </div>
             <div className="min-w-0">
               <h3 id={titleId} className="text-sm text-white font-medium break-all leading-tight">{t('view_changes')} - {fileName}
-                {fileMetadata.operation && <span className="saki-diff-operation">{fileMetadata.operation === 'create' ? (zh ? '新增' : 'Added') : fileMetadata.operation === 'delete' ? (zh ? '删除' : 'Deleted') : (zh ? '修改' : 'Modified')}</span>}
+                {fileMetadata.operation && <span className="saki-diff-operation">{fileMetadata.operation === 'create' ? tx('新增', 'Added') : fileMetadata.operation === 'delete' ? tx('删除', 'Deleted') : tx('修改', 'Modified')}</span>}
               </h3>
               <p className="text-[11px] text-white/40 font-mono break-all max-w-md leading-tight mt-0.5">{filePath}</p>
             </div>
@@ -119,7 +120,7 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
             </button>}
             <button
               type="button"
-              aria-label={zh ? '关闭代码差异' : 'Close code diff'}
+              aria-label={tx('关闭代码差异', 'Close code diff')}
               onClick={onClose}
               className="p-1.5 hover:bg-white/5 rounded-lg text-white/60 transition-colors"
             >
@@ -130,8 +131,8 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
 
         {/* Content */}
         <div className="saki-diff-layout">
-          {multiFile && <nav className="saki-diff-files" aria-label={zh ? '更改的文件' : 'Changed files'}>
-            <div className="saki-diff-files-heading">{zh ? `${files.length} 个更改的文件` : `${files.length} changed files`}</div>
+          {multiFile && <nav className="saki-diff-files" aria-label={tx('更改的文件', 'Changed files')}>
+            <div className="saki-diff-files-heading">{tx(`${files.length} 个更改的文件`, `${files.length} changed files`)}</div>
             {files.map(file => {
               const displayPath = file.displayPath || file.filePath;
               const segments = displayPath.split(/[\\/]/);
@@ -181,8 +182,8 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
               {oldText === newText ? (
                 <>
                   <FileCode size={48} className="opacity-20" />
-                  <p className="text-sm">{before === null && after !== null ? (zh ? '新建了一个空文件' : 'An empty file was created')
-                    : after === null && before !== null ? (zh ? '删除了一个空文件' : 'An empty file was deleted') : t('no_changes')}</p>
+                  <p className="text-sm">{before === null && after !== null ? tx('新建了一个空文件', 'An empty file was created')
+                    : after === null && before !== null ? tx('删除了一个空文件', 'An empty file was deleted') : t('no_changes')}</p>
                 </>
               ) : (
                 <>

@@ -33,6 +33,60 @@ function nowIso() {
     return new Date().toISOString();
 }
 
+const PENDING_ACTION_MAX = 10;
+const PENDING_ACTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DECISION_COMMIT_PATTERNS = [
+    /\u6211\u51b3\u5b9a/, /\u51b3\u5b9a\u4e86/, /\u4ee5\u540e\u90fd/, /\u4ee5\u540e\u4e00\u5f8b/, /\u4ece\u73b0\u5728\u8d77/,
+    /\u4eca\u540e\u90fd/, /\u4ee5\u540e\u5c31\u7528/, /\u6c38\u8fdc\u90fd/,
+    /\balways use\b/i, /\bfrom now on\b/i, /\blet'?s use\b/i, /\bi'?ve decided\b/i, /\bi decide to\b/i, /\bwe will use\b/i,
+];
+
+function sanitizeMemoryText(text = '') {
+    return String(text || '')
+        .replace(/\s*\[expression:[^\]]+\]\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// Legacy plain-string actions have no timestamp and can never expire, so they are dropped.
+function normalizePendingActionItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    const text = sanitizeMemoryText(item.text || '');
+    const createdAtMs = new Date(item.createdAt).getTime();
+    if (!text || !Number.isFinite(createdAtMs)) return null;
+    return { text, createdAt: new Date(createdAtMs).toISOString() };
+}
+
+function expirePendingActions(items = [], now = Date.now()) {
+    const cutoff = now - PENDING_ACTION_TTL_MS;
+    const seen = new Set();
+    const result = [];
+    for (const raw of Array.isArray(items) ? items : []) {
+        const item = normalizePendingActionItem(raw);
+        if (!item) continue;
+        if (new Date(item.createdAt).getTime() < cutoff) continue;
+        if (seen.has(item.text)) continue;
+        seen.add(item.text);
+        result.push(item);
+        if (result.length >= PENDING_ACTION_MAX) break;
+    }
+    return result;
+}
+
+function inferDecisionText(text = '') {
+    const source = sanitizeMemoryText(text);
+    if (!source) return '';
+    if (/[?？]\s*$/.test(source)) return '';
+    return DECISION_COMMIT_PATTERNS.some(pattern => pattern.test(source))
+        ? previewText(source, 120)
+        : '';
+}
+
+function normalizeChatKey(chatId = '') {
+    const key = String(chatId || '').trim();
+    return key || '__default__';
+}
+
 function defaultStore() {
     return {
         version: 4,
@@ -666,7 +720,8 @@ function scoreQuery(memory, query = '') {
         if (aliases.includes(term)) score += 1.6;
     }
 
-    if (matchedTerms >= Math.min(3, terms.length)) {
+    if (score <= 0) return 0;
+    if (terms.length && matchedTerms >= Math.min(3, terms.length)) {
         score += 3;
     }
 
@@ -1008,11 +1063,12 @@ class MemoryService {
 
                 return {
                     kind: 'entity',
+                    matched: score > 0,
                     score: score + (entity.confidence || 0) + ((entity.status || entity.summary) ? 0.3 : 0),
                     item: entity,
                 };
             })
-            .filter(entry => terms.length ? entry.score > 0 : true);
+            .filter(entry => terms.length ? entry.matched : !normalizedQuery);
 
         const relationMatches = store.relations
             .map(relation => {
@@ -1028,11 +1084,12 @@ class MemoryService {
 
                 return {
                     kind: 'relation',
+                    matched: score > 0,
                     score: score + (relation.confidence || 0) + 0.4,
                     item: relation,
                 };
             })
-            .filter(entry => terms.length ? entry.score > 0 : true);
+            .filter(entry => terms.length ? entry.matched : !normalizedQuery);
 
         return [...relationMatches, ...entityMatches]
             .sort((left, right) => right.score - left.score || new Date(right.item.updatedAt || 0) - new Date(left.item.updatedAt || 0))
@@ -1183,7 +1240,7 @@ class MemoryService {
 
     renderSessionState(state = {}) {
         const pendingActions = (state.pendingActions || []).length
-            ? state.pendingActions.map(item => `- [ ] ${item}`).join('\n')
+            ? state.pendingActions.map(item => `- [ ] ${typeof item === 'object' && item !== null ? item.text : item}`).join('\n')
             : '- [ ] None';
         const keyContext = (state.keyContext || []).length
             ? (state.keyContext || []).map(item => `- ${item}`).join('\n')
@@ -1285,8 +1342,9 @@ class MemoryService {
         }
     }
 
-    async loadSessionState() {
+    async loadSessionState(chatId = '') {
         await this.init();
+        const chatKey = normalizeChatKey(chatId);
         const fallback = {
             currentTask: '[None]',
             keyContext: [],
@@ -1296,21 +1354,30 @@ class MemoryService {
             memoryPressure: '[Stable]',
             updatedAt: nowIso(),
         };
-        const state = await fs.readJson(this.sessionStateJsonPath).catch(() => fallback);
-        return { ...fallback, ...state };
+        const root = await fs.readJson(this.sessionStateJsonPath).catch(() => ({}));
+        const chats = (root && typeof root === 'object' && root.chats) || {};
+        const stored = chats[chatKey] || {};
+        const merged = { ...fallback, ...stored };
+        merged.pendingActions = expirePendingActions(merged.pendingActions);
+        return merged;
     }
 
-    async saveSessionState(state) {
+    async saveSessionState(state, chatId = '') {
+        const chatKey = normalizeChatKey(chatId);
         const normalized = {
             currentTask: state.currentTask || '[None]',
             keyContext: Array.from(new Set((state.keyContext || []).filter(Boolean))).slice(0, 10),
             topicFocus: Array.from(new Set((state.topicFocus || []).filter(Boolean))).slice(0, 8),
-            pendingActions: Array.from(new Set((state.pendingActions || []).filter(Boolean))).slice(0, 10),
+            pendingActions: expirePendingActions(state.pendingActions || []),
             recentDecisions: Array.from(new Set((state.recentDecisions || []).filter(Boolean))).slice(0, 10),
             memoryPressure: state.memoryPressure || '[Stable]',
             updatedAt: nowIso(),
         };
-        await fs.writeJson(this.sessionStateJsonPath, normalized, { spaces: 2 });
+        const root = await fs.readJson(this.sessionStateJsonPath).catch(() => ({}));
+        const nextRoot = (root && typeof root === 'object') ? { ...root } : {};
+        nextRoot.chats = nextRoot.chats || {};
+        nextRoot.chats[chatKey] = normalized;
+        await fs.writeJson(this.sessionStateJsonPath, nextRoot, { spaces: 2 });
         await fs.writeFile(this.sessionStatePath, this.renderSessionState(normalized), 'utf8');
         return normalized;
     }
@@ -1464,12 +1531,12 @@ class MemoryService {
         return { saved, pending, promotedCandidates };
     }
 
-    async syncAutonomousSessionState(savedMemories = [], pendingCandidates = []) {
+    async syncAutonomousSessionState(savedMemories = [], pendingCandidates = [], chatId = '') {
         if ((!savedMemories || !savedMemories.length) && (!pendingCandidates || !pendingCandidates.length)) {
             return null;
         }
 
-        const state = await this.loadSessionState();
+        const state = await this.loadSessionState(chatId);
         state.keyContext = [
             ...(savedMemories || []).map(memory => `[${memory.category}] ${memory.summary || memory.name}`),
             ...(state.keyContext || []),
@@ -1482,7 +1549,7 @@ class MemoryService {
         if (savedMemories.length) {
             state.memoryPressure = '[Stable - proactive capture succeeded]';
         }
-        return this.saveSessionState(state);
+        return this.saveSessionState(state, chatId);
     }
 
     pruneShortTermStore(store) {
@@ -1902,22 +1969,14 @@ class MemoryService {
     }
 
     inferPendingActions(text = '') {
-        const source = String(text || '').trim();
+        const source = sanitizeMemoryText(text);
         if (!source) return [];
-        const actions = [];
-        if (/(\u8bf7|\u5e2e\u6211|\u9700\u8981|\u60f3\u8981|\u5f85\u529e|todo|need to|please)/i.test(source)) {
-            actions.push(previewText(stripRememberInstruction(source), 100));
-        }
-        return actions;
+        if (!/(\u8bf7|\u5e2e\u6211|\u9700\u8981|\u60f3\u8981|\u5f85\u529e|todo|need to|please)/i.test(source)) return [];
+        return [{ text: previewText(stripRememberInstruction(source), 100), createdAt: nowIso() }];
     }
 
     inferDecision(text = '') {
-        const source = String(text || '').trim();
-        if (!source) return '';
-        if (/(\u51b3\u5b9a|\u6539\u6210|\u7528|\u91c7\u7528|\u4e0d\u7528|we should|let's use|decide)/i.test(source)) {
-            return previewText(source, 120);
-        }
-        return '';
+        return inferDecisionText(text);
     }
 
     async appendDailyLog({ chatId = '', userMessage = '', assistantMessage = '', memories = [] } = {}) {
@@ -1925,12 +1984,14 @@ class MemoryService {
         const date = new Date().toISOString().slice(0, 10);
         const filePath = path.join(this.memoryArchiveDir, `${date}.md`);
         const existing = await fs.readFile(filePath, 'utf8').catch(() => `# ${date}\n`);
+        const cleanUser = sanitizeMemoryText(userMessage);
+        const cleanAssistant = sanitizeMemoryText(assistantMessage);
         const lines = [
             '',
             `## ${new Date().toLocaleTimeString()}`,
             chatId ? `Chat: ${chatId}` : '',
-            userMessage ? `User: ${stripMarkdown(userMessage)}` : '',
-            assistantMessage ? `Assistant: ${previewText(assistantMessage, 200)}` : '',
+            cleanUser ? `User: ${stripMarkdown(cleanUser)}` : '',
+            cleanAssistant ? `Assistant: ${previewText(cleanAssistant, 200)}` : '',
             memories.length ? `Captured memories:\n${memories.map(item => `- [${item.category}] ${item.name}`).join('\n')}` : '',
         ].filter(Boolean);
         await fs.writeFile(filePath, `${existing.trimEnd()}\n${lines.join('\n')}\n`, 'utf8');
@@ -2017,6 +2078,7 @@ class MemoryService {
     }
 
     async applyWriteAheadLog({ chatId = '', userMessage = '' } = {}) {
+        userMessage = sanitizeMemoryText(userMessage);
         if (!userMessage) return { savedMemories: [], sessionState: null };
         const explicit = this.extractExplicitMemories(userMessage);
         const savedMemories = [];
@@ -2037,7 +2099,7 @@ class MemoryService {
 
         const sensory = this.captureSensorySnapshot({ userMessage });
         const system = await this.getSystemStatus();
-        const state = await this.loadSessionState();
+        const state = await this.loadSessionState(chatId);
         state.currentTask = sensory.userDigest || previewText(userMessage, 180);
         state.keyContext = [
             ...savedMemories.map(memory => `[${memory.category}] ${memory.summary || memory.name}`),
@@ -2048,10 +2110,10 @@ class MemoryService {
             ...sensory.segments.map(segment => segment.topicLabel),
             ...(state.topicFocus || []),
         ].slice(0, 8);
-        state.pendingActions = [
+        state.pendingActions = expirePendingActions([
             ...this.inferPendingActions(userMessage),
             ...(state.pendingActions || []),
-        ].slice(0, 10);
+        ]).slice(0, PENDING_ACTION_MAX);
         state.memoryPressure = system.pendingQueueSize >= 6
             ? '[Hot - sleep queue backed up]'
             : system.shortTermTopicCount >= 4
@@ -2063,7 +2125,7 @@ class MemoryService {
             await this.rememberDecision(decision);
         }
 
-        const sessionState = await this.saveSessionState(state);
+        const sessionState = await this.saveSessionState(state, chatId);
         await this.appendDailyLog({ chatId, userMessage, memories: savedMemories });
         return { savedMemories, sessionState };
     }
@@ -2348,7 +2410,7 @@ class MemoryService {
                 .slice(0, limit);
         const structured = await this.searchKnowledgeGraph(query, Math.min(limit, 6));
         const working = await this.getWorkingMemory(chatId);
-        const sessionState = await this.loadSessionState();
+        const sessionState = await this.loadSessionState(chatId);
         const shortTerm = await this.getShortTermContext(chatId, query, Math.min(limit, 4));
         const pending = await this.searchPendingMemories(query, Math.min(limit, 4));
         const system = await this.getSystemStatus({ store });
@@ -2530,7 +2592,7 @@ ${assistantMessage || ''}
                     .map(memory => [memory.id || memory.name, memory])
             ).values()
         );
-        await this.syncAutonomousSessionState(allSaved, queued);
+        await this.syncAutonomousSessionState(allSaved, queued, chatId);
 
         if (allSaved.length > 0 || queued.length > 0 || sleepRun.processed > 0) {
             const store = await this.loadStore();
@@ -2608,4 +2670,10 @@ module.exports = {
     sanitizeName,
     slugify,
     previewText,
+    // exported for unit tests
+    sanitizeMemoryText,
+    normalizePendingActionItem,
+    expirePendingActions,
+    inferDecisionText,
+    normalizeChatKey,
 };

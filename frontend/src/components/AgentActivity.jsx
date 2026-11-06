@@ -4,12 +4,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { BookOpen, Brain, ChevronRight, Terminal, Search, Globe, FolderOpen, PencilLine, Server, Loader2, AlertCircle, Clock, FileDiff, Undo2, X, Copy, Check, Palette, Music2, GitBranch } from 'lucide-react';
 import { actionKind, actionCategory, actionState, changeStats, fileName, activitySegments, activityBatches, activitySummary } from '../utils/agentActivity';
+import { localize } from '../utils/localize';
 import '../styles/agentActivity.css';
 
 function useLocale() {
-  const { i18n } = useTranslation();
-  const zh = String(i18n.resolvedLanguage || i18n.language || '').toLowerCase().startsWith('zh');
-  return (chinese, english) => zh ? chinese : english;
+  useTranslation();
+  return localize;
 }
 
 function useDisclosure(defaultOpen = false) {

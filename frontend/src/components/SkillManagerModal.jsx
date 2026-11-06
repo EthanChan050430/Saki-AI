@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { BACKEND_URL } from '../utils/backendUrl';
 import { getFeatureLocale } from '../utils/featureLocale';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
+import { localizeWith } from '../utils/localize';
 
 const emptyForm = {
   sourceType: 'openhub',
@@ -32,6 +33,7 @@ const emptyForm = {
 
 export default function SkillManagerModal({ isOpen, onClose, windowed = false }) {
   const { i18n } = useTranslation();
+  const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language).skills;
   const [skills, setSkills] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -490,7 +492,7 @@ export default function SkillManagerModal({ isOpen, onClose, windowed = false })
                         className="md:hidden inline-flex items-center gap-1 mb-2 px-2.5 py-1 rounded-full bg-[var(--surface-bg-light)] text-[var(--text-secondary)] text-xs font-bold"
                       >
                         <PanelLeftOpen size={14} />
-                        Skills
+                        {getLocalText('技能', 'Skills', 'スキル')}
                       </button>
                       <h4 className="text-base font-bold text-[var(--text-dark)] leading-tight truncate">{selectedSkill.name}</h4>
                       <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-tight">
@@ -561,7 +563,7 @@ export default function SkillManagerModal({ isOpen, onClose, windowed = false })
                     ) : null}
                     {selectedSkillMeta.stars ? (
                       <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold">
-                        Stars {selectedSkillMeta.stars}
+                        {getLocalText('收藏', 'Stars', 'スター')} {selectedSkillMeta.stars}
                       </span>
                     ) : null}
                     {(selectedSkill.tags || []).slice(0, 6).map(tag => (

@@ -110,7 +110,7 @@ export default function AiCustomizationModal({
                 className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center text-white gap-1 transition-opacity duration-200"
               >
                 <Camera size={16} className="text-white/90" />
-                <span className="text-[9px] font-medium tracking-wider text-white/95">更换头像</span>
+                <span className="text-[9px] font-medium tracking-wider text-white/95">{t('change_avatar', '更换头像')}</span>
               </div>
               {isUploading && (
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[10px] font-medium">
@@ -162,7 +162,7 @@ export default function AiCustomizationModal({
               className="w-full text-xs bg-[var(--surface-bg-light)] border border-[var(--surface-border-subtle)] rounded-xl p-4 text-[var(--text-secondary)] placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-slate-400 focus:border-[var(--surface-border-subtle)] focus:bg-[var(--surface-bg)] transition-all resize-y custom-scrollbar leading-relaxed"
             />
             <p className="text-[10px] text-[var(--text-tertiary)] leading-normal">
-              调整上述设定可以重塑 Saki 的回复语气、口头禅以及回答规范。
+              {t('prompt_hint', '调整上述设定可以重塑 Saki 的回复语气、口头禅以及回答规范。')}
             </p>
           </div>
         </div>

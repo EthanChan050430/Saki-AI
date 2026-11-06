@@ -37,6 +37,7 @@ data/memories/
 data/working_memory/
 data/models-cache/
 data/skills/
+data/plugins/
 data/*.json
 !data/global_config.example.json
 memory/

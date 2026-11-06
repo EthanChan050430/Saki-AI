@@ -1,6 +1,27 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Menu, Search, Image, Music, Sun, Moon } from 'lucide-react';
+import { Menu, Search, Image, Music, Sun, Moon, Globe, ChevronDown } from 'lucide-react';
+import { changeSakiLang } from '../i18n';
+
+const LANG_OPTIONS = [
+  { code: 'zh-CN', label: '简体中文', short: '中文' },
+  { code: 'en-US', label: 'English', short: 'EN' },
+  { code: 'ja',    label: '日本語', short: '日本語' },
+];
+
+const resolveOption = (language) => {
+  const value = String(language || 'en-US').toLowerCase();
+  if (value.startsWith('zh')) return LANG_OPTIONS[0];
+  if (value.startsWith('ja')) return LANG_OPTIONS[2];
+  return LANG_OPTIONS[1];
+};
+
+const isOptionActive = (option, language) => {
+  const value = String(language || 'en-US').toLowerCase();
+  if (option.code === 'zh-CN') return value.startsWith('zh');
+  if (option.code === 'ja') return value.startsWith('ja');
+  return !value.startsWith('zh') && !value.startsWith('ja');
+};
 
 export default function Header({
   toggleSidebar,
@@ -13,7 +34,28 @@ export default function Header({
   onToggleTheme
 }) {
   const { t, i18n } = useTranslation();
-  const searchLabel = t('search', { defaultValue: String(i18n.resolvedLanguage || i18n.language).startsWith('zh') ? '搜索' : 'Search' });
+  const activeLang = i18n.resolvedLanguage || i18n.language;
+  const currentLang = resolveOption(activeLang);
+  const [langOpen, setLangOpen] = useState(false);
+  const langRef = useRef(null);
+
+  useEffect(() => {
+    if (!langOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (!langRef.current?.contains(event.target)) setLangOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setLangOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [langOpen]);
+
+  const searchLabel = t('search', { defaultValue: 'Search' });
   const shortcutLabel = navigator.platform?.toLowerCase?.().includes('mac') ? 'Cmd K' : 'Ctrl K';
 
   return (
@@ -23,7 +65,7 @@ export default function Header({
           onClick={toggleSidebar}
           className="rounded-lg p-1.5 text-gray-700 transition-colors hover:bg-white/40 hover:text-[#ff75ac] dark:text-gray-200 dark:hover:bg-white/10 dark:hover:text-[#ff9bc8]"
           title={t('toggle_sidebar') || 'Toggle Sidebar'}
-          aria-label="Toggle sidebar"
+          aria-label={t('toggle_sidebar') || 'Toggle sidebar'}
         >
           <Menu size={18} />
         </button>
@@ -55,12 +97,61 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Language Selector */}
+        <div className="relative" ref={langRef}>
+          <button
+            type="button"
+            onClick={() => setLangOpen((open) => !open)}
+            aria-haspopup="listbox"
+            aria-expanded={langOpen}
+            aria-label={t('language')}
+            title={t('language')}
+            className="flex h-8 items-center gap-1 rounded-lg border border-white/40 bg-white/50 px-2 text-gray-700 shadow-sm backdrop-blur-md transition-all hover:border-[#ff75ac]/40 hover:bg-white/85 hover:text-[#ff75ac] dark:border-white/10 dark:bg-white/10 dark:text-gray-200 dark:hover:border-[#ff75ac]/50 dark:hover:bg-white/15 dark:hover:text-[#ff9bc8]"
+          >
+            <Globe size={14} className="shrink-0" />
+            <span className="hidden text-[11px] font-semibold sm:inline">{currentLang.short}</span>
+            <ChevronDown size={12} className={`shrink-0 transition-transform duration-200 ${langOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {langOpen && (
+            <ul
+              role="listbox"
+              className="absolute right-0 top-[calc(100%+6px)] z-30 min-w-[9.5rem] overflow-hidden rounded-xl border border-white/50 bg-white/95 p-1 shadow-lg shadow-black/10 backdrop-blur-xl dark:border-white/10 dark:bg-[#1b1c24]/95"
+            >
+              {LANG_OPTIONS.map((option) => {
+                const active = isOptionActive(option, activeLang);
+                return (
+                  <li key={option.code}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      onClick={() => {
+                        changeSakiLang(option.code);
+                        setLangOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+                        active
+                          ? 'bg-[#ff75ac]/15 text-[#ff75ac] dark:bg-[#ff75ac]/20 dark:text-[#ff9bc8]'
+                          : 'text-gray-700 hover:bg-[#ff75ac]/10 hover:text-[#ff75ac] dark:text-gray-200 dark:hover:bg-white/10 dark:hover:text-[#ff9bc8]'
+                      }`}
+                    >
+                      <span>{option.label}</span>
+                      {active && <span className="text-[10px] font-bold">●</span>}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
         {/* Dark / Light Theme Toggle */}
         <button
           onClick={onToggleTheme}
           title={theme === 'dark' ? (t('switch_to_light') || '切换至浅色模式') : (t('switch_to_dark') || '切换至深色模式')}
           className="theme-toggle-btn group relative flex h-8 w-8 items-center justify-center rounded-lg border border-white/40 bg-white/50 text-gray-700 shadow-sm backdrop-blur-md transition-all hover:scale-105 hover:border-[#ff75ac]/40 hover:bg-white/85 hover:text-[#ff75ac] active:scale-95 dark:border-white/10 dark:bg-white/10 dark:text-gray-200 dark:hover:border-[#ff75ac]/50 dark:hover:bg-white/15 dark:hover:text-[#ff9bc8]"
-          aria-label="Toggle theme"
+          aria-label={theme === 'dark' ? (t('switch_to_light') || '切换至浅色模式') : (t('switch_to_dark') || '切换至深色模式')}
         >
           {theme === 'dark' ? (
             <Sun size={15} className="text-amber-400 transition-transform duration-300 group-hover:rotate-45" />
@@ -71,7 +162,7 @@ export default function Header({
 
         <button
           onClick={onToggleMusic}
-          title={isMusicPlaying ? 'Stop Music' : 'Dance & Radio Mode'}
+          title={isMusicPlaying ? (t('stop_music') || 'Stop Music') : (t('music_mode') || 'Dance & Radio Mode')}
           aria-pressed={isMusicPlaying}
           className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
             isMusicPlaying

@@ -18,12 +18,15 @@
             document.documentElement.classList.remove('dark');
           }
 
-          var savedLang = localStorage.getItem('i18nextLng') || navigator.language || 'zh-CN';
-          if (savedLang && savedLang.indexOf('en') === 0) {
-            document.documentElement.setAttribute('lang', 'en');
-          } else {
-            document.documentElement.setAttribute('lang', 'zh-CN');
+          var savedLang = localStorage.getItem('saki_user_lang') || localStorage.getItem('i18nextLng') || navigator.language || 'zh-CN';
+          savedLang = String(savedLang).toLowerCase();
+          var htmlLang = 'zh-CN';
+          if (savedLang.indexOf('ja') === 0) {
+            htmlLang = 'ja';
+          } else if (savedLang.indexOf('en') === 0) {
+            htmlLang = 'en';
           }
+          document.documentElement.setAttribute('lang', htmlLang);
         } catch (e) {}
       })();
     </script>

@@ -133,28 +133,27 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
     });
   }
 
+  // Auto-follow the running step only until the user manually picks a step.
+  const followLatestRef = React.useRef(true);
+  const runningStepIndex = steps.findIndex((step) => step.status === 'running');
+  const stepCount = steps.length;
+
   useEffect(() => {
-    const runningIdx = steps.findIndex((step) => step.status === 'running');
-    if (runningIdx !== -1) {
-      if (runningIdx !== activeStepIndex) {
-        setActiveStepIndex(runningIdx);
-      }
+    if (stepCount === 0) {
+      setActiveStepIndex(0);
       return;
     }
-
-    if (steps.length === 0) {
-      if (activeStepIndex !== 0) {
-        setActiveStepIndex(0);
-      }
+    if (followLatestRef.current) {
+      setActiveStepIndex(runningStepIndex !== -1 ? runningStepIndex : stepCount - 1);
       return;
     }
+    setActiveStepIndex((prev) => Math.min(prev, stepCount - 1));
+  }, [runningStepIndex, stepCount]);
 
-    const nextIndex = Math.min(activeStepIndex, steps.length - 1);
-    const fallbackIndex = nextIndex === 0 ? steps.length - 1 : nextIndex;
-    if (fallbackIndex !== activeStepIndex) {
-      setActiveStepIndex(fallbackIndex);
-    }
-  }, [activeStepIndex, status, steps]);
+  const selectStep = (idx) => {
+    followLatestRef.current = runningStepIndex !== -1 ? idx === runningStepIndex : idx === stepCount - 1;
+    setActiveStepIndex(idx);
+  };
   const reportAvailable = Boolean(reportHtmlContent || reportMarkdownContent || reportStepContent);
   const displayMarkdown = reportMarkdownContent || reportStepContent;
 
@@ -309,8 +308,8 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
         <div className="flex items-center gap-2">
           <FileText size={17} className="text-blue-600" />
           <span className="text-sm font-bold text-gray-800">{t('final_report')}</span>
-          {status === 'completed' && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-600">Markdown Ready</span>}
-          {status !== 'completed' && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-600 animate-pulse">Generating...</span>}
+          {status === 'completed' && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-600">{t('report_ready')}</span>}
+          {status !== 'completed' && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-600 animate-pulse">{t('report_generating')}</span>}
         </div>
         <div className="flex items-center gap-2">
           {renderFocusButton(focusMode)}
@@ -375,7 +374,7 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
             {steps.map((step, idx) => (
               <button
                 key={idx}
-                onClick={() => setActiveStepIndex(idx)}
+                onClick={() => selectStep(idx)}
                 className={`flex min-w-[130px] flex-shrink-0 items-start gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-all ${
                   activeStepIndex === idx ? 'border-blue-200 bg-blue-50 shadow-sm' : 'border-transparent bg-gray-50 hover:bg-gray-100'
                 }`}

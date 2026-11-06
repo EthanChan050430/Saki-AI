@@ -1,4 +1,5 @@
 import { changeStats } from './agentActivity.js';
+import { localize } from './localize.js';
 
 export function parseTurns(messages = []) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
@@ -24,9 +25,9 @@ export function parseTurns(messages = []) {
       // Clean internal tags and markdown formatting for a clean one-line summary
       preview = preview
         .replace(/\[expression[:=].*?\.png\]/gi, '')
-        .replace(/```[\s\S]*?```/g, '[代码]')
+        .replace(/```[\s\S]*?```/g, localize('[代码]', '[code]'))
         .replace(/`([^`]+)`/g, '$1')
-        .replace(/!\[.*?\]\(.*?\)/g, '[图片]')
+        .replace(/!\[.*?\]\(.*?\)/g, localize('[图片]', '[image]'))
         .replace(/\[(.*?)\]\(.*?\)/g, '$1')
         .replace(/^[#*>\-\s]+/gm, '')
         .trim();
@@ -39,7 +40,7 @@ export function parseTurns(messages = []) {
       }
 
       if (!preview) {
-        preview = `对话 #${list.length + 1}`;
+        preview = localize(`对话 #${list.length + 1}`, `Conversation #${list.length + 1}`);
       }
 
       // Collapse multiple whitespaces/newlines into a single space

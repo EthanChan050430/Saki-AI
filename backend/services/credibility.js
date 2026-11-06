@@ -1,4 +1,5 @@
 const { URL } = require('url');
+const { normalizeSearchUrl, scoreSearchRelevance } = require('./searchRelevance');
 
 const EMOTION_TERMS = [
     'breaking',
@@ -124,17 +125,11 @@ function getHostname(rawUrl = '') {
 }
 
 function normalizeUrl(rawUrl = '') {
-    try {
-        const parsed = new URL(String(rawUrl || '').trim());
-        parsed.hash = '';
-        if ((parsed.protocol === 'http:' && parsed.port === '80') || (parsed.protocol === 'https:' && parsed.port === '443')) {
-            parsed.port = '';
-        }
-        const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
-        return `${parsed.protocol}//${parsed.hostname.toLowerCase()}${pathname}${parsed.search}`;
-    } catch {
-        return String(rawUrl || '').trim();
-    }
+    return normalizeSearchUrl(rawUrl);
+}
+
+function matchesHost(host, domain) {
+    return host === domain || host.endsWith(`.${domain}`);
 }
 
 function includesAny(text = '', terms = []) {
@@ -160,35 +155,42 @@ function scoreSourceAuthority(rawUrl = '') {
         score = 95;
     }
 
-    if (FACT_CHECK_HOST_HINTS.some((hint) => host.includes(hint))) {
+    if (['factcheck.org', 'politifact.com', 'snopes.com', 'fullfact.org', 'ifact.org'].some((hint) => matchesHost(host, hint))) {
         score = Math.max(score, 88);
     }
 
-    if (TRUSTED_HOST_HINTS.some((hint) => host.includes(hint))) {
+    if (TRUSTED_HOST_HINTS.some((hint) => matchesHost(host, hint))) {
         score = Math.max(score, 82);
     }
 
-    if (host.includes('wikipedia.org')) {
+    if (matchesHost(host, 'wikipedia.org')) {
         score = Math.max(score, 66);
     }
 
-    if (host.includes('blog') || host.includes('substack') || host.includes('medium.com')) {
+    if (host.includes('blog') || matchesHost(host, 'substack.com') || matchesHost(host, 'medium.com')) {
         score = Math.min(score, 46);
     }
 
-    if (LOW_TRUST_HOST_HINTS.some((hint) => host.includes(hint))) {
+    if (LOW_TRUST_HOST_HINTS.some((hint) => matchesHost(host, hint))) {
         score = Math.min(score, 28);
     }
 
     return clamp(score, 15, 98);
 }
 
-function mergeRankedSearchResults(results = []) {
+function mergeRankedSearchResults(results = [], query = '') {
     const merged = new Map();
+    const hasQuery = Boolean(String(query || '').trim());
 
-    (Array.isArray(results) ? results : []).forEach((item, index) => {
+    const observations = (Array.isArray(results) ? results : []).flatMap(item =>
+        Array.isArray(item?.rankings) && item.rankings.length
+            ? item.rankings.map(ranking => ({ ...item, ...ranking })) : [item]);
+    observations.forEach((item) => {
         const url = normalizeUrl(item?.url || item?.link || '');
         if (!url) return;
+        const rank = Number.isFinite(Number(item.rank)) && Number(item.rank) >= 1 ? Number(item.rank) : null;
+        const relevanceScore = hasQuery ? scoreSearchRelevance(item, query) : Number(item.relevanceScore) || 0;
+        const score = Number.isFinite(Number(item.score)) ? Number(item.score) : null;
 
         const existing = merged.get(url) || {
             id: `src_${merged.size + 1}`,
@@ -200,12 +202,22 @@ function mergeRankedSearchResults(results = []) {
             queries: [],
             engineCount: 0,
             authorityScore: scoreSourceAuthority(url),
-            rank: index,
+            rank,
+            score,
+            relevanceScore,
+            rankings: [],
         };
 
-        const content = String(item?.content || '').trim();
-        if (content.length > existing.content.length) {
+        const content = String(item?.content || item?.snippet || item?.description || '').trim();
+        if (relevanceScore > existing.relevanceScore || (!existing.content || (!hasQuery && content.length > existing.content.length))) {
             existing.content = content;
+            existing.title = String(item.title || item.name || url).trim();
+        }
+        existing.relevanceScore = Math.max(existing.relevanceScore, relevanceScore);
+        if (score !== null) existing.score = existing.score === null ? score : Math.max(existing.score, score);
+        if (!existing.rankings.some(entry => entry.engine === (item.engine || '')
+            && entry.query === (item.query || '') && entry.rank === rank)) {
+            existing.rankings.push({ engine: item.engine || '', query: item.query || '', rank, score, relevanceScore });
         }
 
         if (item?.engine && !existing.engines.includes(item.engine)) {
@@ -217,15 +229,25 @@ function mergeRankedSearchResults(results = []) {
         }
 
         existing.engineCount = existing.engines.length;
-        existing.rank = Math.min(existing.rank, index);
+        if (rank !== null) existing.rank = existing.rank === null ? rank : Math.min(existing.rank, rank);
         existing.authorityScore = Math.max(existing.authorityScore, scoreSourceAuthority(url));
         merged.set(url, existing);
     });
 
-    return Array.from(merged.values()).sort((left, right) => {
+    const ranked = Array.from(merged.values()).filter(item => !hasQuery || item.relevanceScore >= 0.24).sort((left, right) => {
+        if (hasQuery && right.relevanceScore !== left.relevanceScore) return right.relevanceScore - left.relevanceScore;
         if (right.engineCount !== left.engineCount) return right.engineCount - left.engineCount;
         if (right.authorityScore !== left.authorityScore) return right.authorityScore - left.authorityScore;
-        return left.rank - right.rank;
+        return (left.rank ?? Infinity) - (right.rank ?? Infinity);
+    });
+    if (!hasQuery) return ranked;
+    const domainCounts = new Map();
+    return ranked.filter(item => {
+        const domain = item.domain.replace(/^www\./i, '');
+        const count = domainCounts.get(domain) || 0;
+        if (count >= 2) return false;
+        domainCounts.set(domain, count + 1);
+        return true;
     });
 }
 
@@ -280,20 +302,21 @@ function pickExcerpt(content = '', keywords = [], maxLength = 220) {
     ));
 
     const lowered = cleaned.toLowerCase();
-    let hitIndex = -1;
-
+    const starts = new Set([0]);
     for (const keyword of normalizedKeywords) {
-        const index = lowered.indexOf(keyword.toLowerCase());
-        if (index >= 0 && (hitIndex < 0 || index < hitIndex)) {
-            hitIndex = index;
+        let index = lowered.indexOf(keyword.toLowerCase());
+        while (index >= 0) {
+            starts.add(Math.max(0, index - Math.floor(maxLength / 4)));
+            index = lowered.indexOf(keyword.toLowerCase(), index + keyword.length);
         }
     }
-
-    if (hitIndex < 0) {
-        return cleaned.slice(0, maxLength);
+    let start = 0;
+    let best = -1;
+    for (const candidate of starts) {
+        const window = lowered.slice(candidate, candidate + maxLength);
+        const score = normalizedKeywords.reduce((sum, word) => sum + (window.includes(word.toLowerCase()) ? 1 : 0), 0);
+        if (score > best) { best = score; start = candidate; }
     }
-
-    const start = Math.max(0, hitIndex - Math.floor(maxLength / 3));
     const excerpt = cleaned.slice(start, start + maxLength);
     const prefix = start > 0 ? '...' : '';
     const suffix = start + maxLength < cleaned.length ? '...' : '';
