@@ -190,6 +190,18 @@ export function getNextMsgSeq(_msgId: string): number {
 const DEFAULT_API_TIMEOUT = 30000; // 默认 30 秒
 const FILE_UPLOAD_TIMEOUT = 120000; // 文件上传 120 秒
 
+export class ApiRequestError extends Error {
+  readonly status?: number;
+  readonly isTimeout: boolean;
+
+  constructor(message: string, options: { status?: number; isTimeout?: boolean } = {}) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = options.status;
+    this.isTimeout = options.isTimeout ?? false;
+  }
+}
+
 /**
  * API 请求封装
  */
@@ -240,10 +252,10 @@ export async function apiRequest<T = unknown>(
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
       console.error(`[qqbot-api] <<< Request timeout after ${timeout}ms`);
-      throw new Error(`Request timeout[${path}]: exceeded ${timeout}ms`);
+      throw new ApiRequestError(`Request timeout[${path}]: exceeded ${timeout}ms`, { isTimeout: true });
     }
     console.error(`[qqbot-api] <<< Network error:`, err);
-    throw new Error(`Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`);
+    throw new ApiRequestError(`Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -260,12 +272,13 @@ export async function apiRequest<T = unknown>(
     rawBody = await res.text();
     data = JSON.parse(rawBody) as T;
   } catch (err) {
-    throw new Error(`Failed to parse response[${path}]: ${err instanceof Error ? err.message : String(err)}`);
+    // Preserve the HTTP status even when an error response is not valid JSON.
+    throw new ApiRequestError(`Failed to parse response[${path}]: ${err instanceof Error ? err.message : String(err)}`, { status: res.status });
   }
 
   if (!res.ok) {
     const error = data as { message?: string; code?: number };
-    throw new Error(`API Error [${path}]: ${error.message ?? JSON.stringify(data)}`);
+    throw new ApiRequestError(`API Error [${path}]: ${error?.message ?? JSON.stringify(data)}`, { status: res.status });
   }
 
   return data;
@@ -291,17 +304,17 @@ async function apiRequestWithRetry<T = unknown>(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       
-      const errMsg = lastError.message;
+      // Classify failures using metadata, never the OpenID/path or response text.
       if (
-        errMsg.includes("400") || errMsg.includes("401") || errMsg.includes("Invalid") ||
-        errMsg.includes("上传超时") || errMsg.includes("timeout") || errMsg.includes("Timeout")
+        lastError instanceof ApiRequestError &&
+        (lastError.status === 400 || lastError.status === 401 || lastError.isTimeout)
       ) {
         throw lastError;
       }
 
       if (attempt < maxRetries) {
         const delay = UPLOAD_BASE_DELAY_MS * Math.pow(2, attempt);
-        console.log(`[qqbot-api] Upload attempt ${attempt + 1} failed, retrying in ${delay}ms: ${errMsg.slice(0, 100)}`);
+        console.log(`[qqbot-api] Upload attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
