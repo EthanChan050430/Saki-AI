@@ -140,7 +140,6 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        {/* Header */}
         <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-saki-pink/15 flex items-center justify-center text-[var(--accent-text)] shrink-0">
@@ -319,7 +318,6 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
           )}
         </div>
 
-        {/* History Selector Overlay */}
         {showHistorySelector && (
           <div className="absolute inset-0 bg-[var(--surface-bg)] z-[160] flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-300">
              <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">

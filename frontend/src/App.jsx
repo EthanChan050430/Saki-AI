@@ -1456,7 +1456,6 @@ function App() {
     const fetchAllModels = async () => {
       let combinedModels = [];
 
-      // 1. Fetch Ollama Models
       try {
         const ollamaRes = await axios.get(`${BACKEND_URL}/api/models`, {
           params: { ollamaUrl: config.ollamaUrl }
@@ -1467,7 +1466,6 @@ function App() {
         console.error('Failed to fetch Ollama models:', err);
       }
 
-      // 1.5. Fetch LMStudio Models
       try {
         const lmstudioRes = await axios.get(`${BACKEND_URL}/api/lmstudio/models`, {
           params: { lmstudioUrl: config.lmstudioUrl }
@@ -1478,7 +1476,6 @@ function App() {
         console.error('Failed to fetch LMStudio models:', err);
       }
 
-      // 2. Fetch GitHub Models
       if (config.copilotToken || config.provider === 'copilot') {
         try {
           const githubRes = await axios.get(`${BACKEND_URL}/api/github/models`, {
@@ -1511,7 +1508,6 @@ function App() {
         }
       }
 
-      // 3. Fetch enabled API provider models
       const apiProvidersToFetch = getConfiguredApiProvidersForModels(config);
       if (apiProvidersToFetch.length > 0) {
         const apiModelResults = await Promise.allSettled(
@@ -1844,7 +1840,6 @@ function App() {
       messages: currentMessages,
       clientSavedAt: Date.now()
     }).then(() => {
-        // Refresh sidebar history
         axios.get(`${BACKEND_URL}/api/history`).then(res => commitHistory(res.data));
     });
   };
@@ -1865,7 +1860,6 @@ function App() {
     const userMsg = newMessages[idx - 1];
     const userContent = userMsg?.content || '';
 
-    // Remove the two messages
     newMessages.splice(idx - 1, 2);
     setMessages(newMessages);
     latestMessagesRef.current = newMessages;
@@ -1898,7 +1892,6 @@ function App() {
     // Save immediately so it's not lost on refresh
     saveChatToBackend(activeChatId, newMessages);
 
-    // Prepare streaming response
     const assistantMsgId = Date.now();
     const assistantMsg = { role: 'assistant', parts: [], generatedFiles: [], id: assistantMsgId };
     const messagesWithAssistant = [...newMessages, assistantMsg];
@@ -1906,7 +1899,6 @@ function App() {
     latestMessagesRef.current = messagesWithAssistant;
     setContextStatus(calculateContextStatusFromMessages(messagesWithAssistant, config));
 
-    // Save initial state (User + Assistant skeleton)
     saveChatToBackend(activeChatId, messagesWithAssistant);
 
     setIsGenerating(true);
@@ -3509,7 +3501,6 @@ function App() {
         backgroundAttachment: 'fixed'
       }}
     >
-      {/* Liquid Mesh Starry Backdrop */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
         <div className="absolute -top-[15%] -left-[10%] w-[55%] h-[55%] rounded-full bg-gradient-to-br from-[#ff75ac]/18 dark:from-[#ff75ac]/12 to-transparent blur-3xl opacity-75" />
         <div className="absolute top-[20%] -right-[15%] w-[50%] h-[50%] rounded-full bg-gradient-to-bl from-[#af52de]/15 dark:from-[#7c3aed]/12 to-transparent blur-3xl opacity-60" />

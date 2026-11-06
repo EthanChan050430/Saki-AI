@@ -93,7 +93,6 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
     <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
         className={`bg-[#1e1e1e] border border-white/10 rounded-2xl w-full ${multiFile ? 'max-w-6xl' : 'max-w-5xl'} max-h-[90vh] flex flex-col shadow-2xl overflow-hidden outline-none`}>
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5 bg-[#252526] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="p-1.5 bg-blue-500/10 rounded-lg text-blue-400 shrink-0">
@@ -129,7 +128,6 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
           </div>
         </div>
 
-        {/* Content */}
         <div className="saki-diff-layout">
           {multiFile && <nav className="saki-diff-files" aria-label={tx('更改的文件', 'Changed files')}>
             <div className="saki-diff-files-heading">{tx(`${files.length} 个更改的文件`, `${files.length} changed files`)}</div>
@@ -196,7 +194,6 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
         </div>
         </div>
 
-        {/* Footer */}
         <div className="px-4 py-2.5 border-t border-white/5 bg-[#252526] flex justify-end shrink-0">
           <button
             onClick={onClose}

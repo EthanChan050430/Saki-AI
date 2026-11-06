@@ -1154,7 +1154,6 @@ export default function PPTView({ data, isEmbedded = true }) {
       </div>
 
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Step Navigation */}
         <div className="flex items-center gap-1 overflow-x-auto pb-2.5 mb-3 scrollbar-hide border-b border-gray-50">
           {steps.map((step, idx) => (
             <button
@@ -1175,7 +1174,6 @@ export default function PPTView({ data, isEmbedded = true }) {
           ))}
         </div>
 
-        {/* Content Area */}
         <div className="flex-1 flex flex-col md:flex-row gap-4 overflow-hidden">
           {isFinalStep ? (
             <div className="w-full flex items-center justify-center rounded-xl border border-gray-100 bg-gray-50/70">
@@ -1186,7 +1184,6 @@ export default function PPTView({ data, isEmbedded = true }) {
             </div>
           ) : (
             <>
-              {/* Thinking process if available */}
               {activeStep?.thinking && (
                 <div
                   className="w-full md:w-1/3 flex flex-col bg-gray-50 rounded-xl p-4 overflow-y-auto border border-gray-100"
@@ -1204,7 +1201,6 @@ export default function PPTView({ data, isEmbedded = true }) {
                 </div>
               )}
 
-              {/* Slide Preview */}
               <div
                 className={`flex-1 flex flex-col bg-white rounded-xl border border-gray-100 overflow-hidden shadow-inner ${!activeStep?.thinking ? 'w-full' : ''}`}
                 style={{ maxHeight: '540px' }}

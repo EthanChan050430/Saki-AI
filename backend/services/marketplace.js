@@ -494,10 +494,8 @@ class MarketplaceService {
                 );
             }
 
-            // 1. 写入 plugin.json
             await fs.writeJson(path.join(targetDir, 'plugin.json'), template.manifest, { spaces: 2 });
 
-            // 2. 写入 skills/
             if (Array.isArray(template.skills)) {
                 for (const skill of template.skills) {
                     const skillDir = path.join(targetDir, 'skills', skill.dir);

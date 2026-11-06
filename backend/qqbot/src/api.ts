@@ -1,6 +1,5 @@
 /**
  * QQ Bot API 鉴权和请求封装
- * [修复版] 已重构为支持多实例并发，消除全局变量冲突
  */
 
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
@@ -47,7 +46,6 @@ export function isMarkdownSupport(): boolean {
 }
 
 // =========================================================================
-// 🚀 [核心修复] 将全局状态改为 Map，按 appId 隔离，彻底解决多账号串号问题
 // =========================================================================
 const tokenCacheMap = new Map<string, { token: string; expiresAt: number; appId: string }>();
 const tokenFetchPromises = new Map<string, Promise<string>>();

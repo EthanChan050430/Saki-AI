@@ -15,7 +15,6 @@ export default function AiCustomizationModal({
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Initialize promptText when modal opens or config changes
   useEffect(() => {
     if (isOpen) {
       setPromptText(config?.systemPrompt || '');
@@ -52,7 +51,7 @@ export default function AiCustomizationModal({
       alert(t('upload_avatar_fail', '上传头像失败'));
     } finally {
       setIsUploading(false);
-      e.target.value = ''; // Reset input
+      e.target.value = '';
     }
   };
 
@@ -76,7 +75,6 @@ export default function AiCustomizationModal({
       />
       <div className="relative w-full max-w-[480px] bg-[var(--surface-bg)] rounded-2xl p-4 sm:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.12)] border border-[var(--surface-border-subtle)] animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
         
-        {/* Header */}
         <div className="flex items-center justify-between pb-2.5 border-b border-[var(--surface-border-subtle)]">
           <div className="min-w-0">
             <h3 className="text-sm sm:text-base font-semibold text-[var(--text-dark)] leading-tight">
@@ -94,10 +92,8 @@ export default function AiCustomizationModal({
           </button>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto py-5 space-y-6 pr-1 custom-scrollbar">
           
-          {/* Avatar Section */}
           <div className="flex flex-col items-center justify-center space-y-3 pb-2">
             <div className="relative group w-20 h-20 rounded-full overflow-hidden border-2 border-[var(--surface-border-subtle)] shadow-sm cursor-pointer bg-[var(--surface-bg-light)]">
               <img 
@@ -140,7 +136,6 @@ export default function AiCustomizationModal({
             </div>
           </div>
 
-          {/* System Prompt Section */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
@@ -167,7 +162,6 @@ export default function AiCustomizationModal({
           </div>
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[var(--surface-border-subtle)]">
           <button
             type="button"

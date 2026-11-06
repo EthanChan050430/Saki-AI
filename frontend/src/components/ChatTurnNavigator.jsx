@@ -18,10 +18,8 @@ export default function ChatTurnNavigator({
   const activeItemRef = useRef(null);
   const listContainerRef = useRef(null);
 
-  // Parse turns from messages
   const turns = useMemo(() => parseTurns(messages), [messages]);
 
-  // Track active turn based on container scroll position
   useEffect(() => {
     const container = containerRef?.current;
     if (!container || turns.length === 0) return;
@@ -137,7 +135,6 @@ export default function ChatTurnNavigator({
       data-testid="chat-turn-navigator"
     >
       <div className="relative flex items-center justify-end pointer-events-auto">
-        {/* Floating Preview Popover Card */}
         <div
           className={`absolute right-full pr-2.5 top-1/2 -translate-y-1/2 transition-all duration-200 origin-right ${
             isHovered
@@ -195,7 +192,6 @@ export default function ChatTurnNavigator({
           </div>
         </div>
 
-        {/* Vertical Dots Rail Strip */}
         <div
           className={`flex flex-col items-center gap-2 py-2 px-1 rounded-full transition-all duration-200 cursor-pointer max-h-[calc(100vh-12rem)] overflow-y-auto no-scrollbar ${
             isHovered

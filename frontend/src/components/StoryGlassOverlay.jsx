@@ -1038,7 +1038,6 @@ function StoryWarmthCup({ score = 0, signals = [], isListening = false, isMixing
       </div>
       <div className="flex items-center gap-4">
         <div className="relative h-40 w-24 shrink-0">
-          {/* Mists */}
           {[0, 1, 2].map((index) => (
             <span
               key={index}
@@ -1051,34 +1050,25 @@ function StoryWarmthCup({ score = 0, signals = [], isListening = false, isMixing
             />
           ))}
 
-          {/* Cup Rim - Back inner edge */}
           <div className="absolute left-1/2 top-5 h-3 w-16 -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-t border-amber-100/30 bg-white/5" />
 
-          {/* Cup Bowl */}
           <div className="absolute left-1/2 top-5 h-20 w-16 -translate-x-1/2 overflow-hidden rounded-b-full rounded-t-sm border-x border-b border-white/20 bg-[radial-gradient(ellipse_at_35%_25%,rgba(255,255,255,0.1),transparent_40%),rgba(0,0,0,0.15)] shadow-[inset_6px_0_12px_rgba(255,255,255,0.1),inset_-6px_0_16px_rgba(0,0,0,0.15)]">
-            {/* Liquid Container */}
             <div
               className="absolute bottom-0 left-0 right-0 w-full transition-[height] duration-700 ease-in-out"
               style={{ height: `${fillHeight}%` }}
             >
-              {/* Liquid Body */}
               <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(254,243,199,0.85),rgba(251,113,133,0.55)_40%,rgba(20,184,166,0.65))] opacity-90 shadow-[0_-8px_24px_rgba(251,191,36,0.2)]" />
-              {/* Liquid Surface */}
               <div className="absolute -top-1.5 left-0 right-0 h-3 rounded-[50%] bg-[rgba(254,243,199,0.7)] shadow-[inset_0_-1px_3px_rgba(0,0,0,0.15)]" />
             </div>
             
-            {/* Glass Highlights */}
             <div className="absolute left-[12%] top-[8%] h-[75%] w-[15%] rounded-[50%] bg-white/15 blur-[3px]" />
             <div className="absolute right-[8%] top-[15%] h-[55%] w-[8%] rounded-[50%] bg-white/10 blur-[3px]" />
           </div>
 
-          {/* Cup Rim - Front overlapping edge */}
           <div className="absolute left-1/2 top-5 h-3 w-16 -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-b border-white/30 shadow-[0_1px_3px_rgba(255,255,255,0.05)]" />
 
-          {/* Stem */}
           <div className="absolute left-1/2 top-[6.25rem] h-[2.5rem] w-1.5 -translate-x-1/2 rounded-full border border-white/10 bg-[linear-gradient(90deg,rgba(255,255,255,0.25),rgba(253,230,138,0.05),rgba(0,0,0,0.2))] shadow-[0_0_12px_rgba(255,255,255,0.05)]" />
 
-          {/* Base Plate */}
           <div className="absolute bottom-[0.8rem] left-1/2 h-2 w-[4.5rem] -translate-x-1/2 rounded-[50%] border border-white/20 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.12),rgba(0,0,0,0.25)_80%)] shadow-[inset_0_1px_2px_rgba(255,255,255,0.15),0_6px_16px_rgba(0,0,0,0.3)]" />
         </div>
         <div className="min-w-0 flex-1">

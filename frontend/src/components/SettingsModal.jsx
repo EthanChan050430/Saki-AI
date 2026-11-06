@@ -157,7 +157,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     }
   }, [config.ttsProvider]);
 
-  // States for Image Cropper
   const [cropperData, setCropperData] = useState({
     isOpen: false,
     image: null,
@@ -166,12 +165,10 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
   const handleCropComplete = async (croppedImageUrl) => {
     try {
-      // 1. Convert blob URL to File object
       const response = await fetch(croppedImageUrl);
       const blob = await response.blob();
       const file = new File([blob], "avatar.jpg", { type: "image/jpeg" });
 
-      // 2. Upload to server
       const formData = new FormData();
       formData.append('file', file);
       
@@ -311,7 +308,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          {/* AI Providers */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Cpu size={16} />
@@ -335,7 +331,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               ))}
             </div>
 
-            {/* Config details based on provider */}
             {activeApiProvider && (
               <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
                 {activeApiProvider.id === 'custom' && (
@@ -475,7 +470,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             )}
           </section>
 
-          {/* Search Engine Config */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Search size={16} />
@@ -557,7 +551,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             )}
           </section>
 
-          {/* Model Personality */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <UserCircle size={16} />
@@ -597,7 +590,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </div>
           </section>
 
-          {/* Drawing Model Settings */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Image size={16} />
@@ -609,7 +601,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                </div>
 
                <div className="space-y-4">
-                 {/* 选项卡切换 */}
                  <div className="flex p-1 bg-[var(--surface-inset)] rounded-lg w-fit">
                     <button 
                       onClick={() => setConfig({...config, drawingProvider: 'none'})}
@@ -725,7 +716,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </div>
           </section>
 
-          {/* TTS Settings */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Volume2 size={16} />
@@ -949,14 +939,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </div>
           </section>
 
-          {/* Interface Settings */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Palette size={16} />
               {t('interface_custom')}
             </h4>
             <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
-              {/* Language Selector */}
               <div className="flex items-center justify-between pb-2 border-b border-[var(--surface-border-subtle)]">
                 <div className="flex items-center gap-2">
                   <Globe size={16} className="text-[var(--text-tertiary)]" />
@@ -994,7 +982,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               <div>
                 <label className="block text-xs font-medium text-[var(--text-secondary)] mb-4">{t('avatar_custom')}</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  {/* User Avatar */}
                   <div className="space-y-3">
                     <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest flex items-center gap-1.5">
                       <UserCircle size={12} />
@@ -1029,7 +1016,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                                 });
                               };
                               reader.readAsDataURL(file);
-                              e.target.value = ''; // Reset to allow same file again
+                              e.target.value = '';
                             }
                           }}
                         />
@@ -1053,7 +1040,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     </div>
                   </div>
 
-                  {/* AI Avatar */}
                   <div className="space-y-3">
                     <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest flex items-center gap-1.5">
                       <Bot size={12} />
@@ -1201,7 +1187,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </div>
           </section>
 
-          {/* MCP Services */}
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Server size={16} />

@@ -88,7 +88,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       console.log(`[qqbot:channel] defaultAccountId: ${id}`);
       return id;
     },
-    // 新增：设置账户启用状态
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
         cfg,
@@ -97,7 +96,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         enabled,
         allowTopLevel: true,
       }),
-    // 新增：删除账户
     deleteAccount: ({ cfg, accountId }) =>
       deleteAccountFromConfigSection({
         cfg,
@@ -129,9 +127,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         .map((entry: string) => entry.toUpperCase()), // QQ openid 是大写的
   },
   setup: {
-    // 新增：规范化账户 ID
     resolveAccountId: ({ accountId }) => accountId?.trim().toLowerCase() || DEFAULT_ACCOUNT_ID,
-    // 新增：应用账户名称
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
         cfg,
@@ -301,7 +297,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         },
       });
     },
-    // 新增：登出账户（清除配置中的凭证）
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;
       const nextQQBot = cfg.channels?.qqbot ? { ...cfg.channels.qqbot } : undefined;
@@ -354,7 +349,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       lastInboundAt: null,
       lastOutboundAt: null,
     },
-    // 新增：构建通道摘要
     buildChannelSummary: ({ snapshot }: { snapshot: Record<string, unknown> }) => ({
       configured: snapshot.configured ?? false,
       tokenSource: snapshot.tokenSource ?? "none",

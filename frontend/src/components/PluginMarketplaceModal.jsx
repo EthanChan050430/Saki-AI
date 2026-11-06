@@ -70,18 +70,15 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
-  // 配置弹窗状态
   const [configModalPlugin, setConfigModalPlugin] = useState(null);
   const [configForm, setConfigForm] = useState({});
   const [showSecrets, setShowSecrets] = useState({});
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
-  // 本地导入表单状态
   const [localPath, setLocalPath] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importMessage, setImportMessage] = useState(null);
 
-  // 加载市场目录与已安装插件
   const fetchData = async (refresh = false) => {
     try {
       setLoading(true);
@@ -111,7 +108,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     fetchData();
   }, [isOpen]);
 
-  // 一键从市场安装
   const handleMarketplaceInstall = async (plugin) => {
     if (installingPluginId || loading) return;
     // 若该插件有必填配置且尚未配置，直接调起配置弹窗
@@ -141,7 +137,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     }
   };
 
-  // 启停插件
   const handleToggle = async (pluginId, currentEnabled) => {
     try {
       await axios.patch(`${BACKEND_URL}/api/plugins/${pluginId}/toggle`, {
@@ -153,7 +148,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     }
   };
 
-  // 卸载插件
   const handleUninstall = async (pluginId, pluginName) => {
     if (!window.confirm(tx(`确定要卸载插件 "${pluginName}" 吗？关联的 MCP 服务与专属技能将被注销。`, `Uninstall plugin "${pluginName}"? Its associated MCP services and dedicated skills will be removed.`, `プラグイン "${pluginName}" をアンインストールしますか？関連する MCP サービスと専用スキルも解除されます。`))) {
       return;
@@ -166,7 +160,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     }
   };
 
-  // 调起配置弹窗
   const openConfigModal = (plugin, isInstalling = false) => {
     const initialConfig = {};
     const schema = plugin.configSchema || {};
@@ -178,7 +171,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     setConfigModalPlugin({ ...plugin, isInstallingFromMarket: isInstalling });
   };
 
-  // 保存配置
   const handleSaveConfig = async () => {
     if (!configModalPlugin) return;
     try {
@@ -206,7 +198,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     }
   };
 
-  // 本地目录导入
   const handleImportLocal = async () => {
     if (!localPath.trim()) return;
     try {
@@ -226,7 +217,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     }
   };
 
-  // 过滤市场插件
   const filteredCatalog = catalog.filter(item => {
     if (selectedCategory !== 'all' && item.category !== selectedCategory) {
       return false;
@@ -237,7 +227,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
     return source.includes(q);
   });
 
-  // 过滤已安装插件
   const filteredInstalled = installedPlugins.filter(item => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -257,7 +246,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (e) => e.stopPropagation() : undefined}
       >
-        {/* 顶部标题栏与导航 Tab */}
         <div className="px-6 py-4 border-b border-[var(--border-subtle)] flex flex-wrap items-center justify-between gap-4 bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
@@ -273,7 +261,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Tabs */}
             <div className="flex items-center bg-[var(--surface-inset)] p-1 rounded-xl border border-[var(--border-subtle)] text-xs font-medium">
               <button
                 onClick={() => setActiveTab('marketplace')}
@@ -318,7 +305,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
           </div>
         </div>
 
-        {/* 搜索栏与分类过滤器 (在市场或已安装页显示) */}
         {activeTab !== 'import' && (
           <div className="px-6 py-3 border-b border-[var(--border-subtle)] bg-[var(--surface-bg)] flex flex-wrap items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full">
@@ -348,11 +334,9 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
           </div>
         )}
 
-        {/* 内容主体区域 */}
         <div className="flex-1 min-h-0 overflow-y-auto p-6 bg-[var(--surface-bg-light)]">
           {loadError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 p-3 text-xs text-red-600">{tx('加载失败：', 'Load failed: ')}{loadError}</p>}
           {notice && <p role="status" className="mb-4 rounded-xl bg-emerald-500/10 p-3 text-xs text-emerald-600">{notice}</p>}
-          {/* TAB 1: 市场广场 */}
           {activeTab === 'marketplace' && (
             <div>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-secondary)]">
@@ -405,7 +389,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                             {plugin.description}
                           </p>
 
-                          {/* MCP 与 Skill 双重徽章 */}
                           <div className="mt-4 space-y-1.5 bg-[var(--surface-inset)]/60 rounded-xl p-2.5 border border-[var(--border-subtle)] text-[11px]">
                             <div className="flex items-center gap-1.5 text-indigo-600 font-medium truncate">
                               <Cpu size={13} className="shrink-0" />
@@ -420,7 +403,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                           {plugin.sourceUrl && <a href={plugin.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[11px] text-indigo-500 hover:underline">{tx('查看源码', 'View source', 'ソースを表示')} <ExternalLink size={11} /></a>}
                         </div>
 
-                        {/* 底部按钮栏 */}
                         <div className="mt-5 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2">
                           <span className="text-[11px] text-[var(--text-tertiary)] truncate">{tx('作者:', 'By:')} {plugin.author}</span>
 
@@ -451,7 +433,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
             </div>
           )}
 
-          {/* TAB 2: 已安装插件管理 */}
           {activeTab === 'installed' && (
             <div className="space-y-3">
               {filteredInstalled.length === 0 ? (
@@ -486,7 +467,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                             <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-inset)] px-2 py-0.5 rounded">
                               v{plugin.version}
                             </span>
-                            {/* 状态徽章 */}
                             {isMissingConfig ? (
                               <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
                                 <AlertCircle size={11} /> {tx('待配置', 'Needs setup', '設定待ち')}
@@ -514,9 +494,7 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                         </div>
                       </div>
 
-                      {/* 操作按钮组 */}
                       <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                        {/* 配置按钮 */}
                         {plugin.configSchema && Object.keys(plugin.configSchema).length > 0 && (
                           <button
                             onClick={() => openConfigModal(plugin)}
@@ -528,7 +506,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                           </button>
                         )}
 
-                        {/* 启停切换 */}
                         <button
                           onClick={() => handleToggle(plugin.id, plugin.enabled)}
                           className={`p-2 rounded-xl border transition-colors flex items-center gap-1 text-xs ${isEnabled ? 'text-emerald-600 border-emerald-200 bg-emerald-50 hover:bg-emerald-100' : 'text-gray-400 border-[var(--border-subtle)] hover:bg-[var(--surface-inset)]'}`}
@@ -538,7 +515,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                           <span>{isEnabled ? tx('已启用', 'Enabled', '有効') : tx('已停用', 'Disabled', '無効')}</span>
                         </button>
 
-                        {/* 卸载按钮 */}
                         <button
                           onClick={() => handleUninstall(plugin.id, plugin.name)}
                           className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-600 rounded-xl border border-[var(--border-subtle)] transition-colors"
@@ -554,7 +530,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
             </div>
           )}
 
-          {/* TAB 3: 本地导入 */}
           {activeTab === 'import' && (
             <div className="max-w-2xl mx-auto space-y-6 py-4">
               <div className="bg-[var(--surface-bg)] rounded-2xl border border-[var(--border-subtle)] p-6">
@@ -591,7 +566,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
                 )}
               </div>
 
-              {/* 规范快速参考 */}
               <div className="bg-[var(--surface-bg)] rounded-2xl border border-[var(--border-subtle)] p-6 text-xs text-[var(--text-secondary)] space-y-3">
                 <h5 className="font-bold text-[var(--text-dark)] flex items-center gap-1.5">
                   <Boxes size={15} className="text-indigo-600" /> {tx('标准插件结构参考 (Agent Plugin Specification)', 'Standard plugin structure (Agent Plugin Specification)', '標準プラグイン構成の参考 (Agent Plugin Specification)')}
@@ -621,7 +595,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
           )}
         </div>
 
-        {/* 动态配置与参数填报弹窗 */}
         <AnimatePresence>
           {configModalPlugin && (
             <motion.div

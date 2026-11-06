@@ -5278,8 +5278,7 @@ app.post('/api/terminal', requireAgentAuth, (req, res) => {
 });
 
 // --- GitHub Device Flow ---
-// 注意：请在这里替换为您在 GitHub Developer Settings 中创建的 OAuth App 的真实 Client ID
-// 并且请务必在 App 设置中勾选 "Enable Device Flow"
+
 const GITHUB_CLIENT_ID = GITHUB_COPILOT_CLIENT_ID; 
 
 app.post('/api/github/login/device', async (req, res) => {
@@ -6148,17 +6147,14 @@ ${finalContent}${refSection}
 
         if (aborted) return;
 
-        // 核心修复：先更新内存对象状态，确保后续所有引用都正确
         reportStep.status = 'completed';
         reportStep.title = '报告撰写完成';
-        reportStep.content = fullAssistantResponse; // 确保完整
+        reportStep.content = fullAssistantResponse;
         const finalSteps = [...steps, reportStep];
         
-        // 解析内容 - 现在只关注 Markdown，不再提取 HTML
         const reportMarkdown = fullAssistantResponse.trim();
-        const reportHtml = ""; // 不再生成 HTML
+        const reportHtml = "";
 
-        // 立即发送一次状态更新，告知前端已完成
         sendUpdate({ 
             status: 'completed', 
             reportHtml, 
@@ -6166,7 +6162,6 @@ ${finalContent}${refSection}
             steps: finalSteps 
         });
 
-        // --- 保存报告到本地文件系统 ---
         const reportFolderName = `report_${chatId}_${Date.now()}`;
         const currentReportPath = path.join(REPORTS_DIR, reportFolderName);
         try {

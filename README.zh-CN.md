@@ -33,6 +33,16 @@ Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Codi
 
 https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
 
+## 看见 Saki
+
+把灵感、模型与工具，放进属于你的工作区。
+
+![Saki AI 工作区 — 本地优先、多模型协作与长期记忆](.github/assets/saki-workspace-poster.png)
+
+用功能插件、MCP 工具与专属 Skills，拓展日常工作流。
+
+![Saki AI 插件市场 — 发现功能插件、MCP 工具与专属 Skills](.github/assets/saki-extensions-poster.png)
+
 ## 从桌面出发，继续探索
 
 给 AI 工作流添一点新能力，也把视野延伸到服务器。沿着这两个入口，发现 Saki 的更多可能。

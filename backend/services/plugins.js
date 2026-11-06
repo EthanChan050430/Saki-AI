@@ -371,7 +371,6 @@ class PluginService {
                         record.version = manifest.version;
                     }
 
-                    // 同步技能
                     await this.syncPluginSkills(record, manifest, discoveredSkills);
                 } catch (err) {
                     console.error(`[PluginService] Failed to load plugin in ${entry.name}:`, err.message);
@@ -399,7 +398,6 @@ class PluginService {
                 if (!pluginData) continue;
                 const { manifest } = pluginData;
 
-                // 检查缺失配置
                 const missing = this.checkMissingConfig(manifest, record.config);
                 if (missing.length > 0) {
                     continue; // 存在未配置的必填项时，不激活其 MCP 进程
@@ -706,16 +704,13 @@ class PluginService {
             throw new Error(`Plugin "${pluginId}" is not installed.`);
         }
 
-        // 1. 从 SkillService 中清理关联技能
         if (this.skillService) {
             await this.skillService.removeSkillsByPlugin(pluginId);
         }
 
-        // 2. 删除磁盘目录
         const pluginDir = path.join(this.pluginsDir, pluginId);
         await fs.remove(pluginDir).catch(() => {});
 
-        // 3. 从 store 中移除记录
         store.plugins.splice(index, 1);
         await this.saveStore(store);
 

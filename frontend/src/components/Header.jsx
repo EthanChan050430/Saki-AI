@@ -97,7 +97,6 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2">
-        {/* Language Selector */}
         <div className="relative" ref={langRef}>
           <button
             type="button"
@@ -146,7 +145,6 @@ export default function Header({
           )}
         </div>
 
-        {/* Dark / Light Theme Toggle */}
         <button
           onClick={onToggleTheme}
           title={theme === 'dark' ? (t('switch_to_light') || '切换至浅色模式') : (t('switch_to_dark') || '切换至深色模式')}

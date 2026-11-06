@@ -1925,7 +1925,6 @@ export default function Chat({
     return { prefix: 'Where ', accent: 'ideas & reasoning', suffix: ' take shape' };
   }, [uiLanguage]);
 
-  // Handle external file selection (e.g. from Workspace)
   useEffect(() => {
     if (externalFile) {
       setFiles(prev => [...prev, externalFile]);
@@ -1952,7 +1951,6 @@ export default function Chat({
     });
   }, [composerPreset, onComposerPresetConsumed]);
 
-  // Close menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (plusMenuRef.current && !plusMenuRef.current.contains(event.target)) {
@@ -2187,7 +2185,6 @@ export default function Chat({
 
     const recognition = new SpeechRecognition();
     
-    // Set language based on current i18n language
     const langMap = {
       'zh-CN': 'zh-CN',
       'zh-TW': 'zh-TW',
@@ -2302,7 +2299,6 @@ export default function Chat({
     if (selectedFiles.length === 0) return;
 
     await uploadFiles(selectedFiles);
-    // Clear input so same file can be selected again
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -2852,13 +2848,11 @@ export default function Chat({
         >
         {messages.length === 0 && (
           <div className="min-h-full flex items-center justify-center relative py-6 sm:py-10 px-4 select-none">
-            {/* Ambient Background Aura */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
               <div className="w-[520px] h-[340px] rounded-full bg-gradient-to-tr from-[#ff75ac]/10 via-[#c084fc]/5 to-sky-300/8 blur-3xl opacity-75 dark:opacity-35" />
             </div>
 
             <div className="relative w-full max-w-xl mx-auto flex flex-col items-center z-10">
-              {/* Identity & Status Badge */}
               <div className="flex flex-col items-center">
                 <div className="relative mb-3 group cursor-pointer">
                   <div
@@ -2873,14 +2867,12 @@ export default function Chat({
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                       />
                     </div>
-                    {/* Hover edit hint */}
                     <div className="absolute inset-0 rounded-[1.75rem] bg-black/30 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
                       <PencilLine size={18} className="drop-shadow" />
                     </div>
                   </div>
                 </div>
 
-                {/* Main Heading & Subtitle */}
                 <h2 className="mt-2 text-2xl sm:text-3xl font-light tracking-tight text-[var(--text-dark)] text-center leading-snug">
                   {headingParts.prefix}
                   <span className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-gray-900 via-[#ff75ac] to-gray-900 dark:from-white dark:via-[#ff9bc8] dark:to-white">
@@ -2896,7 +2888,6 @@ export default function Chat({
                 </p>
               </div>
 
-              {/* Inspiration Sparks (Non-AI-cliché, tactile thinking entries) */}
               <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-7">
                 {starterSparks.map((spark, index) => {
                   const SparkIcon = spark.icon;
@@ -2926,7 +2917,6 @@ export default function Chat({
                 })}
               </div>
 
-              {/* Studio Micro Cues / Shortcut Hints */}
               <div className="mt-6 flex items-center justify-center gap-3 sm:gap-4 flex-wrap text-[11px] text-[var(--text-tertiary)] font-normal">
                 <span className="inline-flex items-center gap-1">
                   <kbd className="px-1.5 py-0.5 rounded bg-black/[0.04] dark:bg-white/[0.06] border border-black/[0.06] dark:border-white/[0.08] font-mono text-[10px] text-[var(--text-secondary)]">↵ Enter</kbd>
@@ -4075,9 +4065,7 @@ function MessageBubbleToolbar({
           title={labels.diagnostics || localize("查看消息诊断详细日志", "View detailed message diagnostics")}
         >
           <svg width="14" height="14" className="transform -rotate-90">
-            {/* Background Circle */}
             <circle cx="7" cy="7" r="5.5" fill="transparent" stroke="#e2e8f0" strokeWidth="1.5" />
-            {/* Foreground Circle */}
             <circle 
               cx="7" 
               cy="7" 
@@ -4138,7 +4126,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
   return (
     <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-auto">
       <div data-saki-dialog="true" className="bg-[var(--popup-bg)] border border-[var(--control-border)] rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--control-border)] bg-[var(--surface-inset)] shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 bg-saki-pink/10 text-[var(--accent-text)] rounded-lg">
@@ -4157,9 +4144,7 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
           </button>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-auto p-6 space-y-6 custom-scrollbar text-left">
-          {/* Diagnostic Metrics Grid */}
           <div className="grid grid-cols-3 gap-4">
             <div className="rounded-2xl border border-[var(--control-border)] bg-[var(--surface-inset)] p-4 flex flex-col justify-center">
               <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('生成时间', 'Creation Time')}</span>
@@ -4200,7 +4185,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
             </div>
           </div>
 
-          {/* Raw LLM Output */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-2">
@@ -4224,7 +4208,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
             </pre>
           </div>
 
-          {/* Execution Logs */}
           <div className="space-y-3">
             <h4 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-2">
               <Terminal size={12} className="text-[var(--text-tertiary)]" />
@@ -4248,7 +4231,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
 
                   return (
                     <div key={index} className="rounded-2xl border border-[var(--control-border)] overflow-hidden bg-[var(--popup-bg)] shadow-sm">
-                      {/* Log Entry Header */}
                       <div className="flex items-center justify-between px-3.5 py-1.5 bg-[var(--surface-inset)] border-b border-[var(--control-border)]">
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-mono font-bold text-[var(--text-tertiary)]">#{index + 1}</span>
@@ -4263,9 +4245,7 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                         </span>
                       </div>
 
-                      {/* Log Details */}
                       <div className="p-4 space-y-3 text-[11px] font-normal">
-                        {/* Arguments */}
                         <div>
                           <div className="text-[9px] font-semibold text-[var(--text-tertiary)] mb-1">{getLocalText('调用参数：', 'Arguments:')}</div>
                           <pre className="rounded-xl bg-slate-900 p-3 text-[10px] text-emerald-400 overflow-x-auto font-mono max-h-[100px] custom-scrollbar">
@@ -4273,7 +4253,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
                           </pre>
                         </div>
 
-                        {/* Observation */}
                         {part.observation && (
                           <div>
                             <div className="text-[9px] font-semibold text-[var(--text-tertiary)] mb-1">{getLocalText('输出结果 / 日志：', 'Observation / Output:')}</div>
@@ -4292,7 +4271,6 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-3 border-t border-[var(--control-border)] flex justify-end bg-[var(--surface-inset)]">
           <button
             onClick={onClose}

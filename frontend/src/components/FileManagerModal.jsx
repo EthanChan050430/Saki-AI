@@ -152,7 +152,6 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        {/* Header */}
         <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-saki-pink flex items-center justify-center text-white shadow-sm shrink-0">
@@ -168,7 +167,6 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
           </button>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-hidden flex flex-col">
           {editingFile ? (
             <div className="flex-1 flex flex-col p-4 animate-in fade-in duration-300">

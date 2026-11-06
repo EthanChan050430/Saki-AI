@@ -33,6 +33,16 @@ Saki takes the task-driven collaboration of coding agents like **Codex and Claud
 
 https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
 
+## A closer look at Saki
+
+Your ideas, models and tools, together in a personal workspace.
+
+![Saki AI workspace — a local-first home for ideas, multi-model collaboration and long-term memory](.github/assets/saki-workspace-poster-en.png)
+
+Extend your workflow with plugins, MCP tools and dedicated Skills.
+
+![Saki AI plugin marketplace — discover plugins, MCP tools and dedicated Skills](.github/assets/saki-extensions-poster-en.png)
+
 ## Start on the desktop, keep exploring
 
 Add new abilities to your AI workflow and take it all the way to your servers. These two projects show what else Saki can do.
