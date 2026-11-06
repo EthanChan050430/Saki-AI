@@ -35,6 +35,7 @@
   },
   "scripts": {
     "build": "tsc || true",
+    "test": "node ./node_modules/typescript/bin/tsc -p tsconfig.json && node --test tests/*.test.mjs",
     "dev": "tsc --watch",
     "prepack": "npm install --omit=dev"
   },
