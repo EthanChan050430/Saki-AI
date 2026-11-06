@@ -11,6 +11,7 @@ dist/
 build/
 frontend/dist.zip
 release/
+releases3.0/
 .deploy/
 backend/qqbot/dist/
 backend/qqbot/bin/
