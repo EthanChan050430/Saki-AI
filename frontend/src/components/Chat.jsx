@@ -1975,7 +1975,6 @@ export default function Chat({
     setSlashIndex(0);
   }, [slashToken]);
 
-  // 当深度阅读开启时，关闭其他开关，并打开联网搜索
   useEffect(() => {
     if (useWeb) {
       if (!config.searchEnabled) {
@@ -2149,10 +2148,8 @@ export default function Chat({
     const isNewMessage = messages.length > prevMessageCountRef.current;
     const isAssistantReplying = isGenerating && messages.length > 0 && messages[messages.length - 1].role === 'assistant';
     
-    // Check if user is near bottom (within 150px)
     const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
 
-    // Only auto-scroll if it's a new message or if user is already browsing at the bottom
     if (isNewMessage) {
       endRef.current?.scrollIntoView({ behavior: 'auto' });
     } else if (isAssistantReplying && isAtBottom) {
@@ -3520,7 +3517,6 @@ export default function Chat({
                     }
 
                     if (nextState) {
-                      // 开启时立即触发后端初始化
                       try {
                         await fetch(`${backendUrl}/api/mcp/init`, {
                           method: 'POST',
@@ -4393,7 +4389,6 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
   if (!content) return null;
   let processedContent = content;
 
-  // 1. 移除表情标记 [expression:...]，避免在聊天框显示
   processedContent = processedContent.replace(/\[expression[:=].*?\]/g, '');
   processedContent = processedContent
     .replace(/<\s*(?:thinking|thought|reasoning|analysis)\s*>/gi, '<think>')
@@ -4409,9 +4404,7 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
     }
   }
 
-  // 2. 增强型标识提取：处理多种思考标记并将它们统一转换为标准 <think> 标签
   if (!processedContent.includes('<think>')) {
-      // 2a. 处理 Thinking.. ... ...done thinking.
       const dotsRegex = /Thinking\.\.([\s\S]*?)\.\.\.done thinking\./i;
       const dotsMatch = processedContent.match(dotsRegex);
       if (dotsMatch) {

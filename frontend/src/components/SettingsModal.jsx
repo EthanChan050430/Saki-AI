@@ -43,7 +43,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     });
   };
   const [mcpConfigText, setMcpConfigText] = useState(config.mcpConfig ? JSON.stringify(config.mcpConfig, null, 2) : '{\n  "mcpServers": {}\n}');
-  const [deviceFlow, setDeviceFlow] = useState(null); // { user_code, device_code, verification_uri, interval }
+  const [deviceFlow, setDeviceFlow] = useState(null);
   const [isPolling, setIsPolling] = useState(false);
   const pollTimerRef = useRef(null);
   const [sovitsModels, setSovitsModels] = useState({ gpt: [], sovits: [] });
@@ -160,7 +160,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
   const [cropperData, setCropperData] = useState({
     isOpen: false,
     image: null,
-    target: null, // 'user' or 'ai'
+    target: null,
   });
 
   const handleCropComplete = async (croppedImageUrl) => {
@@ -238,9 +238,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
         if (data.error) {
           if (data.error === 'authorization_pending') {
-            // Keep polling
           } else if (data.error === 'slow_down') {
-            // Just wait for the next cycle
             console.warn('GitHub suggests slow down, waiting...');
           } else {
             console.error('GitHub Poll Stop Error:', data.error);
@@ -253,7 +251,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
         console.error('Polling fetch error:', err);
       }
 
-      // Schedule next poll - Using setTimeout to prevent overlapping requests
       if (isActive && isPolling) {
         timeoutId = setTimeout(poll, (deviceFlow.interval || 5) * 1000);
       }
@@ -278,7 +275,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     const newMcp = [...(config.mcpServices || []), mcpUrl];
     setConfig({ ...config, mcpServices: newMcp });
     setMcpUrl('');
-    // Persist to backend
     fetch(`${BACKEND_URL}/api/mcp/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -54,7 +54,6 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation,
   const activeAnimationTypeRef = useRef(null);
   const idleVariantTimerRef = useRef(null);
 
-  // Long-press to drag logic for collapsed state
   const dragControls = useDragControls();
   const longPressTimerRef = useRef(null);
   const isDraggingRef = useRef(false);
@@ -62,7 +61,6 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation,
   const startPointerRef = useRef({ x: 0, y: 0 });
 
   const handlePointerDown = (event) => {
-    // Only handle primary click / touch
     if (event.button !== 0 && event.button !== undefined) return;
     
     isDraggingRef.current = false;
@@ -81,7 +79,6 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation,
     const dy = event.clientY - startPointerRef.current.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
-    // Cancel long press timer if the user moves their pointer significantly
     if (distance > 10) {
       hasMovedRef.current = true;
       if (!isDraggingRef.current) {
@@ -92,7 +89,6 @@ const CharacterView = ({ currentExpression, isOpen, setIsOpen, triggerAnimation,
 
   const handlePointerUp = () => {
     clearTimeout(longPressTimerRef.current);
-    // Expand only if the user didn't drag and didn't swipe/move significantly
     if (!isDraggingRef.current && !hasMovedRef.current) {
       setIsOpen(true);
     }

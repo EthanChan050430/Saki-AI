@@ -5,7 +5,6 @@ const DATA_DIR = require('./runtime').runtime.dataDir;
 fs.ensureDirSync(DATA_DIR);
 const TASKS_FILE = path.join(DATA_DIR, 'hosted_tasks.json');
 
-// Ensure tasks file exists
 if (!fs.existsSync(TASKS_FILE)) {
     fs.writeJsonSync(TASKS_FILE, [], { spaces: 2 });
 }
@@ -55,10 +54,10 @@ class TaskScheduler {
             id,
             created: Date.now(),
             lastRun: null,
-            status: 'active', // active, paused, completed (for once)
+            status: 'active',
             triggerNow: taskConfig.time === 'now',
             ...taskConfig,
-            results: [] // Store history of execution results
+            results: []
         };
         this.tasks.push(newTask);
         await this.saveTasks();
@@ -110,7 +109,7 @@ class TaskScheduler {
             task.lastRun = Date.now();
             task.triggerNow = false;
             task.claimedAt = null;
-            task.status = 'active'; // Reset from 'running' state
+            task.status = 'active';
 
             // If time was 'now', convert it to current time so it becomes a regular schedule
             if (typeof task.time === 'string' && task.time.toLowerCase() === 'now') {
@@ -125,7 +124,6 @@ class TaskScheduler {
                 fullResult: result,
                 sessionId: sessionId
             });
-            // Keep only last 20 results
             if (task.results.length > 20) task.results.pop();
 
             if (task.scheduleType === 'once') {
@@ -161,7 +159,6 @@ class TaskScheduler {
 
             let isDue = false;
             
-            // Priority 1: Manual trigger or 'now'
             if (task.triggerNow || (typeof task.time === 'string' && task.time.toLowerCase() === 'now')) {
                 isDue = true;
             } else {

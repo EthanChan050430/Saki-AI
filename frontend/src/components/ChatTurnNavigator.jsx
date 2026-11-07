@@ -67,7 +67,6 @@ export default function ChatTurnNavigator({
     };
   }, [turns, containerRef]);
 
-  // Scroll active item into view inside preview popup when opened
   useEffect(() => {
     if (isHovered && activeItemRef.current && listContainerRef.current) {
       activeItemRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -111,9 +110,8 @@ export default function ChatTurnNavigator({
       setIsHovered(false);
       setHoveredTurnIndex(null);
 
-      // Momentary subtle highlight pulse on the target message
       el.classList.remove('saki-message-highlight');
-      void el.offsetWidth; // trigger reflow
+      void el.offsetWidth;
       el.classList.add('saki-message-highlight');
       setTimeout(() => {
         el.classList.remove('saki-message-highlight');
@@ -122,7 +120,6 @@ export default function ChatTurnNavigator({
     [containerRef]
   );
 
-  // If conversation count is below threshold, do not display
   if (turns.length < minTurns) {
     return null;
   }

@@ -682,7 +682,7 @@ function App() {
   const [isPluginMarketplaceOpen, setIsPluginMarketplaceOpen] = useState(false);
   const [isHostedTasksOpen, setIsHostedTasksOpen] = useState(false);
   const [desktopUtilityWindows, setDesktopUtilityWindows] = useState([]);
-  const [fileManagerMode, setFileManagerMode] = useState('manage'); // 'manage' or 'select'
+  const [fileManagerMode, setFileManagerMode] = useState('manage');
   const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState(null);
   const [isCharacterViewOpen, setCharacterViewOpen] = useState(false);
   const [currentExpression, setCurrentExpression] = useState('normal.png');
@@ -693,7 +693,6 @@ function App() {
     if (!musicRef.current) {
       const audio = new Audio('/assets/HiSchool.mp3');
       audio.onerror = () => {
-        // Fallback to wav if mp3 fails
         if (audio.src && audio.src.endsWith('.mp3')) {
           audio.src = '/assets/HiSchool.wav';
         }
@@ -1422,7 +1421,6 @@ function App() {
 
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      // 检查深度阅读是否正在生成
       if (deepReadingData) {
         const message = t('confirm_leaving_research');
         e.returnValue = message;
@@ -1434,7 +1432,6 @@ function App() {
   }, [deepReadingData]);
 
   useEffect(() => {
-    // Attempt local cache first
     localStorage.removeItem('agent_models_combined');
     localStorage.removeItem('agent_models_combined_v3');
     let cachedModels = [];
@@ -1545,7 +1542,6 @@ function App() {
         localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(combinedModels));
       }
 
-      // 如果当前选中的模型不在列表中，或者是已设置的绘图模型，自动切换
       if (combinedModels.length > 0) {
         const isCurrentModelDrawing = config.drawingModel === config.model && config.drawingProvider === config.provider;
         const normalizedCurrentModel = config.provider === 'copilot' ? normalizeCopilotModelName(config.model) : config.model;
@@ -1855,7 +1851,6 @@ function App() {
   };
 
   const handleRedo = (idx) => {
-    // idx is the assistant message
     const newMessages = [...messages];
     const userMsg = newMessages[idx - 1];
     const userContent = userMsg?.content || '';
@@ -1882,14 +1877,13 @@ function App() {
       role: 'user',
       content: text,
       files: files.map(f => f.name),
-      attachedFiles: files // Store full file info in message for backend reference
+      attachedFiles: files
     };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     latestMessagesRef.current = newMessages;
     setContextStatus(calculateContextStatusFromMessages(newMessages, config));
 
-    // Save immediately so it's not lost on refresh
     saveChatToBackend(activeChatId, newMessages);
 
     const assistantMsgId = Date.now();
@@ -1971,7 +1965,7 @@ function App() {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Save the last potentially partial line
+        buffer = lines.pop() || '';
 
         let stopSignalReceived = false;
         for (const line of lines) {
@@ -2026,12 +2020,11 @@ function App() {
                   if (deepData.steps) updated.steps = deepData.steps;
                   if (deepData.status) updated.status = deepData.status;
 
-                  // 同步更新到消息列表中，以便持久化
                   setMessages(prevMsgs => {
                     const newMsgs = prevMsgs.map(m =>
                       m.id === assistantMsgId ? { ...m, deepReadingData: updated } : m
                     );
-                    latestMessagesRef.current = newMsgs; // 立即同步 Ref，防止最后一次保存时状态不对
+                    latestMessagesRef.current = newMsgs;
                     return newMsgs;
                   });
 

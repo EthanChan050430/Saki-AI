@@ -29,14 +29,11 @@ function chunkText(text: string, limit: number): string[] {
       break;
     }
     
-    // 尝试在换行处分割
     let splitAt = remaining.lastIndexOf("\n", limit);
     if (splitAt <= 0 || splitAt < limit * 0.5) {
-      // 没找到合适的换行，尝试在空格处分割
       splitAt = remaining.lastIndexOf(" ", limit);
     }
     if (splitAt <= 0 || splitAt < limit * 0.5) {
-      // 还是没找到，强制在 limit 处分割
       splitAt = limit;
     }
     

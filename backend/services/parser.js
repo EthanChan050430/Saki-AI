@@ -34,21 +34,17 @@ async function parseFile(filePath, mimeType) {
     const ext = path.extname(filePath).toLowerCase();
     
     try {
-        // 1. PDF 处理
         if (mimeType === 'application/pdf' || ext === '.pdf') {
             return await parsePdf(filePath);
         }
 
-        // 2. 文本类处理 (Markdown, Text, Code)
         const textExts = ['.md', '.txt', '.js', '.py', '.json', '.html', '.css', '.yaml', '.yml'];
         if (textExts.includes(ext) || mimeType?.startsWith('text/')) {
             return await fs.readFile(filePath, 'utf8');
         }
 
-        // 3. Office 文档处理 (docx, pptx, xlsx, doc)
         const officeExts = ['.docx', '.pptx', '.xlsx', '.doc', '.xls', '.ppt'];
         if (officeExts.includes(ext)) {
-            // 特殊处理旧版 .doc
             if (ext === '.doc') {
                 return await parseOldDoc(filePath);
             }

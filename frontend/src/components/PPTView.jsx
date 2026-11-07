@@ -813,7 +813,6 @@ export default function PPTView({ data, isEmbedded = true }) {
     if (runningIdx !== -1) {
       setActiveStepIndex(runningIdx);
     } else if (steps.length > 0 && activeStepIndex === 0) {
-      // Find the last completed step if none are running
       const lastCompleted = [...steps].reverse().findIndex(s => s.status === 'completed' || s.status === 'success');
       if (lastCompleted !== -1) {
         setActiveStepIndex(steps.length - 1 - lastCompleted);
@@ -854,7 +853,6 @@ export default function PPTView({ data, isEmbedded = true }) {
       }
 
       const slideImages = [];
-      // Create a temporary container for rendering slides at full scale
       tempContainer = document.createElement('div');
       tempContainer.style.position = 'fixed';
       tempContainer.style.left = '-9999px';
@@ -872,7 +870,6 @@ export default function PPTView({ data, isEmbedded = true }) {
       for (let i = 0; i < slides.length; i++) {
         const slide = slides[i];
 
-        // Render slide content into temp container
         tempContainer.innerHTML = `
           <style>${PPT_CAPTURE_STYLE}</style>
           <div class="ppt-capture-surface">
@@ -885,7 +882,6 @@ export default function PPTView({ data, isEmbedded = true }) {
           throw new Error('Failed to prepare slide capture surface.');
         }
 
-        // Wait for styles and icons to render
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         await new Promise(resolve => setTimeout(resolve, 300));
 

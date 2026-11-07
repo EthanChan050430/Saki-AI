@@ -211,7 +211,6 @@ class PluginService {
         const manifest = await fs.readJson(manifestPath);
         validateManifest(manifest);
 
-        // 如果存在外部 mcp.json，合并进入 manifest.mcp
         const mcpJsonPath = path.join(pluginDir, 'mcp.json');
         if (await fs.pathExists(mcpJsonPath)) {
             try {
@@ -222,7 +221,6 @@ class PluginService {
             }
         }
 
-        // 探测附带的 skills 目录
         const skillsDir = path.join(pluginDir, 'skills');
         const discoveredSkills = [];
         if (await fs.pathExists(skillsDir)) {
@@ -400,7 +398,7 @@ class PluginService {
 
                 const missing = this.checkMissingConfig(manifest, record.config);
                 if (missing.length > 0) {
-                    continue; // 存在未配置的必填项时，不激活其 MCP 进程
+                    continue;
                 }
 
                 const servers = this.formatMcpServers(record, manifest, pluginDir);
@@ -675,7 +673,6 @@ class PluginService {
                 }
             }
 
-            // 检查直接目录或第一层子目录中是否有 plugin.json
             let rootDir = tempExtractDir;
             if (!(await fs.pathExists(path.join(rootDir, 'plugin.json')))) {
                 const subs = await fs.readdir(tempExtractDir, { withFileTypes: true });

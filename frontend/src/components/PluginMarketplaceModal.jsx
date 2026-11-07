@@ -59,7 +59,7 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
   const { t, i18n } = useTranslation();
   const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const searchInputId = useId();
-  const [activeTab, setActiveTab] = useState('marketplace'); // 'marketplace' | 'installed' | 'import'
+  const [activeTab, setActiveTab] = useState('marketplace');
   const [catalog, setCatalog] = useState([]);
   const [installedPlugins, setInstalledPlugins] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -110,7 +110,6 @@ export default function PluginMarketplaceModal({ isOpen, onClose, windowed = fal
 
   const handleMarketplaceInstall = async (plugin) => {
     if (installingPluginId || loading) return;
-    // 若该插件有必填配置且尚未配置，直接调起配置弹窗
     const schema = plugin.configSchema || {};
     const hasRequiredConfig = Object.values(schema).some(field => field.required);
 

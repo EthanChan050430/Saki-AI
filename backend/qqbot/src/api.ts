@@ -45,8 +45,6 @@ export function isMarkdownSupport(): boolean {
   return currentMarkdownSupport;
 }
 
-// =========================================================================
-// =========================================================================
 const tokenCacheMap = new Map<string, { token: string; expiresAt: number; appId: string }>();
 const tokenFetchPromises = new Map<string, Promise<string>>();
 
@@ -61,7 +59,6 @@ const tokenFetchPromises = new Map<string, Promise<string>>();
 export async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
   const cachedToken = tokenCacheMap.get(appId);
 
-  // 检查缓存：未过期 且 appId 未变化 时复用
   if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60 * 1000) {
     return cachedToken.token;
   }
@@ -73,12 +70,10 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
     return fetchPromise;
   }
 
-  // 创建新的 Token 获取 Promise（singleflight 入口）
   fetchPromise = (async () => {
     try {
       return await doFetchToken(appId, clientSecret);
     } finally {
-      // 无论成功失败，都清除 Promise 缓存
       tokenFetchPromises.delete(appId);
     }
   })();

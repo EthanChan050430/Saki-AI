@@ -4676,37 +4676,6 @@ app.get('/api/history', async (req, res) => {
     res.json(await getPrunedHistory());
 });
 
-/*
-app.post('/api/history', async (req, res) => {
-    const { chatId, messages, title, pendingRequest = null } = req.body;
-    
-    // Save full message list to individual session file
-    const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
-    await fs.writeJson(sessionFilePath, { messages, pendingRequest }, { spaces: 2 });
-
-    // Update index file
-    let history = await getHistory();
-    const index = history.findIndex(h => h.id === chatId);
-    const sessionSummary = { 
-        id: chatId, 
-        title: title || messages[0]?.content?.slice(0, 30) || '新对话', 
-        updatedAt: new Date(),
-        messagesCount: messages.length,
-        isPending: Boolean(pendingRequest),
-        pendingType: pendingRequest?.type || null
-    };
-    
-    if (index >= 0) {
-        history[index] = { ...history[index], ...sessionSummary };
-    } else {
-        history.unshift(sessionSummary);
-    }
-    await saveHistory(history);
-    res.json({ success: true });
-});
-
-*/
-
 app.post('/api/history', async (req, res) => {
     const { chatId, messages, title, pendingRequest = null, source, external, clientSavedAt = 0 } = req.body;
 
@@ -5258,7 +5227,6 @@ app.get('/api/lmstudio/models', async (req, res) => {
     }
 });
 
-// Terminal execution
 app.get('/api/auth/token', (req, res) => {
     if (!isLoopbackRequest(req) || !isTrustedLocalOrigin(req)) {
         return res.status(403).json({ error: 'Authentication token is available only to local clients.' });
@@ -5321,7 +5289,7 @@ app.post('/api/github/login/poll', async (req, res) => {
                 'Accept': 'application/json',
                 'Content-Type': 'application/json' 
             },
-            timeout: 15000 // 增加超时设置，防止请求一直挂起
+            timeout: 15000
         });
         
         if (response.data.error) {
@@ -5332,11 +5300,9 @@ app.post('/api/github/login/poll', async (req, res) => {
         
         res.json(response.data);
     } catch (error) {
-        // 捕获网络层面的错误（如超时、连接中断）
         const errorCode = error.code || 'UNKNOWN_ERROR';
         console.error(`[GitHub Poll] Network Error (${errorCode}):`, error.message);
         
-        // 返回一个 authorization_pending 状态，让前端继续轮询而不是直接报错停止
         res.json({ error: 'authorization_pending', message: 'Network unstable, retrying...' });
     }
 });
@@ -5441,7 +5407,6 @@ function coerceObservationToImageMarkdown(observation = '') {
     return '';
 }
 
-// --- Streaming Tool Parser Helpers ---
 function parseStreamingArgs(argsStr) {
     const args = [];
     let current = "";
@@ -5479,13 +5444,11 @@ function parseStreamingArgs(argsStr) {
             current += char;
         }
     }
-    // Append the last incomplete argument
     args.push(current.trim());
     return args;
 }
 
 function parseResponseStream(fullText) {
-    // Find all occurrences of Tool: or 工具: (must be at the beginning of the string or preceded by a newline)
     const regex = /(?:^|\n)(?:[`*]*)(?:Tool|工具)[:：]/gi;
     let match;
     const toolCallStarts = [];
@@ -5624,7 +5587,6 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         });
     }
 
-    // Default system prompt
     const systemPrompt = config?.systemPrompt || "You are a helpful assistant.";
 
     switch (provider) {
@@ -5689,7 +5651,6 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
 
     if (!baseUrl) throw new Error(`Base URL for ${provider} is not configured.`);
 
-    // 2. Prepare Payload
     let messages = [];
     if (Array.isArray(prompt)) {
         messages = prompt;
@@ -5824,7 +5785,6 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
         }
     }
 
-    // 3. Execute Streaming Call
     let fullText = "";
     if (provider === 'copilot') {
         const streamed = await streamCopilotChat({
@@ -5892,7 +5852,6 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
                             config?.onUsage?.(json);
                             config?.onNativeToolCalls?.(json.choices?.[0]?.delta?.tool_calls || []);
                             
-                            // Check for reasoning_content (DeepSeek compatible APIs)
                             const reasoning = json.choices?.[0]?.delta?.reasoning_content || "";
                             if (reasoning && reasoningCallback) {
                                 reasoningCallback(reasoning);
@@ -5939,7 +5898,6 @@ async function runDeepReadingLoop(res, { message, history, context, provider, mo
             ? JSON.parse(JSON.stringify(resumeState.deepReadingData.steps))
             : [];
         if (steps.length === 0) {
-        // Step 1: Task Breakdown
         sendUpdate({ status: 'running', steps: [{ title: '正在规划研究路径...', status: 'running' }] });
         
         const breakdownPrompt = `你是一个专家级的研究助手。请将以下用户任务拆解为 3-5 个逻辑严密、互不重叠、覆盖全面的执行子任务。
@@ -6044,7 +6002,6 @@ async function runDeepReadingLoop(res, { message, history, context, provider, mo
             .map(s => `- ${s.title}: ${String(s.content).replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').slice(0, 400)}`)
             .join('\n');
 
-        // Step 2 & 3: Information Retrieval & Reasoning (Iterate through steps)
         for (let i = 0; i < steps.length; i++) {
             if (steps[i].status === 'completed') continue;
             if (aborted) return;
@@ -6113,7 +6070,6 @@ ${previousBlock}
         }
 
         if (aborted) return;
-        // Step 4: Report Generation
         const reportStep = { title: '正在生成最终研究报告...', status: 'running', content: '', type: 'report' };
         sendUpdate({ status: 'running', steps: [...steps, reportStep] });
 
@@ -6141,7 +6097,6 @@ ${finalContent}${refSection}
             if (aborted) return;
             fullAssistantResponse += token;
             reportStep.content += token;
-            // 实时更新，但保持 status 为 running
             sendUpdate({ steps: [...steps, reportStep] });
         });
 
@@ -6171,7 +6126,6 @@ ${finalContent}${refSection}
             console.error('[Deep Reading] Failed to save report files:', err);
         }
 
-        // Final persistence
         if (aborted) return;
         await withRunSessionWrite(chatId, res, async isValid => {
         const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
@@ -6880,14 +6834,12 @@ async function runPPTLoop(res, { message, history, context, provider, model, oll
             : [];
         
         if (steps.length === 0) {
-        // Initial entry in history
         await persistPPTState({ 
             status: 'running', 
             steps: [{ title: '正在规划PPT大纲...', status: 'running' }],
             pptTitle: '正在规划中...'
         });
 
-        // Step 1: Planning
         sendUpdate({ status: 'running', steps: [{ title: '正在规划PPT大纲...', status: 'running' }] });
         
         const planPrompt = `你是一个专业的PPT架构师。请根据用户描述的任务制作一个PPT大纲。
@@ -6978,7 +6930,6 @@ ${context ? "上下文信息: " + context : ""}
         
         sendUpdate({ pptTitle: plan.title, steps });
 
-        // Step 2: Generate each slide
         for (let i = 0; i < steps.length; i++) {
             if (steps[i].status === 'completed') continue;
             if (aborted) return;
@@ -7079,7 +7030,7 @@ ${context ? "上下文信息: " + context : ""}
                         throw new Error('PPT slide output format invalid: missing structured THINKING/SLIDE_HTML sections.');
                     }
 
-                    break; // Success, exit retry loop
+                    break;
                 } catch (llmError) {
                     retryCount++;
                     if (retryCount > maxRetries || aborted) {
@@ -7102,11 +7053,9 @@ ${context ? "上下文信息: " + context : ""}
 
         if (aborted) return;
         
-        // Final Finalization
         const finalStep = { title: '正在封装最终演示文稿...', status: 'running', content: '' };
         sendUpdate({ steps: [...steps, finalStep] });
 
-        // Combine all slides into a single HTML
         const allHtml = steps.map(s => s.content).join('\n');
         const finalHtml = `
 <!DOCTYPE html>
@@ -7173,7 +7122,6 @@ ${context ? "上下文信息: " + context : ""}
             steps: [...steps, finalStep] 
         });
 
-        // Save to sessions/history
         let generatedFiles = [];
         try {
             const outputDir = path.join(REPORTS_DIR, `ppt_${chatId}_${assistantMsgId}`);
@@ -7228,7 +7176,6 @@ ${context ? "上下文信息: " + context : ""}
         }
         console.error('PPT Generation Error:', error);
         
-        // Mark current step as error if it exists
         if (typeof steps !== 'undefined' && Array.isArray(steps)) {
             const runningStep = steps.find(s => s.status === 'running');
             if (runningStep) runningStep.status = 'error';
@@ -9073,7 +9020,6 @@ async function runAgentLoopInWorkspace(res, { message, history, context, provide
     const memoryContext = shouldUseMemory ? await memoryService.buildContext({ query: message, chatId, limit: 8 }) : null;
     const skillContext = await skillService.buildContext(message, 5);
     
-    // Initialize MCP if enabled
     if (mcpEnabled) {
         await syncCombinedMcpServers(config?.mcpConfig?.mcpServers);
     }
@@ -9138,7 +9084,6 @@ async function runAgentLoopInWorkspace(res, { message, history, context, provide
         console.log(`[Agent] Client disconnected. Aborting loop and requests for chatId: ${chatId}`);
     });
 
-    // Preparation: Load images as base64 for multi-modal models
     const imageBase64s = [];
     const seenPaths = new Set();
     
@@ -9162,12 +9107,10 @@ async function runAgentLoopInWorkspace(res, { message, history, context, provide
         }
     };
 
-    // Load from current request
     if (uploadedFiles && uploadedFiles.length > 0) {
         for (const file of uploadedFiles) await addImage(file);
     }
 
-    // Detect environment info
     const envInfo = {
         os: `${sysDetails.sysInfo.type} ${sysDetails.sysInfo.release} (${sysDetails.sysInfo.arch})`,
         shell: process.platform === 'win32' ? 'PowerShell (Default)' : (process.env.SHELL || 'bash'),
@@ -9187,7 +9130,6 @@ async function runAgentLoopInWorkspace(res, { message, history, context, provide
         }
     };
 
-    // Assistant message state for real-time persistence
     const currentParts = Array.isArray(resumeState?.parts)
         ? JSON.parse(JSON.stringify(resumeState.parts))
         : [];
@@ -13930,7 +13872,6 @@ app.post('/api/ppt/download', async (req, res) => {
             const slide = pres.addSlide();
             const content = slideData.content || "";
 
-            // 1. Determine background color/theme
             let bgColor = 'FFFFFF';
             if (content.includes('bg-blue-')) bgColor = 'F0F7FF';
             else if (content.includes('bg-orange-')) bgColor = 'FFF7ED';
@@ -13938,12 +13879,10 @@ app.post('/api/ppt/download', async (req, res) => {
             else if (content.includes('bg-gradient-')) bgColor = 'F8FAFC';
             slide.background = { fill: bgColor };
 
-            // 2. Extract Title
             const slideTitleMatch = content.match(/<h[1-2][^>]*>([\s\S]*?)<\/h[1-2]>/i);
             const slideTitle = htmlToPlainText(slideTitleMatch ? slideTitleMatch[1] : slideData.title || '');
             const normalizedTitle = slideTitle || 'Untitled Slide';
             
-            // Decorative elements
             slide.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: '100%', h: 0.15, fill: { color: '3B82F6' } });
             slide.addShape(pres.ShapeType.triangle, { x: 9.3, y: 5.1, w: 0.5, h: 0.5, fill: { color: 'DBEAFE' }, flipV: true });
             
@@ -13960,7 +13899,6 @@ app.post('/api/ppt/download', async (req, res) => {
                 valign: 'mid'
             });
 
-            // 3. Extract Content Blocks (Grid items or Paras)
             const listItems = [...content.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)]
                 .map(m => htmlToPlainText(m[1]))
                 .filter(Boolean);
@@ -13969,7 +13907,6 @@ app.post('/api/ppt/download', async (req, res) => {
                 .filter(Boolean);
 
             if (content.includes('grid')) {
-                // If AI used grid, try to create two columns in PPT
                 const gridItems = [...content.matchAll(/<div[^>]*class="[^"]*bg-white[^"]*"[^>]*>([\s\S]*?)<\/div>/gi)]
                                     .map(m => htmlToPlainText(m[1]))
                                     .filter(Boolean);
@@ -14027,7 +13964,6 @@ app.post('/api/ppt/download', async (req, res) => {
                 });
             }
 
-            // 4. Add Decorative Footer
             slide.addText(`${title || 'Presentation'} | Page ${slides.indexOf(slideData) + 1}`, {
                 x: 0.5, y: 5.1, w: '90%', h: 0.3,
                 fontSize: 10, color: '9CA3AF', align: 'right',
@@ -14364,7 +14300,6 @@ server.listen(port, AGENT_HOST, () => {
 
     if (!runtime.backgroundTasks) return;
 
-    // Hosted Task Scheduler Loop
     backgroundTimers.push(setInterval(async () => {
         const dueTasks = taskScheduler.getDueTasks();
         if (dueTasks.length > 0) {
@@ -14373,13 +14308,11 @@ server.listen(port, AGENT_HOST, () => {
         for (const task of dueTasks) {
             console.log(`[Scheduler] Running task: ${task.id} (${task.desc})`);
             try {
-                // Mark as running to show in UI and avoid re-triggering
                 await taskScheduler.setTaskStatus(task.id, 'running');
 
                 const globalConfig = await fs.readJson(GLOBAL_CONFIG_FILE).catch(() => ({}));
                 const taskIdSession = `task_${task.id}_${Date.now()}`;
                 
-                // Add the user message to history so the session file is complete
                 const initialHistory = [
                     { 
                         role: 'user', 
@@ -14389,10 +14322,8 @@ server.listen(port, AGENT_HOST, () => {
                     }
                 ];
 
-                // Construct a mock response object to capture essential flow
                 const mockRes = {
                     write: (data) => {
-                        // Optional: LOG SSE data to console or a debug file
                     },
                     on: (event, cb) => {},
                     statusCode: 200,
@@ -14404,7 +14335,6 @@ server.listen(port, AGENT_HOST, () => {
                     finished: false
                 };
 
-                // Run the agent with a clearer system context for background execution
                 const backgroundContext = `
 [SYSTEM: BACKGROUND HOSTED TASK]
 Subject: ${task.desc}
@@ -14432,17 +14362,14 @@ Avoid asking the user for input as they are not currently looking at this screen
                     config: globalConfig
                 });
 
-                // Retrieve result from session file
                 const sessionPath = path.join(SESSIONS_DIR, `${taskIdSession}.json`);
                 let resultText = "";
                 
-                // Wait a bit for file persistence to ensure it's flushed
                 await new Promise(r => setTimeout(r, 2000));
 
                 if (await fs.exists(sessionPath)) {
                     const sessionData = await safeReadJsonFile(sessionPath, { messages: [] });
                     if (sessionData.messages && sessionData.messages.length > 0) {
-                        // Find the last assistant message that has content
                         const assistantMessages = sessionData.messages.filter(m => m.role === 'assistant');
                         if (assistantMessages.length > 0) {
                             const lastMsg = assistantMessages[assistantMessages.length - 1];
@@ -14451,16 +14378,15 @@ Avoid asking the user for input as they are not currently looking at this screen
                                     .filter(p => p.type === 'text')
                                     .map(p => p.content)
                                     .join('\n')
-                                    .replace(/<think>[\s\S]*?<\/think>/g, '') // Remove thoughts
-                                    .replace(/Thought:[\s\S]*?(?=Tool:|$)/gi, '') // Remove old-style thoughts
-                                    .replace(/思考:[\s\S]*?(?=工具:|$)/gi, '') // Remove Chinese thoughts
+                                    .replace(/<think>[\s\S]*?<\/think>/g, '')
+                                    .replace(/Thought:[\s\S]*?(?=Tool:|$)/gi, '')
+                                    .replace(/思考:[\s\S]*?(?=工具:|$)/gi, '')
                                     .trim();
                             }
                         }
                     }
                 }
                 
-                // Fallback: If still empty, try to get anything from the last assistant message
                 if (!resultText && await fs.exists(sessionPath)) {
                     const sessionData = await safeReadJsonFile(sessionPath, { messages: [] });
                     const assistantMessages = sessionData.messages.filter(m => m.role === 'assistant');
@@ -14480,7 +14406,7 @@ Avoid asking the user for input as they are not currently looking at this screen
                 await taskScheduler.updateTaskStatus(task.id, `Failed: ${e.message}`, null);
             }
         }
-    }, 60000)); // Check every minute
+    }, 60000));
 
     backgroundTimers.push(setInterval(async () => {
         try {

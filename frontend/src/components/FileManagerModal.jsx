@@ -12,10 +12,10 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
   const [files, setFiles] = useState([]);
   const [currentPath, setCurrentPath] = useState('');
   const [trashItems, setTrashItems] = useState([]);
-  const [view, setView] = useState('files'); // 'files' or 'trash'
+  const [view, setView] = useState('files');
   const [loading, setLoading] = useState(false);
-  const [editingFile, setEditingFile] = useState(null); // { name, content }
-  const [previewingFile, setPreviewingFile] = useState(null); // { name, content, isImage }
+  const [editingFile, setEditingFile] = useState(null);
+  const [previewingFile, setPreviewingFile] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchFiles = async (dirPath = currentPath) => {

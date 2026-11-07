@@ -12,8 +12,8 @@ const CherryBlossoms = () => {
       id: i,
       x: Math.random() * 100 + '%',
       delay: Math.random() * 10,
-      duration: 15 + Math.random() * 25, // 稍微减慢速度，显得更轻盈
-      size: 15 + Math.random() * 20,     // 稍微增大尺寸以适应图片
+      duration: 15 + Math.random() * 25,
+      size: 15 + Math.random() * 20,
       rotate: Math.random() * 360,
       img: images[Math.floor(Math.random() * images.length)]
     }));

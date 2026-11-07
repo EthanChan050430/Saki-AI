@@ -13,10 +13,8 @@ const Mermaid = ({ chart }) => {
   useEffect(() => {
     let isMounted = true;
     if (chart && chart.trim()) {
-      // 预处理代码：移除 Markdown 标记
       let cleanedChart = chart.trim();
       
-      // 如果代码看起来还没写完（比如只有 ```mermaid 但没有内容），先暂停渲染
       if (cleanedChart === '```mermaid' || cleanedChart === '```') return;
 
       cleanedChart = cleanedChart.replace(/^```mermaid\s*\n?/i, '').replace(/^```\s*\n?/, '');

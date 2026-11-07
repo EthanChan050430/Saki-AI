@@ -92,7 +92,6 @@ class MCPManager {
 
                 await connectWithTimeout();
                 
-                // List tools
                 const toolsResponse = await client.listTools();
                 const entry = {
                     client,
@@ -125,7 +124,6 @@ class MCPManager {
                     error: userFriendlyError 
                 });
                 
-                // 失败时释放资源
                 console.log(`[MCP] Cleaning up failed server ${name}...`);
                 try {
                     await transport?.close();
