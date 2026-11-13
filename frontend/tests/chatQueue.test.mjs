@@ -58,6 +58,14 @@ test('withdraw/edit removes once and can preserve original FIFO on dispatch refu
   assert.equal(store.take('a').id, first.id);
 });
 
+test('removing the final queued item clears stale paused state and notice', () => {
+  const store = createChatQueueStore();
+  const item = store.enqueue('a', { text: 'only item' });
+  store.pause('a', 'stale pause');
+  store.remove('a', item.id);
+  assert.deepEqual(store.get('a'), { items: [], paused: false, note: '' });
+});
+
 test('only successful terminal result advances; DONE fallback never overrides errors/approval/stop', () => {
   assert.equal(canAdvanceQueue({ outcome: 'completed' }), true);
   assert.equal(canAdvanceQueue({ done: true }), true);

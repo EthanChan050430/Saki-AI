@@ -140,6 +140,14 @@ function emitRunOutcome(res, outcome, details = {}) {
     res.write(`data: ${JSON.stringify({ type: 'runOutcome', ...details, outcome, chatId: res.chatId, assistantMsgId: res.assistantMsgId })}\n\n`);
 }
 
+function formatSteeringHistory(message = {}) {
+    return (Array.isArray(message.steeringMessages) ? message.steeringMessages : [])
+        .filter(record => record.status === 'applied')
+        .map(record => `Historical user steering (applied):\n${record.text || ''}\n${(record.files || []).map(file =>
+            `Attachment: ${file.name}\nPath: ${file.path}\n${file.content || ''}`).join('\n\n')}`)
+        .join('\n\n');
+}
+
 function preserveSteeringMessages(incoming, existing = []) {
     const saved = new Map((existing || []).filter(message => message.role === 'assistant' && Array.isArray(message.steeringMessages))
         .map(message => [String(message.id), message.steeringMessages]));
@@ -147,4 +155,4 @@ function preserveSteeringMessages(incoming, existing = []) {
         ? { ...message, steeringMessages: saved.get(String(message.id)) } : message);
 }
 
-module.exports = { LIMITS, validateSteering, createSteeringController, createSteeringHandler, emitRunOutcome, preserveSteeringMessages };
+module.exports = { LIMITS, validateSteering, createSteeringController, createSteeringHandler, emitRunOutcome, preserveSteeringMessages, formatSteeringHistory };

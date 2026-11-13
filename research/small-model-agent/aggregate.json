@@ -1,0 +1,188 @@
+{
+  "groups": [
+    {
+      "model": "gemma3:4b",
+      "condition": "direct",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 24,
+      "output_tokens": 503,
+      "latency_seconds": 136.30723199999738,
+      "validation_errors": 24,
+      "transport_failures": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "schema",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 2056,
+      "latency_seconds": 48.665594299995064,
+      "validation_errors": 48,
+      "transport_failures": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "egar",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 1926,
+      "latency_seconds": 45.96790459999647,
+      "validation_errors": 48,
+      "transport_failures": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "generic_egar",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 1737,
+      "latency_seconds": 42.62876289999804,
+      "validation_errors": 48,
+      "transport_failures": 0
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "direct",
+      "n": 24,
+      "successes": 15,
+      "success_rate": 0.625,
+      "calls": 72,
+      "output_tokens": 1220,
+      "latency_seconds": 179.68567560000884,
+      "validation_errors": 0,
+      "transport_failures": 0
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "schema",
+      "n": 24,
+      "successes": 15,
+      "success_rate": 0.625,
+      "calls": 72,
+      "output_tokens": 1220,
+      "latency_seconds": 71.2815264999972,
+      "validation_errors": 0,
+      "transport_failures": 0
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "egar",
+      "n": 24,
+      "successes": 21,
+      "success_rate": 0.875,
+      "calls": 81,
+      "output_tokens": 1337,
+      "latency_seconds": 77.771011000008,
+      "validation_errors": 12,
+      "transport_failures": 0
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "generic_egar",
+      "n": 24,
+      "successes": 17,
+      "success_rate": 0.7083333333333334,
+      "calls": 81,
+      "output_tokens": 1398,
+      "latency_seconds": 80.92320240000299,
+      "validation_errors": 16,
+      "transport_failures": 0
+    }
+  ],
+  "paired_contrasts": [
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus direct",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus schema",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus generic_egar",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus direct",
+      "paired_n": 24,
+      "difference": 0.25,
+      "bootstrap_95_percent": [
+        0.08333333333333333,
+        0.4166666666666667
+      ],
+      "wins": 6,
+      "losses": 0,
+      "ties": 18
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus schema",
+      "paired_n": 24,
+      "difference": 0.25,
+      "bootstrap_95_percent": [
+        0.08333333333333333,
+        0.4166666666666667
+      ],
+      "wins": 6,
+      "losses": 0,
+      "ties": 18
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus generic_egar",
+      "paired_n": 24,
+      "difference": 0.16666666666666666,
+      "bootstrap_95_percent": [
+        0.041666666666666664,
+        0.3333333333333333
+      ],
+      "wins": 4,
+      "losses": 0,
+      "ties": 20
+    }
+  ],
+  "completed_episodes": 192,
+  "expected_episodes": 192,
+  "manifest": {
+    "benchmark.json": "5594451a183d671652700c5bf61453b52946e5db37b226282e8f25be8942dbb7",
+    "experiment.py": "297e7eb7d35c61196b0c1d2f3c1fbae13e8a444f93700bb41b148ade341a2235",
+    "protocol.json": "29c8181f16ec295d129ab6ba821ad801c71d509437612c5062f45c7daa5c47b3",
+    "test_experiment.py": "41ea995fbec88fc1a9bd2cdea9ee2d128ada6796e193bb6ab6371adc2603d7b6"
+  }
+}

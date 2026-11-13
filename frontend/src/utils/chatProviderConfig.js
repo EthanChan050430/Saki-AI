@@ -145,21 +145,21 @@ export function getProviderBaseUrl(config = {}, provider = '') {
 
 export function isApiProviderEnabled(config = {}, provider = '') {
   const meta = getApiProviderMeta(provider);
-  if (!meta) return false;
+  return Boolean(meta && isChatProviderEnabled(config, meta.id));
+}
 
-  const apiKey = getProviderApiKey(config, meta.id).trim();
-  if (meta.id === 'custom') {
-    return Boolean(getProviderBaseUrl(config, meta.id).trim() && apiKey);
-  }
-
-  return Boolean(apiKey);
+export function isChatProviderEnabled(config = {}, provider = '') {
+  const id = normalizeChatProviderId(provider);
+  const enabled = config.providerEnabled?.[id];
+  if (typeof enabled === 'boolean') return enabled;
+  return id === 'ollama' || id === normalizeChatProviderId(config.provider);
 }
 
 export function migrateApiProviderConfig(config = {}) {
   const next = { ...(config || {}) };
   const activeProvider = normalizeChatProviderId(next.provider);
   const activeMeta = getApiProviderMeta(activeProvider);
-  // Migrate before supplying defaults. An explicit empty key/URL means disabled.
+  // Migrate credentials before supplying defaults; enablement is independent.
   if (activeMeta && next[activeMeta.apiKeyField] === undefined) {
     next[activeMeta.apiKeyField] = String(next.apiKey || '').trim();
   }
@@ -176,6 +176,7 @@ export function migrateApiProviderConfig(config = {}) {
   if (next.showAllEnabledApiModels === undefined) {
     next.showAllEnabledApiModels = false;
   }
+  next.providerEnabled = Object.fromEntries(CHAT_PROVIDER_OPTIONS.map(({ id }) => [id, isChatProviderEnabled(next, id)]));
 
   return next;
 }

@@ -1,7 +1,7 @@
 const axios = require('axios');
 const fs = require('fs-extra');
 const path = require('path');
-const { rankSearchResults, scoreSearchRelevance, normalizeSearchUrl, extractSearchTerms } = require('./searchRelevance');
+const { rankSearchResults, scoreSearchRelevance, normalizeSearchUrl, extractSearchTerms, expandSearchQueries } = require('./searchRelevance');
 
 const SEARCH_TIMEOUT_MS = 8000;
 const SUPPORTED_ENGINES = new Set(['searxng', 'google', 'bing', 'duckduckgo']);
@@ -171,6 +171,29 @@ async function searchAcrossEngines(query, options = {}) {
     });
 }
 
+async function searchComplexQuery(query, options = {}) {
+    const config = options.config || await getConfig();
+    if (isOff(config) || !String(query || '').trim()) return [];
+    const queries = expandSearchQueries(query, { maxQueries: options.maxQueries || 4 });
+    const limitPerEngine = resultLimit(options.limitPerEngine, 3);
+    const perQueryLimit = resultLimit(options.perQueryLimit, 4);
+    if (!queries.length || !limitPerEngine || !perQueryLimit) return [];
+    const batches = await Promise.all(queries.map(async (searchQuery) => {
+        const results = await searchAcrossEngines(searchQuery, {
+            ...options,
+            config,
+            limitPerEngine,
+            limit: perQueryLimit,
+        });
+        return results.map(result => ({ ...result, query: searchQuery }));
+    }));
+    return rankSearchResults(batches.flat(), query, {
+        ...options,
+        limit: resultLimit(options.limit, 10),
+        minScore: options.minScore ?? 0.16,
+    });
+}
+
 async function searchWeb(query, options = {}) {
     const config = options.config || await getConfig();
     const engine = String(options.engine || config.searchEngine || 'searxng').trim().toLowerCase();
@@ -197,10 +220,12 @@ module.exports = {
     getConfig,
     getAvailableSearchEngines,
     searchAcrossEngines,
+    searchComplexQuery,
     searchWeb,
     searchWithEngine,
     rankSearchResults,
     scoreSearchRelevance,
     normalizeSearchUrl,
     extractSearchTerms,
+    expandSearchQueries,
 };

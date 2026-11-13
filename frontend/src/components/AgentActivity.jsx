@@ -55,7 +55,7 @@ function ToolTarget({ part }) {
     readfile: local('阅读', 'Read'), readfilechunk: local('阅读', 'Read'), planfileread: local('规划阅读', 'Plan reading'),
     readskill: local('阅读技能', 'Read skill'), readmemory: local('读取记忆', 'Read memory'), inspectopenhubskill: local('查看技能', 'Inspect skill'),
     writefile: local('写入', 'Write'), editfile: local('编辑', 'Edit'), replaceinfile: local('编辑', 'Edit'), replaceblocks: local('编辑', 'Edit'),
-    deletefile: local('删除', 'Delete'), ensuredir: local('创建目录', 'Create folder'), createprojectfolder: local('创建项目', 'Create project'),
+    deletefile: local('删除', 'Delete'), deletedirectory: local('移入回收站', 'Move folder to Trash'), ensuredir: local('创建目录', 'Create folder'), createprojectfolder: local('创建项目', 'Create project'),
     terminal: local('运行命令', 'Run command'), search: local('搜索', 'Search'), browse: local('浏览', 'Browse'),
     listdir: local('查看目录', 'List directory'), getrepomap: local('查看代码结构', 'Explore code'),
     draw: local('生成图片', 'Generate image'), composemusic: local('创作音乐', 'Compose music'),

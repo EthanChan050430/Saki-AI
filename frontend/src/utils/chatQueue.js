@@ -1,6 +1,7 @@
 export const QUEUE_STORAGE_KEY = 'saki_chat_queues_v1';
 const copy = value => JSON.parse(JSON.stringify(value));
 export const emptyQueue = () => ({ items: [], paused: false, note: '' });
+const normalizeQueue = queue => queue.items.length ? queue : emptyQueue();
 
 export function restoreQueues(raw) {
   try {
@@ -16,7 +17,8 @@ export function createChatQueueStore(initial = {}, publish = () => {}) {
   let queues = initial;
   const get = chatId => queues[chatId] || emptyQueue();
   const update = (chatId, transform) => {
-    queues = { ...queues, [chatId]: transform(get(chatId)) };
+    const nextQueue = normalizeQueue(transform(get(chatId)));
+    queues = { ...queues, [chatId]: nextQueue };
     publish(queues);
     return get(chatId);
   };

@@ -60,7 +60,7 @@ function buildQueries(stepTitle, overallGoal, proposedQueries = []) {
         const query = compactSearchTopic(value);
         return !topic || query.toLowerCase().includes(topic.toLowerCase()) ? query : `${topic} ${query}`;
     });
-    return [...new Set([topic, ...queries].filter(Boolean))].slice(0, 3);
+    return [...new Set([topic, ...queries].filter(Boolean))].slice(0, 5);
 }
 
 const CRAWL_ERROR_PREFIXES = [

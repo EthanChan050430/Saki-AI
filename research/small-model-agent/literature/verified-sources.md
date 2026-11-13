@@ -1,0 +1,27 @@
+# Primary-source verification supplement
+
+Accessed 2026-11-12 (local date). This supplement records sources actually fetched in this continuation. The earlier review.md is retained as prior material; its entire bibliography and numeric claims have NOT been independently revalidated here. No repository code, user configuration or private data were sent to web search.
+
+| Source | Read scope | Relevant evidence | What it does not establish |
+|---|---|---|---|
+| [TinyAgent: Function Calling at the Edge](https://arxiv.org/html/2409.00608v3), 2024 | Abstract, introduction, related work, sections 3.1–3.2 | Fine-tunes 1.1B and 7B models on specialized function-calling data; uses tool retrieval and quantization. Section 3.2 describes 16 Mac tools and 80K/1K/1K training/validation/test examples. | Reported GPT-4-Turbo comparisons are task-specific and cannot establish training-free universal parity. |
+| [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629), 2022/ICLR 2023 | Abstract and metadata | Interleaves reasoning and environment actions, allowing observations to inform later actions. | Not a proof that small models reach larger models on arbitrary workflows. |
+| [ReWOO: Decoupling Reasoning from Observations for Efficient Augmented Language Models](https://arxiv.org/abs/2305.18323), 2023 | Abstract and metadata | Decouples reasoning from observations; reports token-efficiency improvements and a fine-tuning-based 175B-to-7B offloading example. | The offloading result is not a training-free scaffold result. |
+| [Large Language Models Cannot Self-Correct Reasoning Yet](https://arxiv.org/html/2310.01798v2), ICLR 2024 | Abstract, introduction/background, sections 2–3.1 excerpts | Explicitly distinguishes intrinsic correction from external feedback; warns about oracle labels and unequal numbers of generated responses. | Does not say correction with trustworthy tool feedback is impossible. |
+| [CRITIC: Large Language Models Can Self-Correct with Tool-Interactive Critiquing](https://arxiv.org/abs/2305.11738), ICLR 2024 | Directly fetched primary abstract and metadata; full HTML retrieval timed out | External tools validate aspects of an initial output, then feedback informs revision. | Generic tool-feedback repair is therefore NOT a new contribution of our prototype. |
+| [Reflexion: Language Agents with Verbal Reinforcement Learning](https://arxiv.org/abs/2303.11366), 2023 | Abstract and metadata | Feedback plus reflective episodic memory improves subsequent trials without weight updates. | A different mechanism from a deterministic per-action provenance gate; comparisons require matching budgets. |
+| [ToolSandbox: A Stateful, Conversational, Interactive Evaluation Benchmark for LLM Tool Use Capabilities](https://arxiv.org/html/2408.04682v2), 2024/2025 revision | Abstract, introduction, Figure 1 and stateful discussion | State dependencies, insufficient information, intermediate milestones and final state matter for evaluation. | A small custom benchmark is not ToolSandbox. Historical comparisons of BFCL in this paper must not be read as descriptions of all later BFCL versions. |
+
+## Closest recent work (additional search)
+
+[RubricRefine](https://arxiv.org/abs/2605.09730v5), 2026: directly read the abstract and HTML method sections 3.1–3.2.3. The method generates task/registry-conditioned rubrics and uses a prompted LLM verifier to check tool choice, output contracts, call signatures and data provenance before execution, then iteratively repairs candidate code. This is direct prior art for pre-execution provenance checking plus repair. Its verifier judgments are explicitly not formal proofs. EGAR's proposed distinction is deterministic checks over actual incremental observations rather than LLM rubric grading of candidate programs; no head-to-head experiment yet establishes an advantage. Do not claim generic gating or provenance repair as new.
+
+[From Agent Traces to Trust](https://arxiv.org/abs/2606.04990v6), 2026: directly read abstract and author metadata only. This survey distinguishes evidence-support relations from execution-influence relations using typed execution provenance. It limits novelty claims about evidence tracing itself; its benchmark-gap statements are the survey authors' claims, not independently established here.
+
+## Positioning and falsifiable claims
+
+EGAR is a proposed engineering research variant: combine typed actions, evidence/provenance constraints on executable arguments, explicit non-action outcomes and bounded diagnostic repair for local quantized models. Its components are established ideas; neither a web search nor a new acronym proves global algorithmic novelty. A publishable novelty claim needs a broader systematic search and direct comparisons against closely related validators and repair methods.
+
+Primary hypothesis: compared with a schema-only policy, runtime-checkable evidence constraints improve task success or reduce invalid executable actions at acceptable inference cost. Counter-hypothesis: the gate rejects useful actions, retry overhead dominates, or schemas alone achieve the gain. Report null and negative outcomes as results.
+
+The word 'full-parameter' is ambiguous: a dense model can itself be small; full precision (F16 vs Q4), full fine-tuning (vs adapters), and large parameter count are different axes. This pilot concerns inference-time orchestration of quantized local models. It does not compare matched F16/Q4 weights, full fine-tuning, or frontier-scale models.

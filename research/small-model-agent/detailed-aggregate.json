@@ -1,0 +1,316 @@
+{
+  "groups": [
+    {
+      "model": "gemma3:4b",
+      "condition": "direct",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 24,
+      "output_tokens": 503,
+      "latency_seconds": 136.30723199999738,
+      "validation_errors": 24,
+      "transport_failures": 0,
+      "mean_calls": 1.0,
+      "mean_output_tokens": 20.958333333333332,
+      "mean_prompt_tokens": 205.0,
+      "mean_latency_seconds": 5.679467999999891,
+      "load_seconds": 127.1195231,
+      "failure_categories": {
+        "repair_budget": 24
+      },
+      "termination_counts": {
+        "repair_budget": 24
+      },
+      "validation_categories": {
+        "Response must be exactly one valid JSON object.": 24
+      },
+      "missing_successes": 0,
+      "answerable_successes": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "schema",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 2056,
+      "latency_seconds": 48.665594299995064,
+      "validation_errors": 48,
+      "transport_failures": 0,
+      "mean_calls": 2.0,
+      "mean_output_tokens": 85.66666666666667,
+      "mean_prompt_tokens": 451.9583333333333,
+      "mean_latency_seconds": 2.0277330958331277,
+      "load_seconds": 12.0485773,
+      "failure_categories": {
+        "repair_budget": 24
+      },
+      "termination_counts": {
+        "repair_budget": 24
+      },
+      "validation_categories": {
+        "Response must be exactly one valid JSON object.": 48
+      },
+      "missing_successes": 0,
+      "answerable_successes": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "egar",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 1926,
+      "latency_seconds": 45.96790459999647,
+      "validation_errors": 48,
+      "transport_failures": 0,
+      "mean_calls": 2.0,
+      "mean_output_tokens": 80.25,
+      "mean_prompt_tokens": 451.9583333333333,
+      "mean_latency_seconds": 1.9153293583331863,
+      "load_seconds": 11.8729846,
+      "failure_categories": {
+        "repair_budget": 24
+      },
+      "termination_counts": {
+        "repair_budget": 24
+      },
+      "validation_categories": {
+        "Response must be exactly one valid JSON object.": 48
+      },
+      "missing_successes": 0,
+      "answerable_successes": 0
+    },
+    {
+      "model": "gemma3:4b",
+      "condition": "generic_egar",
+      "n": 24,
+      "successes": 0,
+      "success_rate": 0.0,
+      "calls": 48,
+      "output_tokens": 1737,
+      "latency_seconds": 42.62876289999804,
+      "validation_errors": 48,
+      "transport_failures": 0,
+      "mean_calls": 2.0,
+      "mean_output_tokens": 72.375,
+      "mean_prompt_tokens": 452.9583333333333,
+      "mean_latency_seconds": 1.776198454166585,
+      "load_seconds": 11.8268724,
+      "failure_categories": {
+        "repair_budget": 24
+      },
+      "termination_counts": {
+        "repair_budget": 24
+      },
+      "validation_categories": {
+        "Response must be exactly one valid JSON object.": 48
+      },
+      "missing_successes": 0,
+      "answerable_successes": 0
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "direct",
+      "n": 24,
+      "successes": 15,
+      "success_rate": 0.625,
+      "calls": 72,
+      "output_tokens": 1220,
+      "latency_seconds": 179.68567560000884,
+      "validation_errors": 0,
+      "transport_failures": 0,
+      "mean_calls": 3.0,
+      "mean_output_tokens": 50.833333333333336,
+      "mean_prompt_tokens": 902.0,
+      "mean_latency_seconds": 7.486903150000368,
+      "load_seconds": 117.3791663,
+      "failure_categories": {
+        "incorrect_answer": 9
+      },
+      "termination_counts": {
+        "terminal_answer": 24
+      },
+      "validation_categories": {},
+      "missing_successes": 0,
+      "answerable_successes": 15
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "schema",
+      "n": 24,
+      "successes": 15,
+      "success_rate": 0.625,
+      "calls": 72,
+      "output_tokens": 1220,
+      "latency_seconds": 71.2815264999972,
+      "validation_errors": 0,
+      "transport_failures": 0,
+      "mean_calls": 3.0,
+      "mean_output_tokens": 50.833333333333336,
+      "mean_prompt_tokens": 902.0,
+      "mean_latency_seconds": 2.97006360416655,
+      "load_seconds": 8.8230964,
+      "failure_categories": {
+        "incorrect_answer": 9
+      },
+      "termination_counts": {
+        "terminal_answer": 24
+      },
+      "validation_categories": {},
+      "missing_successes": 0,
+      "answerable_successes": 15
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "egar",
+      "n": 24,
+      "successes": 21,
+      "success_rate": 0.875,
+      "calls": 81,
+      "output_tokens": 1337,
+      "latency_seconds": 77.771011000008,
+      "validation_errors": 12,
+      "transport_failures": 0,
+      "mean_calls": 3.375,
+      "mean_output_tokens": 55.708333333333336,
+      "mean_prompt_tokens": 1068.1666666666667,
+      "mean_latency_seconds": 3.2404587916670002,
+      "load_seconds": 9.9979434,
+      "failure_categories": {
+        "repair_budget": 3
+      },
+      "termination_counts": {
+        "terminal_answer": 15,
+        "repair_budget": 3,
+        "terminal_abstain": 6
+      },
+      "validation_categories": {
+        "Precondition: cited record must match BOTH requested service and region.": 9,
+        "Precondition: abstention requires no exact service AND region match in the catalogue.": 3
+      },
+      "missing_successes": 6,
+      "answerable_successes": 15
+    },
+    {
+      "model": "llama3.1:8b",
+      "condition": "generic_egar",
+      "n": 24,
+      "successes": 17,
+      "success_rate": 0.7083333333333334,
+      "calls": 81,
+      "output_tokens": 1398,
+      "latency_seconds": 80.92320240000299,
+      "validation_errors": 16,
+      "transport_failures": 0,
+      "mean_calls": 3.375,
+      "mean_output_tokens": 58.25,
+      "mean_prompt_tokens": 1067.0416666666667,
+      "mean_latency_seconds": 3.3718001000001245,
+      "load_seconds": 10.3106845,
+      "failure_categories": {
+        "repair_budget": 7
+      },
+      "termination_counts": {
+        "terminal_answer": 15,
+        "repair_budget": 7,
+        "terminal_abstain": 2
+      },
+      "validation_categories": {
+        "Precondition: cited record must match BOTH requested service and region.": 14,
+        "Precondition: abstention requires no exact service AND region match in the catalogue.": 2
+      },
+      "missing_successes": 2,
+      "answerable_successes": 15
+    }
+  ],
+  "paired_contrasts": [
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus direct",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus schema",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "gemma3:4b",
+      "contrast": "egar minus generic_egar",
+      "paired_n": 24,
+      "difference": 0.0,
+      "bootstrap_95_percent": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 24
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus direct",
+      "paired_n": 24,
+      "difference": 0.25,
+      "bootstrap_95_percent": [
+        0.08333333333333333,
+        0.4166666666666667
+      ],
+      "wins": 6,
+      "losses": 0,
+      "ties": 18
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus schema",
+      "paired_n": 24,
+      "difference": 0.25,
+      "bootstrap_95_percent": [
+        0.08333333333333333,
+        0.4166666666666667
+      ],
+      "wins": 6,
+      "losses": 0,
+      "ties": 18
+    },
+    {
+      "model": "llama3.1:8b",
+      "contrast": "egar minus generic_egar",
+      "paired_n": 24,
+      "difference": 0.16666666666666666,
+      "bootstrap_95_percent": [
+        0.041666666666666664,
+        0.3333333333333333
+      ],
+      "wins": 4,
+      "losses": 0,
+      "ties": 20
+    }
+  ],
+  "completed_episodes": 192,
+  "response_count": 474,
+  "elapsed_seconds_estimate": 683.690247297287,
+  "successful_call_latency_seconds": 683.230909300004,
+  "total_output_tokens": 11397,
+  "total_prompt_tokens": 132026
+}

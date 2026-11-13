@@ -27,6 +27,7 @@ export default function Header({
   toggleSidebar,
   onOpenCommandPalette,
   onExport,
+  isExporting = false,
   hasMessages,
   isMusicPlaying,
   onToggleMusic,
@@ -38,6 +39,21 @@ export default function Header({
   const currentLang = resolveOption(activeLang);
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef(null);
+  const exportRef = useRef(null);
+
+  useEffect(() => {
+    const closeExport = event => {
+      if (exportRef.current && (event.key === 'Escape' || (event.type === 'mousedown' && !exportRef.current.contains(event.target)))) {
+        exportRef.current.open = false;
+      }
+    };
+    document.addEventListener('mousedown', closeExport);
+    document.addEventListener('keydown', closeExport);
+    return () => {
+      document.removeEventListener('mousedown', closeExport);
+      document.removeEventListener('keydown', closeExport);
+    };
+  }, []);
 
   useEffect(() => {
     if (!langOpen) return undefined;
@@ -171,10 +187,12 @@ export default function Header({
           <Music size={15} className={isMusicPlaying ? 'animate-pulse text-[#ff75ac]' : ''} />
         </button>
 
-        <button
-          onClick={onExport}
-          disabled={!hasMessages}
-          title={hasMessages ? t('export_chat_image') : t('no_messages_export')}
+        <details ref={exportRef} className="relative">
+        <summary
+          aria-label={t('export')}
+          aria-disabled={!hasMessages || isExporting}
+          onClick={event => { if (!hasMessages || isExporting) event.preventDefault(); }}
+          title={hasMessages ? t('export') : t('no_messages_export')}
           className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 transition-all ${
             hasMessages
               ? 'border-white/40 bg-white/50 text-gray-600 shadow-sm backdrop-blur-md hover:border-[#ff75ac]/40 hover:bg-white/85 hover:text-[#ff75ac] dark:border-white/10 dark:bg-white/10 dark:text-gray-300 dark:hover:border-[#ff75ac]/40 dark:hover:bg-white/15 dark:hover:text-[#ff9bc8]'
@@ -182,8 +200,16 @@ export default function Header({
           }`}
         >
           <Image size={15} />
-          <span className="hidden text-xs font-medium md:inline">{t('export')}</span>
-        </button>
+          <span className="hidden text-xs font-medium md:inline">{isExporting ? '…' : t('export')}</span>
+        </summary>
+        <div className="absolute right-0 top-10 z-50 min-w-40 rounded-xl border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-700 dark:bg-gray-900">
+          {[['md', 'Markdown (.md)'], ['pdf', 'PDF (.pdf)'], ['png', 'PNG (.png)']].map(([format, label]) => (
+            <button key={format} type="button" disabled={!hasMessages || isExporting}
+              className="block w-full rounded-lg px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40 dark:text-gray-200 dark:hover:bg-gray-800"
+              onClick={event => { event.currentTarget.closest('details').open = false; onExport(format); }}>{label}</button>
+          ))}
+        </div>
+        </details>
       </div>
     </header>
   );

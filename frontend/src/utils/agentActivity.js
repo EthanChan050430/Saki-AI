@@ -7,7 +7,7 @@ export const fileName = (path = '') => String(path).split(/[\\/]/).filter(Boolea
 export function actionCategory(part) {
   const kind = actionKind(part);
   if (['readfile', 'readfilechunk', 'planfileread', 'readskill', 'readmemory', 'inspectopenhubskill'].includes(kind)) return 'read';
-  if (['writefile', 'editfile', 'replaceinfile', 'replaceblocks', 'deletefile', 'ensuredir', 'createprojectfolder'].includes(kind)) return 'edit';
+  if (['writefile', 'editfile', 'replaceinfile', 'replaceblocks', 'deletefile', 'deletedirectory', 'ensuredir', 'createprojectfolder'].includes(kind)) return 'edit';
   if (kind === 'terminal') return 'command';
   if (['search', 'browse'].includes(kind)) return 'search';
   if (['listdir', 'getrepomap', 'searchskills', 'listskills', 'searchopenhubskills', 'searchmemories', 'listmemories'].includes(kind)) return 'explore';

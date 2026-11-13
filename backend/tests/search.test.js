@@ -120,3 +120,24 @@ test('no credentials means no implicit DDG or unconfigured web fallbacks', async
     assert.deepEqual(await search.searchWeb('Python', { config: {} }), []);
     assert.equal(mock.mock.callCount(), 1);
 });
+
+test('complex searches retrieve focused variants and merge distinct evidence', async (t) => {
+    const calls = [];
+    t.mock.method(axios, 'get', async (url) => {
+        const parsed = new URL(url);
+        const query = parsed.searchParams.get('q');
+        calls.push(query);
+        return { data: { results: [{
+            title: query,
+            content: '固态电池与钠离子电池低温循环寿命比较 成本 风险',
+            url: `https://${calls.length}.example.test/research`,
+        }] } };
+    });
+    const results = await search.searchComplexQuery('比较固态电池与钠离子电池低温循环寿命，分析成本和风险', {
+        config: {}, limit: 8,
+    });
+    assert.ok(calls.length > 1);
+    assert.ok(calls.some(query => query.includes('风险 安全')));
+    assert.ok(results.length > 1);
+    assert.ok(results.every(result => result.query));
+});

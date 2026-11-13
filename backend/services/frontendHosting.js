@@ -16,7 +16,8 @@ function mountFrontend(app, runtime) {
     const serveIndex = (_req, res, next) => {
         fs.readFile(indexPath, 'utf8', (error, html) => {
             if (error) return next();
-            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+            res.setHeader('CDN-Cache-Control', 'no-store');
             res.type('html').send(html.replace('</head>', `<script>window.__SAKI_RUNTIME__=${JSON.stringify({ profile: runtime.profile, animations })};</script></head>`));
         });
     };
@@ -24,11 +25,22 @@ function mountFrontend(app, runtime) {
     app.use(express.static(runtime.frontendDist, {
         index: false, maxAge: '1h',
         setHeaders(res, filePath) {
+            if (path.resolve(filePath) === path.resolve(indexPath)) {
+                res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+                res.setHeader('CDN-Cache-Control', 'no-store');
+                return;
+            }
             if (/[-.][a-zA-Z0-9_-]{8,}\.(js|css)$/.test(path.basename(filePath))) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         },
     }));
+    app.use((req, res, next) => {
+        if (req.path.startsWith('/assets/') || path.extname(req.path)) {
+            return res.status(404).type('text').send('Not found');
+        }
+        next();
+    });
     app.get('*', (req, res, next) => {
-        if (path.extname(req.path) || req.path.startsWith('/assets/') || !req.accepts('html')) return next();
+        if (!req.accepts('html')) return next();
         serveIndex(req, res, next);
     });
 }

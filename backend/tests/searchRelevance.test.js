@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const relevance = require('../services/searchRelevance');
-const { extractSearchTerms, normalizeSearchUrl, scoreSearchRelevance, rankSearchResults } = relevance;
+const { extractSearchTerms, normalizeSearchUrl, scoreSearchRelevance, rankSearchResults, expandSearchQueries } = relevance;
 const result = (title, url = 'https://example.org/doc', extra = {}) => ({ title, url, ...extra });
 
 test('stable exports are available from both modules', () => {
@@ -18,6 +18,15 @@ test('English stopwords, word boundaries and Chinese unspaced segmentation', () 
     assert.ok(scoreSearchRelevance(result('量子计算的纠错技术详解'), '量子计算纠错技术') > 0.5);
     assert.equal(scoreSearchRelevance(result('carpet concatenate'), 'cat'), 0);
     assert.equal(scoreSearchRelevance(result('Paris weather'), 'the and of'), 0);
+});
+
+test('complex questions expand into bounded focused query variants', () => {
+    const queries = expandSearchQueries('比较固态电池与钠离子电池的低温循环寿命？分析成本和风险');
+    assert.equal(queries[0], '比较固态电池与钠离子电池的低温循环寿命？分析成本和风险');
+    assert.ok(queries.some(query => query.includes('优缺点 性能 成本')));
+    assert.ok(queries.some(query => query.includes('风险 安全')));
+    assert.ok(queries.length <= 4);
+    assert.deepEqual(expandSearchQueries('单一术语'), ['单一术语']);
 });
 
 test('Han bigram fallback works without Intl.Segmenter', () => {

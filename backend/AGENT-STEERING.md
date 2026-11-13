@@ -2,6 +2,8 @@
 
 ## API
 
+已应用的引导文本和附件路径、文本预览会纳入后续对话历史与压缩摘要。仅 accepted、尚未 applied 的记录不会作为已生效指令重放；历史不重新读取图片或恢复待处理队列。
+
 `POST /api/chat/stream/:chatId/steer`，JSON 字段：
 
 - `assistantMsgId`：创建当前 `/api/chat` 运行时使用的消息 ID，字符串或整数，必填。
@@ -10,7 +12,11 @@
 
 成功返回 HTTP 202，响应体与 `steering/accepted` SSE 一致。400 为无效参数；413 为大小超限；429 为本运行累计引导超过 100 条；409 为运行不存在、模式不支持、ID 不匹配、初始化未就绪、正在结束或校验期间运行已更换。500 为持久化等内部错误。
 
-仅支持携带 `chatId`、`assistantMsgId` 的后台 `agent` 运行。不支持普通 CHAT、PPT、深度阅读、可信度核查、Story Glass、已结束或等待审批的运行。等待审批须使用原有审批恢复机制。
+仅支持携带 `chatId`、`assistantMsgId` 的后台 `agent` 运行。不支持普通 CHAT、PPT、深度阅读、已结束或等待审批的运行。等待审批须使用原有审批恢复机制。
+
+故事杯现在由 Agent 在当前对话中生成内容，调用 `presentStoryGlass(json)` 展示卡片，不再通过独立模式生成。直接说“把今天的经历变成一杯无酒精饮料”即可，修改配方也在同一对话中进行。普通倾诉不应自动生成故事杯。插画仅在用户提出需求时使用绘图工具。历史故事杯及其查看界面保留；旧客户端的 `useStoryGlass` 请求兼容转入 Agent。
+
+事实核验已融入 Agent：按需调用 `verifyClaim(claim)`，收集多源证据，再由 Agent 分析支持、反驳与不确定性并引用来源，不生成独立评分卡片，无需切换联网或核验模式。核验工具执行期间的引导与其他 Agent 工具一致，在完整工具 exchange 后应用。旧历史核验卡片仍可查看；旧客户端的 `useTruthCheck` 请求进入 Agent，不再启动独立核验流程。QQ 的 `/check` 作为普通 Agent 核验请求的兼容别名保留。
 
 ## SSE
 

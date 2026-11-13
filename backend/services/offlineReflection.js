@@ -337,6 +337,8 @@ class OfflineReflectionService {
                 title: firstUserTitle(messages),
                 updatedAt: stats.mtime.toISOString(),
                 transcript: trimToMax(transcript, 2600),
+                userMessages: messages.slice(-16).filter(message => message?.role === 'user')
+                    .map(extractMessageText).filter(Boolean),
                 filePaths: collectReferencedFilePaths(messages),
             });
         }
@@ -435,6 +437,7 @@ JSON schema:
       "name": "short memory title",
       "summary": "one sentence",
       "content": "durable fact or synthesized context",
+      "evidenceText": "exact quote from a user message (not assistant text)",
       "category": "identity|preference|project|interaction|relationship|general",
       "importance": 0.0,
       "confidence": 0.0
@@ -469,6 +472,7 @@ Rules:
 - Prefer project progress, current focus, file-to-project links, user preferences, identity, recurring constraints, and working style.
 - Use "current_status" when capturing the latest known project or task progress.
 - Do not invent facts. If evidence is weak, lower confidence.
+- Every memory candidate must quote a user message exactly in evidenceText. Assistant text and changed files are context, not evidence of user facts.
 - If nothing durable exists, return empty arrays but still provide a short summary.
 
 Date: ${input.dateKey}
@@ -591,6 +595,17 @@ ${filesText}
             const savedMemories = [];
             for (const candidate of result.memoryCandidates || []) {
                 if (!candidate?.name || !candidate?.content) continue;
+                const evidenceText = String(candidate.evidenceText || '').trim();
+                const session = input.sessionSummaries.find(item => evidenceText
+                    && (item.userMessages || []).some(text => text.includes(evidenceText)));
+                if (!session) {
+                    console.warn('[OfflineReflection] Rejected memory candidate without a matching user quote');
+                    continue;
+                }
+                if (this.memoryService.isTombstoned(await this.memoryService.loadStore(), candidate)) {
+                    console.warn('[OfflineReflection] Skipped explicitly deleted memory');
+                    continue;
+                }
                 const memory = await this.memoryService.upsertMemory({
                     name: candidate.name,
                     summary: candidate.summary || previewText(candidate.content, 180),
@@ -600,6 +615,8 @@ ${filesText}
                     confidence: Number(candidate.confidence) || 0.65,
                     auto: true,
                     source: 'offline-reflection:memory',
+                    provenance: { chatId: session.chatId, sourceRole: 'user', evidenceText,
+                        observedAt: session.updatedAt, sourceDateKey: input.dateKey },
                     merge: true,
                 });
                 savedMemories.push(memory);

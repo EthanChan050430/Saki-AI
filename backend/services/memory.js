@@ -1,5 +1,16 @@
 const path = require('path');
 const fs = require('fs-extra');
+const { randomUUID, createHash } = require('node:crypto');
+
+async function writeJsonAtomic(filePath, value) {
+    const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+    try {
+        await fs.writeJson(temporaryPath, value, { spaces: 2 });
+        await fs.rename(temporaryPath, filePath);
+    } finally {
+        await fs.remove(temporaryPath);
+    }
+}
 
 function sanitizeName(name = '') {
     return String(name).trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').slice(0, 120) || 'untitled-memory';
@@ -104,6 +115,7 @@ function defaultStore() {
             lastSleepCycleAt: null,
             lastOfflineReflectionAt: null,
         },
+        tombstones: [],
     };
 }
 
@@ -729,7 +741,13 @@ function scoreQuery(memory, query = '') {
 }
 
 class MemoryService {
-    constructor({ dataDir, memoriesDir, workspaceDir, embeddingMode = process.env.SAKI_EMBEDDINGS || 'lazy' }) {
+    constructor({ dataDir, memoriesDir, workspaceDir, embeddingMode = process.env.SAKI_EMBEDDINGS || 'lazy', scopeId = '' }) {
+        if (scopeId) {
+            const scopeKey = createHash('sha256').update(String(scopeId)).digest('hex');
+            workspaceDir = path.join(workspaceDir || path.resolve(dataDir, '..'), 'memory-scopes', scopeKey);
+            dataDir = path.join(dataDir, 'memory-scopes', scopeKey);
+            memoriesDir = path.join(memoriesDir, 'memory-scopes', scopeKey);
+        }
         this.dataDir = dataDir;
         this.memoriesDir = memoriesDir;
         this.workspaceDir = workspaceDir || path.resolve(dataDir, '..');
@@ -752,11 +770,13 @@ class MemoryService {
         this.embeddingExtractorPromise = null;
         this.embeddingMode = embeddingMode;
         this.embeddingDisabled = embeddingMode === 'keyword';
+        this.scopeId = String(scopeId || workspaceDir || path.resolve(dataDir, '..'));
         this.initialized = false;
     }
 
     async init() {
         if (this.initialized) return;
+        await fs.ensureDir(this.dataDir);
         await fs.ensureDir(this.memoriesDir);
         await fs.ensureDir(this.workingDir);
         await fs.ensureDir(this.memoryArchiveDir);
@@ -785,19 +805,23 @@ class MemoryService {
 
     async loadStore() {
         await this.init();
-        const store = await fs.readJson(this.storePath).catch(() => defaultStore());
+        const store = await fs.readJson(this.storePath);
+        if (!store || !Array.isArray(store.memories)) {
+            throw new Error('Invalid memory store: expected a memories array. Restore the store from a backup before writing.');
+        }
         return {
             ...defaultStore(),
             ...store,
             memories: Array.isArray(store.memories) ? store.memories : [],
             profiles: { ...defaultStore().profiles, ...(store.profiles || {}) },
             stats: { ...defaultStore().stats, ...(store.stats || {}) },
+            tombstones: Array.isArray(store.tombstones) ? store.tombstones : [],
         };
     }
 
     async saveStore(store) {
         store.stats.totalMemories = store.memories.length;
-        await fs.writeJson(this.storePath, store, { spaces: 2 });
+        await writeJsonAtomic(this.storePath, store);
         await this.syncCuratedArchive(store);
     }
 
@@ -823,7 +847,7 @@ class MemoryService {
             updatedAt: nowIso(),
             lastReflectedAt: store?.lastReflectedAt || null,
         };
-        await fs.writeJson(this.knowledgeGraphPath, normalized, { spaces: 2 });
+        await writeJsonAtomic(this.knowledgeGraphPath, normalized);
         await this.syncCuratedArchive(await this.loadStore());
         return normalized;
     }
@@ -845,7 +869,7 @@ class MemoryService {
             model: this.embeddingModelName,
             vectors: store?.vectors || {},
         };
-        await fs.writeJson(this.vectorStorePath, normalized, { spaces: 2 });
+        await writeJsonAtomic(this.vectorStorePath, normalized);
     }
 
     async loadShortTermStore() {
@@ -866,7 +890,7 @@ class MemoryService {
             updatedAt: nowIso(),
             lastFlushAt: store?.lastFlushAt || null,
         };
-        await fs.writeJson(this.shortTermPath, normalized, { spaces: 2 });
+        await writeJsonAtomic(this.shortTermPath, normalized);
         return normalized;
     }
 
@@ -890,8 +914,21 @@ class MemoryService {
             updatedAt: nowIso(),
             lastRunAt: store?.lastRunAt || null,
         };
-        await fs.writeJson(this.sleepStorePath, normalized, { spaces: 2 });
+        await writeJsonAtomic(this.sleepStorePath, normalized);
         return normalized;
+    }
+
+    isInScope(item = {}, scopeId = this.scopeId) {
+        return !item.scopeId || item.scopeId === scopeId;
+    }
+
+    isTombstoned(store, input = {}) {
+        const signature = buildContentSignature(input.content || input.summary || '');
+        return (store.tombstones || []).some(item =>
+            item.scopeId === this.scopeId
+            && ((input.id && item.id === input.id) || (input.slug && item.slug === input.slug)
+                || (input.name && item.name === input.name) || (signature && item.signature === signature))
+        );
     }
 
     normalizeKnowledgeEntity(entity = {}, metadata = {}) {
@@ -968,7 +1005,7 @@ class MemoryService {
         };
     }
 
-    async upsertKnowledgeGraph({ summary = '', entities = [], relations = [], reflection = null, source = 'offline-reflection', runAt = nowIso() } = {}) {
+    async upsertKnowledgeGraph({ summary = '', entities = [], relations = [], reflection = null, source = 'offline-reflection', runAt = nowIso(), scopeId = this.scopeId } = {}) {
         const store = await this.loadKnowledgeGraph();
         const normalizedEntities = (Array.isArray(entities) ? entities : [])
             .map(entity => this.normalizeKnowledgeEntity(entity, { source, runAt }))
@@ -976,9 +1013,10 @@ class MemoryService {
         const normalizedRelations = (Array.isArray(relations) ? relations : [])
             .map(relation => this.normalizeKnowledgeRelation(relation, { source, runAt }))
             .filter(Boolean);
+        for (const item of [...normalizedEntities, ...normalizedRelations]) item.scopeId = scopeId;
 
         for (const entity of normalizedEntities) {
-            const existing = store.entities.find(item => item.id === entity.id);
+            const existing = store.entities.find(item => item.id === entity.id && this.isInScope(item, scopeId));
             if (existing) {
                 existing.summary = summarizeSalientText(
                     [existing.summary, entity.summary, entity.status].filter(Boolean).join('. '),
@@ -996,7 +1034,7 @@ class MemoryService {
         }
 
         for (const relation of normalizedRelations) {
-            const existing = store.relations.find(item => item.id === relation.id);
+            const existing = store.relations.find(item => item.id === relation.id && this.isInScope(item, scopeId));
             if (existing) {
                 existing.object = relation.object || existing.object;
                 existing.objectType = relation.objectType || existing.objectType;
@@ -1017,6 +1055,7 @@ class MemoryService {
                 source,
                 model: reflection.model || '',
                 provider: reflection.provider || '',
+                scopeId,
                 entityCount: normalizedEntities.length,
                 relationCount: normalizedRelations.length,
                 createdAt: runAt,
@@ -1050,7 +1089,7 @@ class MemoryService {
             return score;
         };
 
-        const entityMatches = store.entities
+        const entityMatches = store.entities.filter(item => this.isInScope(item))
             .map(entity => {
                 const score = scoreText([
                     entity.name,
@@ -1070,7 +1109,7 @@ class MemoryService {
             })
             .filter(entry => terms.length ? entry.matched : !normalizedQuery);
 
-        const relationMatches = store.relations
+        const relationMatches = store.relations.filter(item => this.isInScope(item))
             .map(relation => {
                 const score = scoreText([
                     relation.subject,
@@ -1177,41 +1216,20 @@ class MemoryService {
         return store;
     }
 
-    async ensureVectorCoverage(memories = []) {
-        if (this.embeddingDisabled || !Array.isArray(memories) || memories.length === 0) {
-            return this.loadVectorStore();
-        }
-
-        const vectorStore = await this.loadVectorStore();
-        let changed = false;
+    async rebuildVectorIndex() {
+        const memories = (await this.loadStore()).memories;
+        const vectors = await this.loadVectorStore();
         const liveIds = new Set(memories.map(memory => memory.id));
-
+        for (const id of Object.keys(vectors.vectors)) {
+            if (!liveIds.has(id)) delete vectors.vectors[id];
+        }
         for (const memory of memories) {
-            const current = vectorStore.vectors[memory.id];
-            if (!current || current.updatedAt !== memory.updatedAt) {
-                const embedding = await this.embedText(buildMemoryDocument(memory));
-                if (embedding?.length) {
-                    vectorStore.vectors[memory.id] = {
-                        embedding,
-                        updatedAt: memory.updatedAt || nowIso(),
-                    };
-                    changed = true;
-                }
+            if (vectors.vectors[memory.id]?.updatedAt !== memory.updatedAt) {
+                await this.upsertVectorEntry(memory, vectors);
             }
         }
-
-        for (const id of Object.keys(vectorStore.vectors)) {
-            if (!liveIds.has(id)) {
-                delete vectorStore.vectors[id];
-                changed = true;
-            }
-        }
-
-        if (changed) {
-            await this.saveVectorStore(vectorStore);
-        }
-
-        return vectorStore;
+        await this.saveVectorStore(vectors);
+        return vectors;
     }
 
     async getSemanticScores(query = '', memories = []) {
@@ -1221,14 +1239,14 @@ class MemoryService {
         }
 
         try {
-            const vectorStore = await this.ensureVectorCoverage(memories);
+            const vectorStore = await this.loadVectorStore();
             const queryEmbedding = await this.embedText(buildQueryDocument(query));
             if (!queryEmbedding?.length) return new Map();
 
             const scores = new Map();
             for (const memory of memories) {
                 const entry = vectorStore.vectors[memory.id];
-                if (!entry?.embedding?.length) continue;
+                if (!entry?.embedding?.length || entry.updatedAt !== memory.updatedAt) continue;
                 scores.set(memory.id, Math.max(0, cosineSimilarity(queryEmbedding, entry.embedding)));
             }
             return scores;
@@ -1387,7 +1405,8 @@ class MemoryService {
         const userDigest = summarizeSalientText(cleanedUser, { maxSentences: 3, maxChars: 220 });
         const assistantDigest = summarizeSalientText(assistantMessage, { maxSentences: 2, maxChars: 180 });
         const combinedSource = [userDigest || cleanedUser, assistantDigest].filter(Boolean).join('\n');
-        const segments = groupTopicSentences(combinedSource || [cleanedUser, assistantMessage].filter(Boolean).join('\n'));
+        // Assistant suggestions are conversation context, not evidence about the user.
+        const segments = groupTopicSentences(cleanedUser);
         const segmentImportance = segments.map(segment =>
             clampNumber(
                 Math.max(
@@ -1446,6 +1465,7 @@ class MemoryService {
             ),
             turns: Number(candidate.turns || candidate.observationCount || candidate.items?.length || 1),
             source: candidate.source || 'auto-fallback',
+            provenance: candidate.provenance || null,
             createdAt: candidate.createdAt || nowIso(),
         };
     }
@@ -1505,6 +1525,10 @@ class MemoryService {
         const promotedCandidates = [];
 
         for (const rawCandidate of candidates || []) {
+            if (this.isTombstoned(await this.loadStore(), rawCandidate)) {
+                console.warn('[Memory] Skipped explicitly deleted autonomous candidate');
+                continue;
+            }
             const evaluation = this.shouldPromoteAutonomously(rawCandidate);
             if (!evaluation.shouldPromote) {
                 pending.push(evaluation.candidate);
@@ -1521,6 +1545,7 @@ class MemoryService {
                 aliases: uniqueList([candidate.topicLabel, candidate.topicKey, ...(candidate.tags || [])]).slice(0, 12),
                 importance: clampNumber(Math.max(candidate.importance, evaluation.score), 0.4, 0.99),
                 auto: true,
+                provenance: candidate.provenance,
                 source: `${source}:${candidate.source || 'candidate'}`,
                 merge,
             });
@@ -1725,6 +1750,10 @@ class MemoryService {
         const queued = [];
 
         for (const candidate of validCandidates) {
+            if (this.isTombstoned(await this.loadStore(), candidate)) {
+                console.warn('[Memory] Skipped explicitly deleted queue candidate');
+                continue;
+            }
             const normalized = {
                 id: candidate.id || slugify(`${candidate.topicKey || candidate.topicLabel || candidate.summary}-${Date.now()}`),
                 topicKey: candidate.topicKey || buildTopicKey(candidate.content, candidate.category, candidate.tags),
@@ -1736,14 +1765,16 @@ class MemoryService {
                 importance: clampNumber(candidate.importance || inferImportance(candidate.content || '', candidate.topicLabel || '', candidate.category), 0.3, 0.98),
                 turns: Number(candidate.turns) || 1,
                 source: candidate.source || 'sleep-queue',
+                provenance: candidate.provenance || null,
                 chatIds: uniqueList([candidate.chatId].filter(Boolean)),
+                scopeId: candidate.scopeId || this.scopeId,
                 createdAt: candidate.createdAt || nowIso(),
                 updatedAt: nowIso(),
                 reasons: uniqueList([reason].filter(Boolean)),
             };
 
             const existingIndex = sleepStore.queue.findIndex(item =>
-                item.topicKey === normalized.topicKey && item.category === normalized.category
+                this.isInScope(item) && item.topicKey === normalized.topicKey && item.category === normalized.category
             );
 
             if (existingIndex >= 0) {
@@ -1777,9 +1808,11 @@ class MemoryService {
         return queued;
     }
 
-    async searchPendingMemories(query = '', limit = 4) {
+    async searchPendingMemories(query = '', limit = 4, chatId = '') {
         const sleepStore = await this.loadSleepStore();
-        const items = sleepStore.queue || [];
+        const items = (sleepStore.queue || []).filter(item =>
+            this.isInScope(item) && (!item.chatIds?.length || item.chatIds.includes(chatId))
+        );
         if (!query) {
             return items.slice(0, limit);
         }
@@ -1860,13 +1893,19 @@ class MemoryService {
 
         const groups = new Map();
         for (const item of queueStore.queue) {
+            if (!this.isInScope(item)) continue;
             const key = `${item.category || 'general'}::${item.topicKey || slugify(item.topicLabel || item.summary || 'memory')}`;
             const group = groups.get(key) || [];
             group.push(item);
             groups.set(key, group);
         }
 
-        const consolidatedCandidates = Array.from(groups.values()).map(group => this.combineSleepCandidates(group));
+        const storeBeforeSleep = await this.loadStore();
+        const consolidatedCandidates = Array.from(groups.values())
+            .map(group => this.combineSleepCandidates(group))
+            .filter(candidate => !this.isTombstoned(storeBeforeSleep, {
+                ...candidate, name: deriveCanonicalMemoryName(candidate),
+            }));
         const consolidatedMemories = [];
 
         for (const candidate of consolidatedCandidates) {
@@ -1880,13 +1919,14 @@ class MemoryService {
                 importance: candidate.importance,
                 auto: true,
                 source: `sleep-cycle:${candidate.source || 'queue'}`,
+                provenance: candidate.provenance || null,
                 merge: true,
             });
             consolidatedMemories.push(memory);
         }
 
         const finishedAt = nowIso();
-        queueStore.queue = [];
+        queueStore.queue = queueStore.queue.filter(item => !this.isInScope(item));
         queueStore.lastRunAt = finishedAt;
         queueStore.runs.unshift({
             id: slugify(`sleep-${finishedAt}`),
@@ -2092,6 +2132,7 @@ class MemoryService {
                 importance: item.importance,
                 auto: true,
                 source: item.source || 'wal',
+                provenance: { chatId, sourceRole: 'user', evidenceText: userMessage, observedAt: nowIso() },
                 merge: false,
             });
             savedMemories.push(memory);
@@ -2134,8 +2175,10 @@ class MemoryService {
         const files = await fs.readdir(this.memoriesDir).catch(() => []);
         if (!files.length) return;
 
-        const store = await fs.readJson(this.storePath).catch(() => defaultStore());
-        store.memories = Array.isArray(store.memories) ? store.memories : [];
+        const store = await fs.readJson(this.storePath);
+        if (!store || !Array.isArray(store.memories)) {
+            throw new Error('Invalid memory store: expected a memories array. Legacy import was stopped.');
+        }
         const existingSlugs = new Set(store.memories.map(memory => memory.slug));
         let changed = false;
 
@@ -2148,6 +2191,7 @@ class MemoryService {
             const name = file.replace(/\.txt$/i, '');
             const slug = slugify(name);
             if (existingSlugs.has(slug)) continue;
+            if (this.isTombstoned(store, { name, slug, content: raw })) continue;
 
             const stats = await fs.stat(filePath).catch(() => null);
             const category = detectCategory(raw, name);
@@ -2185,7 +2229,7 @@ class MemoryService {
     rebuildProfiles(store) {
         const topByCategory = (category) =>
             store.memories
-                .filter(memory => memory.category === category)
+                .filter(memory => memory.category === category && this.isInScope(memory))
                 .sort((a, b) => (b.importance || 0) - (a.importance || 0))
                 .slice(0, 6)
                 .map(memory => `- ${memory.name}: ${memory.summary}`)
@@ -2221,7 +2265,7 @@ class MemoryService {
 
     async listMemories() {
         const store = await this.loadStore();
-        return store.memories
+        return store.memories.filter(memory => this.isInScope(memory))
             .slice()
             .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
             .map(memory => ({
@@ -2243,11 +2287,12 @@ class MemoryService {
         const store = await this.loadStore();
         const normalized = String(identifier || '').trim();
         const memory = store.memories.find(item =>
+            this.isInScope(item) && (
             item.id === normalized ||
             item.slug === normalized ||
             item.fileName === normalized ||
             item.name === normalized ||
-            `${item.name}.txt` === normalized
+            `${item.name}.txt` === normalized)
         );
         if (!memory) return null;
         memory.lastAccessedAt = nowIso();
@@ -2258,7 +2303,7 @@ class MemoryService {
 
     async searchMemories(query, limit = 8) {
         const store = await this.loadStore();
-        const memories = store.memories.slice();
+        const memories = store.memories.filter(memory => this.isInScope(memory));
         const semanticScores = await this.getSemanticScores(query, memories);
         const hasSemanticScores = semanticScores.size > 0;
 
@@ -2281,6 +2326,9 @@ class MemoryService {
     }
 
     async upsertMemory(input) {
+        if (input.scopeId && input.scopeId !== this.scopeId) {
+            throw new Error('Memory scope does not match this service instance');
+        }
         const store = await this.loadStore();
         const name = sanitizeName(input.name || input.summary || input.content?.slice(0, 40) || 'Untitled Memory');
         const slug = input.slug || slugify(name);
@@ -2289,31 +2337,49 @@ class MemoryService {
         const tags = Array.from(new Set([...(input.tags || []), ...inferTags(input.content || '', name)])).slice(0, 10);
         const aliases = uniqueList([...(input.aliases || []), ...collectTopicKeywords(input.content || '', name)]).slice(0, 12);
         const existing = store.memories.find(memory =>
-            memory.slug === slug ||
+            this.isInScope(memory) && (memory.slug === slug ||
             memory.name === name ||
-            memory.fileName === `${sanitizeName(name)}.txt`
+            memory.fileName === `${sanitizeName(name)}.txt`)
         );
+        if (!existing && this.isTombstoned(store, { ...input, name, slug }) && input.restoreDeleted !== true) {
+            throw new Error('This memory was explicitly deleted in the current scope and cannot be recreated from derived sources.');
+        }
         const timestamp = nowIso();
 
         if (existing) {
+            const replacing = input.merge === false;
+            if (replacing && (existing.content !== (input.content || existing.content) || existing.summary !== summary)) {
+                existing.history = [...(existing.history || []), {
+                    content: existing.content,
+                    summary: existing.summary,
+                    provenance: existing.provenance || null,
+                    validFrom: existing.validFrom || existing.createdAt,
+                    validTo: timestamp,
+                }];
+                existing.validFrom = timestamp;
+            }
             const appendedContent = input.merge === false
                 ? (input.content || existing.content)
                 : dedupeTextBlocks([existing.content, input.content], 4000);
             existing.name = name;
-            existing.summary = summarizeSalientText(
+            existing.summary = replacing ? summary : summarizeSalientText(
                 [existing.summary, summary].filter(Boolean).join('. '),
                 { maxSentences: 4, maxChars: 240 }
             ) || summary || existing.summary;
             existing.content = appendedContent;
             existing.category = category;
             existing.type = input.type || existing.type || 'long_term';
-            existing.tags = Array.from(new Set([...(existing.tags || []), ...tags])).slice(0, 12);
-            existing.aliases = uniqueList([...(existing.aliases || []), ...aliases]).slice(0, 12);
-            existing.importance = Math.max(existing.importance || 0, input.importance || inferImportance(appendedContent, name, category));
-            existing.confidence = Math.max(existing.confidence || 0.6, input.confidence || 0.8);
+            existing.tags = replacing ? tags : Array.from(new Set([...(existing.tags || []), ...tags])).slice(0, 12);
+            existing.aliases = replacing ? aliases : uniqueList([...(existing.aliases || []), ...aliases]).slice(0, 12);
+            existing.importance = replacing
+                ? (input.importance ?? inferImportance(appendedContent, name, category))
+                : Math.max(existing.importance || 0, input.importance ?? inferImportance(appendedContent, name, category));
+            existing.confidence = replacing ? (input.confidence ?? 0.8) : Math.max(existing.confidence || 0.6, input.confidence ?? 0.8);
             existing.auto = input.auto !== undefined ? input.auto : existing.auto;
             existing.updatedAt = timestamp;
             existing.source = input.source || existing.source || 'manual';
+            if (replacing) existing.provenance = input.provenance || null;
+            else if (input.provenance) existing.provenance = input.provenance;
             existing.fileName = existing.fileName || `${sanitizeName(name)}.txt`;
             await this.writeMemoryMirror(existing);
             await this.upsertVectorEntry(existing);
@@ -2334,6 +2400,9 @@ class MemoryService {
             tags,
             aliases,
             source: input.source || 'manual',
+            provenance: input.provenance || null,
+            validFrom: timestamp,
+            scopeId: input.scopeId || this.scopeId,
             importance: input.importance || inferImportance(input.content || '', name, category),
             confidence: input.confidence || 0.85,
             auto: !!input.auto,
@@ -2354,13 +2423,48 @@ class MemoryService {
     async deleteMemory(identifier, trashHandler) {
         const store = await this.loadStore();
         const index = store.memories.findIndex(memory =>
-            memory.id === identifier ||
+            this.isInScope(memory) && (memory.id === identifier ||
             memory.slug === identifier ||
             memory.fileName === identifier ||
-            memory.name === identifier
+            memory.name === identifier)
         );
         if (index === -1) return false;
         const [memory] = store.memories.splice(index, 1);
+        store.tombstones = (store.tombstones || []).filter(item => item.id !== memory.id);
+        store.tombstones.unshift({
+            id: memory.id,
+            slug: memory.slug,
+            name: memory.name,
+            signature: buildContentSignature(memory.content || memory.summary || ''),
+            scopeId: this.scopeId,
+            deletedAt: nowIso(),
+        });
+        this.rebuildProfiles(store);
+        await this.saveStore(store);
+        const sleepStore = await this.loadSleepStore();
+        sleepStore.queue = sleepStore.queue.filter(item =>
+            !this.isInScope(item) || (item.name !== memory.name && item.topicKey !== memory.slug
+                && buildContentSignature(item.content || item.summary || '') !== buildContentSignature(memory.content || memory.summary || ''))
+        );
+        await this.saveSleepStore(sleepStore);
+        const shortTerm = await this.loadShortTermStore();
+        for (const [chatId, chat] of Object.entries(shortTerm.chats)) {
+            if (chat.topics && chatId === memory.provenance?.chatId) {
+                delete shortTerm.chats[chatId].topics[memory.provenance?.topicKey];
+            }
+            for (const [key, topic] of Object.entries(chat.topics || {})) {
+                topic.items = (topic.items || []).filter(item =>
+                    buildContentSignature(item.text || item.summary || '') !== buildContentSignature(memory.content || memory.summary || '')
+                );
+                if (!topic.items.length) delete chat.topics[key];
+                else topic.summary = summarizeTopicItems(topic.items);
+            }
+        }
+        await this.saveShortTermStore(shortTerm);
+        const graph = await this.loadKnowledgeGraph();
+        graph.entities = graph.entities.filter(item => item.sourceMemoryId !== memory.id);
+        graph.relations = graph.relations.filter(item => item.sourceMemoryId !== memory.id);
+        await this.saveKnowledgeGraph(graph);
         const mirrorPath = path.join(this.memoriesDir, memory.fileName || `${sanitizeName(memory.name)}.txt`);
         if (await fs.pathExists(mirrorPath)) {
             if (trashHandler) await trashHandler(mirrorPath);
@@ -2402,9 +2506,11 @@ class MemoryService {
 
     async buildContext({ query = '', chatId = '', limit = 6 } = {}) {
         const store = await this.loadStore();
+        this.rebuildProfiles(store);
+        const scopedMemories = store.memories.filter(memory => this.isInScope(memory));
         const relevant = query
             ? await this.searchMemories(query, limit)
-            : store.memories
+            : scopedMemories
                 .slice()
                 .sort((a, b) => (b.importance || 0) - (a.importance || 0))
                 .slice(0, limit);
@@ -2412,7 +2518,7 @@ class MemoryService {
         const working = await this.getWorkingMemory(chatId);
         const sessionState = await this.loadSessionState(chatId);
         const shortTerm = await this.getShortTermContext(chatId, query, Math.min(limit, 4));
-        const pending = await this.searchPendingMemories(query, Math.min(limit, 4));
+        const pending = await this.searchPendingMemories(query, Math.min(limit, 4), chatId);
         const system = await this.getSystemStatus({ store });
         return {
             profile: store.profiles,
@@ -2479,6 +2585,7 @@ class MemoryService {
         const explicit = this.extractExplicitMemories(userMessage);
         const fallback = explicit.length > 0 ? [] : this.fallbackAutoMemories(userMessage, assistantMessage);
         let candidates = explicit.length > 0 ? [...explicit] : [...fallback];
+        let extractionAccepted = false;
 
         if (callLLM && provider && model) {
             try {
@@ -2490,9 +2597,11 @@ Rules:
 - Prefer user identity, preferences, recurring goals, project context, communication style, constraints, important relationships, important long-term tasks.
 - If the user explicitly asks the assistant to remember something, include it unless it is obviously trivial.
 - Ignore one-off small talk and transient requests.
+- Extract only facts explicitly stated by the user. Assistant suggestions are not user facts.
+- Include evidenceText: an exact quote from the user message supporting each fact.
 - Return JSON array only.
 - Each item schema:
-  {"name":"short title","summary":"one sentence","content":"detailed memory","category":"identity|preference|project|interaction|relationship|general","importance":0.0-1.0}
+  {"name":"short title","summary":"one sentence","content":"detailed memory","category":"identity|preference|project|interaction|relationship|general","importance":0.0-1.0,"evidenceText":"exact user quote"}
 - Return [] if nothing is worth storing.
 
 User:
@@ -2503,9 +2612,17 @@ ${assistantMessage || ''}
                 `.trim();
                 const result = await callLLM(provider, model, ollamaUrl, extractionPrompt, config);
                 const parsed = this.parseJsonBlock(result);
-                if (Array.isArray(parsed) && parsed.length > 0) {
+                if (!Array.isArray(parsed)) throw new Error('Memory extraction must return a JSON array');
+                extractionAccepted = true;
+                if (Array.isArray(parsed)) {
                     const llmCandidates = parsed
-                        .filter(item => item && item.name && item.content)
+                        .filter(item => {
+                            const valid = item && typeof item.name === 'string' && typeof item.content === 'string'
+                                && typeof item.evidenceText === 'string' && item.evidenceText.trim()
+                                && String(userMessage || '').includes(item.evidenceText);
+                            if (!valid) console.warn('[Memory] Rejected extraction candidate without a matching user quote');
+                            return valid;
+                        })
                         .map(item => ({
                             ...item,
                             auto: true,
@@ -2533,6 +2650,12 @@ ${assistantMessage || ''}
             .map(item => this.normalizePromotionCandidate({
                 ...item,
                 chatId,
+                provenance: {
+                    chatId,
+                    sourceRole: 'user',
+                    evidenceText: item.evidenceText || userMessage || '',
+                    observedAt: nowIso(),
+                },
                 turns: item.turns || 1,
             }, chatId));
 
@@ -2558,7 +2681,8 @@ ${assistantMessage || ''}
             ...proactiveSave.promotedCandidates.map(item => buildContentSignature(item.content || item.summary)),
         ].filter(Boolean));
 
-        const shortTermResult = chatId
+        // A successful empty extraction must not be bypassed by heuristic promotion.
+        const shortTermResult = chatId && !extractionAccepted
             ? await this.updateShortTermMemory(chatId, { userMessage, assistantMessage })
             : { buffered: [], flushed: [], sensory: this.captureSensorySnapshot({ userMessage, assistantMessage }) };
         const shortTermCandidates = [
@@ -2624,7 +2748,7 @@ ${assistantMessage || ''}
     }
 
     fallbackAutoMemories(userMessage = '', assistantMessage = '') {
-        const text = `${userMessage}\n${assistantMessage}`.trim();
+        const text = String(userMessage || '').trim();
         const candidates = [];
         const rules = [
             {

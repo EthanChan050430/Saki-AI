@@ -1,6 +1,6 @@
 import { applyTextStreamEvent } from '../utils/streamText';
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Play, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle, MessageSquare, ChevronRight, Clock, Loader2, Search, Palette, Brain, Server } from 'lucide-react';
+import { X, Play, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle, MessageSquare, ChevronRight, Clock, Loader2, Search, Brain, Server } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Chat from './Chat';
@@ -44,7 +44,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
     options: {
       useSearch: true,
       useMcp: false,
-      useSd: false,
       useMemory: true,
     },
   });
@@ -98,7 +97,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
           ollamaUrl: config.ollamaUrl,
           searchEnabled: options.useSearch !== undefined ? options.useSearch : true,
           mcpEnabled: options.useMcp || false,
-          useSd: options.useSd || false,
           useDeep: options.useWeb || false,
           usePpt: options.usePpt || false,
           useMemory: options.useMemory !== undefined ? options.useMemory : true,
@@ -247,7 +245,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
         options: {
           useSearch: true,
           useMcp: false,
-          useSd: false,
           useMemory: true,
         },
       });
@@ -388,27 +385,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                 />
                 <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1 p-1 bg-[var(--surface-bg)] backdrop-blur-sm rounded-lg border border-[var(--surface-border-subtle)] shadow-sm">
                   <button
-                    onClick={() => setNewTask(prev => ({ ...prev, options: { ...prev.options, useSearch: !prev.options.useSearch } }))}
-                    className={`p-1.5 rounded-md transition-all ${newTask.options.useSearch ? 'bg-saki-pink/15 text-[var(--accent-text)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-bg-light)]'}`}
-                    title={ui.featureSearch}
-                  >
-                    <Search size={16} />
-                  </button>
-                  <button
-                    onClick={() => setNewTask(prev => ({ ...prev, options: { ...prev.options, useMcp: !prev.options.useMcp } }))}
-                    className={`p-1.5 rounded-md transition-all ${newTask.options.useMcp ? 'bg-saki-pink/15 text-[var(--accent-text)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-bg-light)]'}`}
-                    title={ui.featureMcp}
-                  >
-                    <Server size={16} />
-                  </button>
-                  <button
-                    onClick={() => setNewTask(prev => ({ ...prev, options: { ...prev.options, useSd: !prev.options.useSd } }))}
-                    className={`p-1.5 rounded-md transition-all ${newTask.options.useSd ? 'bg-saki-pink/15 text-[var(--accent-text)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-bg-light)]'}`}
-                    title={ui.featureSd}
-                  >
-                    <Palette size={16} />
-                  </button>
-                  <button
                     onClick={() => setNewTask(prev => ({ ...prev, options: { ...prev.options, useMemory: !prev.options.useMemory } }))}
                     className={`p-1.5 rounded-md transition-all ${newTask.options.useMemory ? 'bg-saki-pink/15 text-[var(--accent-text)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-bg-light)]'}`}
                     title={ui.featureMemory}
@@ -450,9 +426,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                       </div>
                       <div className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)] mt-1.5 font-medium">
                         <div className="flex items-center gap-1 mr-1">
-                          {task.options?.useSearch && <Search size={10} className="text-[var(--accent-text)]" />}
-                          {task.options?.useMcp && <Server size={10} className="text-[var(--accent-text)]" />}
-                          {task.options?.useSd && <Palette size={10} className="text-pink-500" />}
                           {task.options?.useMemory && <Brain size={10} className="text-amber-500" />}
                         </div>
                         <span className={`capitalize px-2 py-0.5 rounded-full font-bold ${

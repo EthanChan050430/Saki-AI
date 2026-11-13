@@ -92,11 +92,22 @@ class MCPManager {
 
                 await connectWithTimeout();
                 
-                const toolsResponse = await client.listTools();
+                const tools = [];
+                const cursors = new Set();
+                let cursor;
+                do {
+                    const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+                    tools.push(...page.tools);
+                    cursor = page.nextCursor;
+                    if (cursor !== undefined) {
+                        if (cursors.has(cursor)) throw new Error('MCP tools/list returned a repeated cursor.');
+                        cursors.add(cursor);
+                    }
+                } while (cursor !== undefined);
                 const entry = {
                     client,
                     transport,
-                    tools: toolsResponse.tools,
+                    tools,
                     signature,
                     refCount: 0,
                     retired: false,
@@ -107,9 +118,9 @@ class MCPManager {
                 if (previous) this._retireEntry(previous);
                 this.serverStatus.set(name, { 
                     connected: true, 
-                    toolCount: toolsResponse.tools.length 
+                    toolCount: tools.length
                 });
-                console.log(`[MCP] Server ${name} initialized with ${toolsResponse.tools.length} tools`);
+                console.log(`[MCP] Server ${name} initialized with ${tools.length} tools`);
             } catch (error) {
                 console.error(`[MCP] Failed to initialize server ${name}:`, error.message);
                 
@@ -133,6 +144,9 @@ class MCPManager {
             }
         }
 
+        for (const name of this.serverStatus.keys()) {
+            if (!configuredNames.has(name)) this.serverStatus.delete(name);
+        }
         for (const [name, entry] of this.clients.entries()) {
             if (!configuredNames.has(name)) {
                 this.clients.delete(name);
@@ -177,6 +191,7 @@ class MCPManager {
     async closeAll() {
         return this._enqueueOperation(async () => {
             const closeOperations = [];
+            this.serverStatus.clear();
             for (const [name, entry] of this.clients.entries()) {
                 this.clients.delete(name);
                 this.serverStatus.delete(name);

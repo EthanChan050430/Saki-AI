@@ -25,9 +25,39 @@ function extractSearchTerms(text) {
                 const pair = word.slice(index, index + 2);
                 if (!STOP_WORDS.has(pair)) terms.push(pair);
             }
+
         } else terms.push(word);
     }
+
     return [...new Set(terms)];
+}
+
+const QUERY_DIMENSIONS = [
+    { pattern: /(?:比较|对比|compare|versus|\bvs\.?\b)/iu, label: '优缺点 性能 成本' },
+    { pattern: /(?:原因|为什么|为何|cause|why|reason)/iu, label: '原因 机制' },
+    { pattern: /(?:影响|后果|impact|effect|consequence)/iu, label: '影响 后果' },
+    { pattern: /(?:风险|安全|隐患|risk|safety)/iu, label: '风险 安全' },
+    { pattern: /(?:趋势|未来|预测|展望|trend|future|forecast)/iu, label: '趋势 最新进展' },
+    { pattern: /(?:证据|研究|数据|研究结果|evidence|study|data)/iu, label: '研究 数据 证据' },
+];
+
+function expandSearchQueries(query, options = {}) {
+    const original = String(query || '').replace(/\s+/gu, ' ').trim();
+    if (!original) return [];
+    const maxQueries = Math.min(8, Math.max(1, Math.floor(Number(options.maxQueries) || 4)));
+    const phrases = original.split(/[?？;；。\n]+/u).map(part => part.trim()).filter(part => part.length >= 4);
+    const queries = [original];
+    for (const dimension of QUERY_DIMENSIONS) {
+        if (queries.length >= maxQueries) break;
+        if (dimension.pattern.test(original)) {
+            const focused = `${original} ${dimension.label}`;
+            if (!queries.includes(focused)) queries.push(focused);
+        }
+    }
+    for (const phrase of phrases) {
+        if (phrase !== original && queries.length < maxQueries) queries.push(phrase);
+    }
+    return [...new Set(queries)].slice(0, maxQueries);
 }
 
 /** Preserve semantic parameters and non-default ports; reject credentials/non-web URLs. */
@@ -129,4 +159,4 @@ function rankSearchResults(results, query, options = {}) {
     return ranked;
 }
 
-module.exports = { rankSearchResults, scoreSearchRelevance, normalizeSearchUrl, extractSearchTerms };
+module.exports = { rankSearchResults, scoreSearchRelevance, normalizeSearchUrl, extractSearchTerms, expandSearchQueries };

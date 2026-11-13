@@ -74,6 +74,45 @@ Add new abilities to your AI workflow and take it all the way to your servers. T
 - **Extensible**: MCP, Skills, and a plugin marketplace. Optional QQ bot, Stable Diffusion and GPT-SoVITS voice.
 - **Lightweight**: one process, one port in production. Data lives in local JSON files, no database needed.
 
+### Memory correctness
+
+Explicit replacement (including edits through the memory API) replaces both the
+current content and summary. Previous content, summary and provenance remain in
+the record's `history` with validity timestamps; ordinary recall uses the current
+version. Replacement also resets derived tags, aliases and confidence instead of
+carrying stale metadata forward. This is not automatic semantic conflict resolution:
+records still match by name/slug, and the default merge behavior is unchanged.
+
+Automatic LLM extraction requires an exact supporting quote from the user message.
+Accepted captures retain the quote, chat ID, source role and observation time.
+Quote matching establishes traceability, not proof that the model's interpretation
+is correct. A successful empty extraction does not fall back to heuristic capture;
+failed extraction is logged and can still use user-only heuristics. When extraction
+succeeds, heuristic short-term promotion for that turn is skipped. Assistant text
+remains conversation context but does not generate short-term fact candidates.
+
+Malformed primary memory JSON stops reads/writes and legacy import with an error,
+rather than silently treating the store as empty. Restore a known-good backup
+before retrying. Existing records need no migration for these additive fields.
+Explicit `MemoryService` scopes use separate storage directories, including mirrors,
+working memory, queues and graphs. The default instance keeps the existing layout;
+request-level owner/project routing is not yet enabled by the server.
+Deletion persists a tombstone before cleaning matching queued/short-term copies and
+linked graph entries. Automatic writes and legacy imports cannot recreate matching
+deleted records; intentional restoration requires `restoreDeleted: true`.
+This matches names/identifiers/content signatures, not semantic paraphrases, and is
+not erasure of source conversations, working context, logs or unlinked graph facts.
+Offline long-term candidates now require an exact user-message quote and retain
+its provenance; this rule does not yet validate graph entities and relations.
+
+Search reads existing vectors without embedding every document. Writes update their
+own vectors; `rebuildVectorIndex()` explicitly fills missing/stale entries and removes
+orphans. Until rebuilt, legacy records without vectors use lexical retrieval.
+Core JSON stores use temporary-file replacement to avoid truncated destination
+files. This is not a multi-file transaction or protection against concurrent
+read-modify-write updates. SQLite migration, concurrency serialization, server-level
+scope routing and complete cross-layer forgetting remain follow-up work.
+
 ## Quick Start
 
 **Windows portable**: download `Saki-AI-3.0-win-x64.zip`, unzip, run `Saki-AI.exe`. Your browser opens http://127.0.0.1:5480. Add a model in Settings and you're set. Node.js is bundled.

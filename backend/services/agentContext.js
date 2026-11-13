@@ -1,3 +1,5 @@
+const { formatSteeringHistory } = require('./agentSteering');
+
 function estimateTokenCount(text = '') {
     const source = String(text || '');
     const cjkChars = (source.match(/[\u3400-\u9fff]/g) || []).length;
@@ -49,7 +51,7 @@ function buildBackgroundDigest({ olderMessages = [], previousSummary = '', curre
     const selected = [];
     for (let i = olderMessages.length - 1; i >= 0 && remaining > 80; i--) {
         const message = olderMessages[i];
-        const summary = summarizeMessage(message);
+        const summary = [formatSteeringHistory(message), summarizeMessage(message)].filter(Boolean).join('\n');
         if (!summary) continue;
         const entry = `- ${message.role || 'assistant'}: ${preview(summary, Math.min(1600, remaining - 2))}`;
         if (entry.length + 1 > remaining) break;

@@ -687,16 +687,15 @@ async function buildEditableSceneFromHtml(slideHtml, tempContainer) {
   };
 }
 
-export default function PPTView({ data, isEmbedded = true }) {
+export default function PPTView({ data, isEmbedded = true, onRevise, editingDisabled = false }) {
   const { t, i18n } = useTranslation();
   const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [activeStepIndex, setActiveStepIndex] = useState(() => {
-    // If we have data and it's already completed, start at page 1 (first slide) instead of page 0 (planning)
     const initialSteps = data?.steps || [];
     const initialStatus = data?.status || 'running';
     const isAllDone = initialSteps.length > 0 && initialSteps.every(s => s.status === 'completed' || s.status === 'success' || s.status === 'error');
     if ((initialStatus === 'completed' || isAllDone) && initialSteps.length > 1) {
-      return 1;
+      return Math.max(0, initialSteps.findIndex(step => step.content));
     }
     return 0;
   });
@@ -705,6 +704,12 @@ export default function PPTView({ data, isEmbedded = true }) {
   const [scale, setScale] = useState(0.5);
   const [downloading, setDownloading] = useState(false);
   const [editableDownloading, setEditableDownloading] = useState(false);
+  const [revisionInstruction, setRevisionInstruction] = useState('');
+  const [revising, setRevising] = useState(false);
+  const [revisionError, setRevisionError] = useState('');
+  const [imagePrompt, setImagePrompt] = useState('');
+  const [imageConfirmed, setImageConfirmed] = useState(false);
+  const imageRequestRef = useRef(null);
   const previewContainerRef = useRef(null);
 
   // Calculate if really running based on steps
@@ -725,6 +730,46 @@ export default function PPTView({ data, isEmbedded = true }) {
   }
 
   const activeStep = steps[activeStepIndex];
+  const imageSlots = activeStep?.content
+    ? Array.from(new DOMParser().parseFromString(activeStep.content, 'text/html').querySelectorAll('img[data-ppt-image-slot]')).map(el => el.getAttribute('data-ppt-image-slot'))
+    : [];
+  const editImage = async (prepare = false) => {
+    if (!onRevise || revising || editingDisabled) return;
+    setRevising(true);
+    setRevisionError('');
+    try {
+      if (prepare) {
+        await onRevise(activeStep.id, 'Prepare a left-text/right-image layout. Preserve all facts and citations, move text into x=48..480 without overlap. Reserve an image slot at x=520 y=120 width=380 height=300. Root must be position:relative with width:960px;height:540px. Add exactly one img with data-ppt-image-slot="hero", alt="Illustration placeholder", no src, and inline style="position:absolute;left:520px;top:120px;width:380px;height:300px;object-fit:contain;background:#e2e8f0". Do not generate an image yet. Keep content inside safe margins.', false);
+      } else {
+        const signature = JSON.stringify([activeStep.content, imagePrompt, imageSlots[0]]);
+        if (imageRequestRef.current?.signature !== signature) {
+          imageRequestRef.current = { signature, requestId: crypto.randomUUID() };
+        }
+        await onRevise(activeStep.id, '', false, {
+          slotId: imageSlots[0], prompt: imagePrompt, confirmed: imageConfirmed,
+          requestId: imageRequestRef.current.requestId,
+        });
+        setImageConfirmed(false);
+      }
+    } catch (error) {
+      setRevisionError(error.response?.data?.error || error.message);
+    } finally {
+      setRevising(false);
+    }
+  };
+  const reviseSlide = async (restore = false) => {
+    if (!onRevise || revising || editingDisabled || activeStep?.id == null) return;
+    setRevising(true);
+    setRevisionError('');
+    try {
+      await onRevise(activeStep.id, revisionInstruction, restore);
+      setRevisionInstruction('');
+    } catch (error) {
+      setRevisionError(error.response?.data?.error || error.message || tx('修改失败，请重试。', 'Revision failed. Please retry.', '変更に失敗しました。'));
+    } finally {
+      setRevising(false);
+    }
+  };
   const isFinalStep = Boolean(
     activeStep &&
     !activeStep.content &&
@@ -1011,7 +1056,7 @@ export default function PPTView({ data, isEmbedded = true }) {
     </button>
   );
 
-  if (isPreviewMode && finalHtml) {
+  if (isPreviewMode && steps.some(step => step.content)) {
     const previewView = (focusMode = false) => (
       <div className={`flex flex-col overflow-hidden bg-white shadow-2xl animate-in fade-in zoom-in duration-300 ${focusMode ? 'h-full rounded-[2rem]' : 'h-[600px] rounded-2xl border'}`}>
         <div className="px-4 py-2.5 border-b flex items-center justify-between bg-gradient-to-r from-orange-50 to-white shrink-0">
@@ -1149,11 +1194,40 @@ export default function PPTView({ data, isEmbedded = true }) {
         )}
       </div>
 
+      {onRevise && data.status === 'completed' && activeStep?.content && activeStep.id != null && (
+        <div className="mb-3 rounded-xl border border-orange-100 bg-orange-50/50 p-3">
+          <label className="block text-xs font-semibold text-orange-800 mb-2">
+            {tx('修改当前页 · 其他页面保持不变', 'Revise this slide · Other slides stay unchanged', 'このスライドのみ変更')}
+            <textarea value={revisionInstruction} onChange={event => setRevisionInstruction(event.target.value)} maxLength={4000} disabled={revising || editingDisabled}
+              placeholder={tx('例如：保留数据，改成左右对比布局，减少装饰。', 'Keep the data, use a comparison layout, reduce decoration.', 'データを保持して比較レイアウトに変更')}
+              className="mt-2 w-full rounded-lg border border-orange-200 bg-white p-2 text-sm text-gray-800" rows={2} />
+          </label>
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => reviseSlide(false)} disabled={revising || editingDisabled || !revisionInstruction.trim()} className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs text-white disabled:opacity-50">
+              {revising ? tx('修改并保存中...', 'Revising and saving...', '変更・保存中...') : tx('应用修改', 'Apply revision', '変更を適用')}
+            </button>
+            <button type="button" onClick={() => reviseSlide(true)} disabled={revising || editingDisabled || !activeStep.revisions?.length} className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs disabled:opacity-50">
+              {tx('恢复上一版', 'Restore previous version', '前の版に戻す')}
+            </button>
+            <span className="text-xs text-gray-500">{tx('最多保留最近 10 次修改', 'Keeps up to 10 revisions', '最大10件の変更を保持')}</span>
+          </div>
+          {revisionError && <p role="alert" className="mt-2 text-sm text-red-600">{revisionError}</p>}
+          <div className="mt-3 border-t border-orange-200 pt-3">
+            <p className="text-xs text-gray-600 mb-2">{tx('AI 配图：先预留右侧位置并检查布局，再生成一张图片。换图不改文字；恢复上一版可撤销。', 'AI illustration: prepare and review a right-side slot, then generate one image. Replacement preserves text; restore undoes it.', '右側の画像枠を準備・確認してから1枚生成します。')}</p>
+            {!imageSlots.length ? <button type="button" disabled={revising || editingDisabled} onClick={() => editImage(true)} className="rounded-lg border px-3 py-1.5 text-xs disabled:opacity-50">{tx('预留右侧配图位置', 'Prepare right-side image slot', '右側に画像枠を準備')}</button> : <>
+              <textarea aria-label={tx('图片描述', 'Image description', '画像の説明')} value={imagePrompt} onChange={event => { setImagePrompt(event.target.value); setImageConfirmed(false); }} maxLength={2000} rows={2} disabled={revising || editingDisabled} className="w-full rounded-lg border p-2 text-sm" placeholder={tx('只描述需要生成的场景，不要填写内部资料或敏感信息。', 'Describe the scene only. Do not include confidential information.', '機密情報を含めず場面を説明してください。')} />
+              <label className="block my-2 text-xs text-gray-600"><input type="checkbox" checked={imageConfirmed} onChange={event => setImageConfirmed(event.target.checked)} disabled={revising || editingDisabled} /> {tx('允许将此描述发送给设置中的生图服务，生成 1 张图；可能收费，费用由服务商决定。不会上传原稿或参考图。', 'Send this description to the configured image provider for one image. Provider charges may apply. No deck or reference images are uploaded.', '設定済み画像サービスに説明を送信します。料金が発生する場合があります。')}</label>
+              <button type="button" disabled={revising || editingDisabled || !imageConfirmed || !imagePrompt.trim()} onClick={() => editImage(false)} className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs text-white disabled:opacity-50">{tx('生成 / 替换配图', 'Generate / replace image', '画像を生成・置換')}</button>
+            </>}
+          </div>
+        </div>
+      )}
       <div className="flex flex-col h-full overflow-hidden">
         <div className="flex items-center gap-1 overflow-x-auto pb-2.5 mb-3 scrollbar-hide border-b border-gray-50">
           {steps.map((step, idx) => (
             <button
               key={idx}
+              disabled={revising}
               onClick={() => setActiveStepIndex(idx)}
               className={`flex flex-col items-center min-w-[72px] p-1.5 rounded-xl transition-all relative ${activeStepIndex === idx ? 'bg-orange-50 ring-1 ring-orange-200' : 'hover:bg-gray-50'}`}
             >

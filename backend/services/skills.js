@@ -610,6 +610,7 @@ class SkillService {
     }
 
     filterSkills(skills = [], options = {}) {
+        if (options.ids) skills = skills.filter(skill => options.ids.has(skill.id));
         if (options.enabledOnly) {
             return skills.filter(skill => skill.enabled !== false);
         }
@@ -775,8 +776,9 @@ class SkillService {
         ])).slice(0, 16);
     }
 
-    async upsertSkill({ name, content, description = '', sourceType = 'manual', source = '', tags = [], sourceMeta = null }) {
+    async upsertSkill({ name, content, description = '', sourceType = 'manual', source = '', tags = [], sourceMeta = null, sourceDirectory = null }) {
         const store = await this.loadStore();
+        const originalStore = JSON.parse(JSON.stringify(store));
         const safeName = sanitizeName(name);
         const normalizedSourceType = normalizeSourceType(sourceType);
         const isPlugin = normalizedSourceType === 'plugin';
@@ -792,8 +794,6 @@ class SkillService {
         const fileName = `${safeName}.md`;
         const skillDir = path.join(this.skillsDir, slug);
         const filePath = path.join(skillDir, 'SKILL.md');
-        await fs.ensureDir(skillDir);
-        await fs.writeFile(filePath, content, 'utf8');
 
         const existing = store.skills.find(skill => isPlugin
             ? skill.sourceType === 'plugin' && skill.sourceMeta?.pluginId === sourceMeta.pluginId && skill.sourceMeta?.skillDir === sourceMeta.skillDir
@@ -843,7 +843,53 @@ class SkillService {
             });
         }
 
-        await this.saveStore(store);
+        const staging = await fs.mkdtemp(path.join(this.skillsDir, '_install_'));
+        const staged = path.join(staging, 'new');
+        const backup = path.join(staging, 'backup');
+        let backedUp = false;
+        let replaced = false;
+        let storeWriteAttempted = false;
+        let restored = true;
+        try {
+            const copySource = sourceDirectory || (await fs.pathExists(skillDir) ? skillDir : null);
+            if (copySource) {
+                const root = await fs.realpath(copySource);
+                const relative = path.relative(root, staging);
+                if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) {
+                    throw new Error('Skill source cannot contain the installation staging directory.');
+                }
+                await fs.copy(root, staged, { filter: async file => {
+                    if (path.basename(file) === '.git') return false;
+                    const stat = await fs.lstat(file);
+                    if (stat.isSymbolicLink()) throw new Error(`Skill package contains a symbolic link: ${file}`);
+                    if (!stat.isFile() && !stat.isDirectory()) throw new Error(`Unsupported skill package entry: ${file}`);
+                    return true;
+                } });
+            } else {
+                await fs.ensureDir(staged);
+            }
+            await fs.writeFile(path.join(staged, 'SKILL.md'), content, 'utf8');
+            if (await fs.pathExists(skillDir)) {
+                await fs.move(skillDir, backup);
+                backedUp = true;
+            }
+            await fs.move(staged, skillDir);
+            replaced = true;
+            storeWriteAttempted = true;
+            await this.saveStore(store);
+        } catch (error) {
+            try {
+                if (replaced) await fs.remove(skillDir);
+                if (backedUp) await fs.move(backup, skillDir);
+                if (storeWriteAttempted) await this.saveStore(originalStore);
+            } catch (rollbackError) {
+                restored = false;
+                throw new AggregateError([error, rollbackError], `Skill installation rollback failed; recovery files retained at ${staging}`);
+            }
+            throw error;
+        } finally {
+            if (restored) await fs.remove(staging);
+        }
         if (previous && previous.path !== filePath) await this.removeSkillDirectory(previous, store.skills);
         return this.getSkill(slug);
     }
@@ -866,28 +912,28 @@ class SkillService {
 
     async installFromGit(repoUrl) {
         await this.init();
-        const tempDir = path.join(this.skillsDir, `_tmp_${Date.now()}`);
-        await execFileAsync('git', ['clone', '--depth', '1', repoUrl, tempDir], {
-            windowsHide: true,
-            maxBuffer: 4 * 1024 * 1024,
-        });
-        const skillFile = await this.findSkillFile(tempDir);
-        if (!skillFile) {
+        const tempDir = await fs.mkdtemp(path.join(this.skillsDir, '_git_'));
+        try {
+            await execFileAsync('git', ['clone', '--depth', '1', repoUrl, tempDir], {
+                windowsHide: true,
+                maxBuffer: 4 * 1024 * 1024,
+            });
+            const skillFile = await this.findSkillFile(tempDir);
+            if (!skillFile) throw new Error('No SKILL.md found in the repository.');
+            const content = await fs.readFile(skillFile, 'utf8');
+            const name = path.basename(path.dirname(skillFile)) === path.basename(tempDir)
+                ? path.basename(repoUrl).replace(/\.git$/i, '')
+                : path.basename(path.dirname(skillFile));
+            return await this.upsertSkill({
+                name,
+                content,
+                sourceType: 'git',
+                source: repoUrl,
+                sourceDirectory: path.dirname(skillFile),
+            });
+        } finally {
             await fs.remove(tempDir);
-            throw new Error('No SKILL.md found in the repository.');
         }
-        const content = await fs.readFile(skillFile, 'utf8');
-        const name = path.basename(path.dirname(skillFile)) === path.basename(tempDir)
-            ? path.basename(repoUrl).replace(/\.git$/i, '')
-            : path.basename(path.dirname(skillFile));
-        const skill = await this.upsertSkill({
-            name,
-            content,
-            sourceType: 'git',
-            source: repoUrl,
-        });
-        await fs.remove(tempDir);
-        return skill;
     }
 
     async installFromLocal(localPath) {
@@ -907,6 +953,7 @@ class SkillService {
             content,
             sourceType: 'local',
             source: resolved,
+            sourceDirectory: path.dirname(skillFile),
         });
     }
 

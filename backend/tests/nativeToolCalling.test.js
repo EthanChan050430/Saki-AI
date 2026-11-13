@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createToolRegistry } = require('../services/agentTools.js');
+const { createToolRegistry, parseToolCalls } = require('../services/agentTools.js');
 const { compactLoopMessages } = require('../services/agentContext.js');
 const {
     nativeToolsFromRegistry,
@@ -36,9 +36,62 @@ describe('agent system instructions', () => {
     it('preserves the text protocol when native tools are disabled', () => {
         assert.equal(buildAgentSystemText('System instructions', false), 'System instructions');
     });
+
+    it('switches protocols when native tool support changes between turns', () => {
+        const prompt = 'System instructions';
+        assert.match(buildAgentSystemText(prompt, true), /native function-calling channel/i);
+        assert.doesNotMatch(buildAgentSystemText(prompt, false), /native function-calling channel/i);
+    });
+});
+
+describe('legacy action parsing', () => {
+    it('parses positional and named arguments emitted by small Ollama models', () => {
+        const tools = registry();
+        const positional = parseToolCalls('listDir(".", 20, 0)', tools);
+        const named = parseToolCalls('Tool: listDir(path=".", limit=20, offset=0)', tools);
+        const namedRespond = parseToolCalls('Tool: respond(text="done")', tools);
+        const namedWrite = parseToolCalls('Tool: writeFile(path="notes.txt", content="hello")', tools);
+        const unknownReadArg = parseToolCalls('Tool: readFile(path="notes.txt", start=1)', tools);
+        assert.deepEqual(positional[0].parsedArgs, ['.', '20', '0']);
+        assert.deepEqual(named[0].parsedArgs, ['.', '20', '0', '']);
+        assert.deepEqual(namedRespond[0].parsedArgs, ['done']);
+        assert.deepEqual(namedWrite[0].parsedArgs, ['notes.txt', 'hello', '']);
+        assert.match(unknownReadArg[0].error, /Unknown or repeated argument/);
+    });
+
+    it('rejects unknown named arguments and ignores fenced examples', () => {
+        const tools = registry();
+        const [invalid] = parseToolCalls('Tool: listDir(path=".", surprise=1)', tools);
+        assert.match(invalid.error, /Unknown or repeated argument/);
+        assert.equal(parseToolCalls('```text\\nlistDir(".")\\n```', tools).length, 0);
+    });
+
+    it('parses multiline JSON arguments without splitting nested commas', () => {
+        const tools = registry();
+        const [call] = parseToolCalls('Tool: updateTodo({\n  "title": "Inspect",\n  "items": [{"id":"one", "text":"a,b", "status":"pending"}]\n})', tools);
+        assert.equal(call.parsedArgs.length, 1);
+        assert.doesNotThrow(() => JSON.parse(call.parsedArgs[0]));
+    });
 });
 
 describe('native tool schemas', () => {
+    it('offers autonomous web lookup even with legacy search disabled', () => {
+        for (const options of [{}, { searchEnabled: false }]) {
+            const tools = createToolRegistry(options);
+            const names = nativeToolsFromRegistry(tools).tools.map(tool => tool.function.name);
+            assert.ok(names.includes('search'));
+            assert.ok(names.includes('verifyClaim'));
+            assert.equal(parseToolCalls('Tool: search("latest release")', tools)[0].name, 'search');
+        }
+    });
+    it('offers drawing without a per-message toggle only when configured', () => {
+        const enabled = createToolRegistry({ drawingEnabled: true });
+        assert.ok(enabled.has('draw'));
+        assert.match(enabled.get('draw').description, /only when the user requests image creation/);
+        assert.ok(nativeToolsFromRegistry(enabled).tools.some(tool => tool.function.name === 'draw'));
+        assert.equal(createToolRegistry({ drawingEnabled: false }).has('draw'), false);
+    });
+
     it('skips aliases and keeps file content required', () => {
         const { tools, names } = nativeToolsFromRegistry(registry());
         assert.equal(tools.some(tool => tool.function.name === 'todo'), false);

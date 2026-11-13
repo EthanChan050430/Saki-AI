@@ -13,6 +13,7 @@ import {
   getProviderApiKey,
   getProviderBaseUrl,
   isApiProviderEnabled,
+  isChatProviderEnabled,
 } from '../utils/chatProviderConfig';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 import { CHAT_BACKGROUNDS, getChatBackgroundPreset, getChatBackgroundSource, selectChatBackground } from '../utils/chatAppearance';
@@ -51,6 +52,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [cacheCleanupMessage, setCacheCleanupMessage] = useState('');
   const [cacheCleanupError, setCacheCleanupError] = useState(false);
+  const [customDrawingModels, setCustomDrawingModels] = useState([]);
+  const [customDrawingModelsLoading, setCustomDrawingModelsLoading] = useState(false);
+  const [customDrawingModelsError, setCustomDrawingModelsError] = useState('');
+  const drawingModelsRequestRef = useRef(0);
+  const customDrawingConfigRef = useRef(config);
+  customDrawingConfigRef.current = config;
   const sovitsAudioInputRef = useRef(null);
   const offlineReflectionModels = Array.isArray(models)
     ? models.filter((model) => ['ollama', 'lmstudio'].includes(model?.provider))
@@ -73,6 +80,52 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     if (provider === 'lmstudio') return 'LMStudio';
     return 'Ollama';
   };
+
+  const refreshCustomDrawingModels = async () => {
+    const requestId = ++drawingModelsRequestRef.current;
+    const customDrawingUrl = String(config.customDrawingUrl || '').trim();
+    const customDrawingKey = String(config.customDrawingKey || '').trim();
+    if (!customDrawingUrl || !customDrawingKey) {
+      setCustomDrawingModels([]);
+      setCustomDrawingModelsError('');
+      setCustomDrawingModelsLoading(false);
+      return;
+    }
+
+    setCustomDrawingModelsLoading(true);
+    setCustomDrawingModelsError('');
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/drawing/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'custom',
+          customDrawingUrl,
+          customDrawingKey,
+          customDrawingModel: customDrawingConfigRef.current.customDrawingModel || '',
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (!result.connected) throw new Error(result.error || getLocalText('获取模型列表失败', 'Failed to load models', 'モデル一覧を取得できませんでした'));
+      if (requestId !== drawingModelsRequestRef.current) return;
+      setCustomDrawingModels(Array.isArray(result.models) ? result.models : []);
+    } catch (error) {
+      if (requestId !== drawingModelsRequestRef.current) return;
+      setCustomDrawingModelsError(error.message || getLocalText('获取模型列表失败', 'Failed to load models', 'モデル一覧を取得できませんでした'));
+    } finally {
+      if (requestId === drawingModelsRequestRef.current) setCustomDrawingModelsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (config.drawingProvider !== 'custom') return undefined;
+    const timer = window.setTimeout(refreshCustomDrawingModels, 500);
+    return () => {
+      window.clearTimeout(timer);
+      drawingModelsRequestRef.current += 1;
+    };
+  }, [config.drawingProvider, config.customDrawingUrl, config.customDrawingKey]);
 
   const refreshSovitsModels = async () => {
     setIsRefreshingModels(true);
@@ -311,19 +364,32 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </h4>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {CHAT_PROVIDER_OPTIONS.map(p => (
-                <button 
-                  key={p.id}
+                <div key={p.id} className="relative">
+                <button
                   onClick={() => setConfig({...config, provider: p.id})}
-                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-[#ff75ac] bg-[#ff75ac]/10 dark:bg-[#ff75ac]/15' : 'border-[var(--surface-border-subtle)]  hover:border-[#ff75ac]/40 '}`}
+                  className={`w-full p-3 pb-10 border-2 rounded-xl text-left transition-all ${config.provider === p.id ? 'border-[#ff75ac] bg-[#ff75ac]/10 dark:bg-[#ff75ac]/15' : 'border-[var(--surface-border-subtle)]  hover:border-[#ff75ac]/40 '}`}
                 >
                   <div className="flex items-center gap-1.5">
                     <div className="min-w-0 flex-1 font-bold text-[var(--text-dark)]  text-sm whitespace-nowrap overflow-hidden text-ellipsis">{getChatProviderName(p.id, i18n.resolvedLanguage || i18n.language)}</div>
-                    {isApiProviderEnabled(config, p.id) && (
+                    {isChatProviderEnabled(config, p.id) && (
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
                     )}
                   </div>
                   <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 line-clamp-1">{getProviderSubText(p)}</div>
                 </button>
+                <button
+                  type="button" role="switch"
+                  aria-checked={isChatProviderEnabled(config, p.id)}
+                  aria-label={`${getChatProviderName(p.id, i18n.resolvedLanguage || i18n.language)} ${getLocalText('启用', 'Enabled', '有効')}`}
+                  onClick={() => setConfig(prev => ({ ...prev, providerEnabled: {
+                    ...Object.fromEntries(CHAT_PROVIDER_OPTIONS.map(({ id }) => [id, isChatProviderEnabled(prev, id)])),
+                    [p.id]: !isChatProviderEnabled(prev, p.id),
+                  } }))}
+                  className={`absolute bottom-3 right-3 w-10 h-5 rounded-full ${isChatProviderEnabled(config, p.id) ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
+                >
+                  <span className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${isChatProviderEnabled(config, p.id) ? 'left-6' : 'left-1'}`} />
+                </button>
+                </div>
               ))}
             </div>
 
@@ -366,8 +432,8 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </div>
                 <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">
                   {getLocalText(
-                    `开启后，顶部模型列表会拉取所有已填写 Key 的 API 模型。当前已启用 ${configuredApiCount} 个 API。`,
-                    `When enabled, the top model list fetches models from every API with a saved key. ${configuredApiCount} API(s) enabled.`
+                    `开启后，顶部模型列表会拉取所有开关已开启的 API 模型。当前已启用 ${configuredApiCount} 个 API。关闭服务商会保留密钥，但停止获取并隐藏其模型。`,
+                    `Fetch models from all APIs enabled by their switches. ${configuredApiCount} API(s) enabled. Disabling a provider keeps credentials but stops fetching and hides its models.`
                   )}
                 </div>
               </div>
@@ -665,14 +731,28 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('模型 ID', 'Model ID', 'モデル ID')}</label>
-                        <input 
-                          type="text"
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider">{getLocalText('模型 ID', 'Model ID', 'モデル ID')}</label>
+                          <button type="button" onClick={refreshCustomDrawingModels} disabled={customDrawingModelsLoading || !config.customDrawingUrl || !config.customDrawingKey} className="text-[10px] text-[var(--text-secondary)] disabled:opacity-50 flex items-center gap-1">
+                            <RefreshCw size={12} className={customDrawingModelsLoading ? 'animate-spin' : ''} />
+                            {getLocalText('刷新模型', 'Refresh models', 'モデルを更新')}
+                          </button>
+                        </div>
+                        <select
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
-                          placeholder="dall-e-3"
                           value={config.customDrawingModel || ''}
                           onChange={(e) => setConfig({...config, customDrawingModel: e.target.value})}
-                        />
+                        >
+                          <option value="">{customDrawingModelsLoading ? getLocalText('正在获取模型...', 'Loading models...', 'モデルを取得中...') : getLocalText('选择模型 ID', 'Select a model ID', 'モデル ID を選択')}</option>
+                          {config.customDrawingModel && !customDrawingModels.includes(config.customDrawingModel) && (
+                            <option value={config.customDrawingModel}>{config.customDrawingModel} ({getLocalText('当前配置，不在最新列表中', 'current, not in latest list', '現在の設定、最新一覧にありません')})</option>
+                          )}
+                          {customDrawingModels.map((modelId) => <option key={modelId} value={modelId}>{modelId}</option>)}
+                        </select>
+                        {customDrawingModelsError && <p role="alert" className="text-[10px] text-red-500 mt-1">{customDrawingModelsError}</p>}
+                        {!customDrawingModelsError && !customDrawingModelsLoading && customDrawingModels.length === 0 && config.customDrawingUrl && config.customDrawingKey && (
+                          <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{getLocalText('未发现可用模型', 'No available models found', '利用可能なモデルがありません')}</p>
+                        )}
                       </div>
                       <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{t('custom_drawing_tip')}</p>
                     </div>

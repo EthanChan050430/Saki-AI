@@ -19,12 +19,14 @@ import { useTranslation } from 'react-i18next';
 import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes } from 'lucide-react';
 import { BACKEND_URL } from './utils/backendUrl';
 import { applyTextStreamEvent } from './utils/streamText';
+import { mergeModelCatalog, startModelRefresh } from './utils/modelRefresh';
 import {
   API_CHAT_PROVIDER_IDS,
   API_PROVIDER_DEFAULTS,
   getProviderApiKey,
   getProviderBaseUrl,
   migrateApiProviderConfig,
+  isChatProviderEnabled,
 } from './utils/chatProviderConfig';
 import { getTiledWindowMotion, tiledOverlayMotion } from './utils/modalMotion';
 import { getChatBackgroundSource } from './utils/chatAppearance';
@@ -57,7 +59,6 @@ const CHARACTER_ACTIVITY_ANIMATIONS = new Set([
 function getCharacterActivityAnimation(options = {}) {
   if (options.useStoryGlass) return 'bartending';
   if (options.usePpt) return 'presenting';
-  if (options.useTruthCheck) return 'truth_checking';
   if (options.useWeb) return 'busy';
   return 'thinking';
 }
@@ -293,19 +294,12 @@ function mapCatalogModels(items = [], provider = '') {
 
 function getConfiguredApiProvidersForModels(config = {}) {
   return API_CHAT_PROVIDER_IDS.filter(provider => {
-    const isCurrentProvider = config.provider === provider;
-    if (provider === 'custom') {
-      const hasBaseUrl = Boolean(getProviderBaseUrl(config, provider).trim());
-      const hasApiKey = Boolean(getProviderApiKey(config, provider).trim());
-      return isCurrentProvider || (config.showAllEnabledApiModels && hasBaseUrl && hasApiKey);
-    }
-
-    const hasApiKey = Boolean(getProviderApiKey(config, provider).trim());
-    return isCurrentProvider || (config.showAllEnabledApiModels && hasApiKey);
+    return isChatProviderEnabled(config, provider) && (config.provider === provider || config.showAllEnabledApiModels);
   });
 }
 
 function ensureCurrentModelInCatalog(models = [], config = {}) {
+  if (!isChatProviderEnabled(config, config.provider)) return models;
   const normalizedProvider = config.provider || 'ollama';
   const normalizedModel = normalizedProvider === 'copilot'
     ? normalizeCopilotModelName(config.model)
@@ -443,9 +437,7 @@ function createOptimisticAssistantMessage(id, options = {}) {
   let placeholderMode = 'chat';
   if (options.useWeb) placeholderMode = 'research';
   else if (options.usePpt) placeholderMode = 'ppt';
-  else if (options.useTruthCheck) placeholderMode = 'credibility';
   else if (options.useStoryGlass) placeholderMode = 'story-glass';
-  else if (options.useSd) placeholderMode = 'image';
 
   return {
     role: 'assistant',
@@ -971,40 +963,18 @@ function App() {
     }
   }, [currentChatId]);
 
-  const exportToImage = async () => {
-    if (!chatContainerRef.current) return;
-
-    const element = chatContainerRef.current;
-
+  const [isExporting, setIsExporting] = useState(false);
+  const handleConversationExport = async (format) => {
+    if (isExporting || !messages.length) return;
+    setIsExporting(true);
     try {
-      const { default: html2canvas } = await import('html2canvas');
-      const canvas = await html2canvas(element, {
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        scale: 2,
-        onclone: (clonedDoc) => {
-          const clonedElement = clonedDoc.getElementById('chat-messages-container');
-          if (clonedElement) {
-            clonedElement.style.height = 'auto';
-            clonedElement.style.maxHeight = 'none';
-            clonedElement.style.overflow = 'visible';
-            const anchor = clonedElement.lastElementChild;
-            if (anchor && anchor.tagName === 'DIV' && !anchor.innerHTML) {
-              anchor.style.display = 'none';
-            }
-          }
-        }
-      });
-
-      const image = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = image;
-      link.download = `chat-export-${Date.now()}.png`;
-      link.click();
-    } catch (err) {
-      console.error('Export failed:', err);
-      alert(t('export_fail'));
+      const { exportConversation } = await import('./utils/chatExport');
+      await exportConversation(messages, format, BACKEND_URL);
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert(`${t('export_fail')}: ${error.message}`);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -1432,6 +1402,7 @@ function App() {
   }, [deepReadingData]);
 
   useEffect(() => {
+    if (!isConfigLoaded) return;
     localStorage.removeItem('agent_models_combined');
     localStorage.removeItem('agent_models_combined_v3');
     let cachedModels = [];
@@ -1442,6 +1413,7 @@ function App() {
         cachedModels = dedupeModels(
           (Array.isArray(parsedCachedModels) ? parsedCachedModels : [])
             .filter(model => model && typeof model === 'object' && model.provider && model.name)
+            .filter(model => isChatProviderEnabled(config, model.provider))
             .map(decorateModel)
         );
         setModels(cachedModels);
@@ -1452,28 +1424,31 @@ function App() {
 
     const fetchAllModels = async () => {
       let combinedModels = [];
+      const refreshedProviders = new Set();
 
-      try {
+      if (isChatProviderEnabled(config, 'ollama')) try {
         const ollamaRes = await axios.get(`${BACKEND_URL}/api/models`, {
           params: { ollamaUrl: config.ollamaUrl }
         });
         const ollamaModels = mapCatalogModels(ollamaRes.data || [], 'ollama');
         combinedModels = [...combinedModels, ...ollamaModels];
+        refreshedProviders.add('ollama');
       } catch (err) {
         console.error('Failed to fetch Ollama models:', err);
       }
 
-      try {
+      if (isChatProviderEnabled(config, 'lmstudio')) try {
         const lmstudioRes = await axios.get(`${BACKEND_URL}/api/lmstudio/models`, {
           params: { lmstudioUrl: config.lmstudioUrl }
         });
         const lmstudioModels = mapCatalogModels(lmstudioRes.data || [], 'lmstudio');
         combinedModels = [...combinedModels, ...lmstudioModels];
+        refreshedProviders.add('lmstudio');
       } catch (err) {
         console.error('Failed to fetch LMStudio models:', err);
       }
 
-      if (config.copilotToken || config.provider === 'copilot') {
+      if (isChatProviderEnabled(config, 'copilot')) {
         try {
           const githubRes = await axios.get(`${BACKEND_URL}/api/github/models`, {
             params: { token: config.copilotToken || '' }
@@ -1491,17 +1466,9 @@ function App() {
             });
           });
           combinedModels = [...combinedModels, ...githubModels];
+          refreshedProviders.add('copilot');
         } catch (err) {
           console.error('Failed to fetch GitHub models:', err);
-          const fallbackGithub = [
-            decorateModel({ name: 'gpt-5-mini', label: 'OpenAI GPT-5 mini', provider: 'copilot' }),
-            decorateModel({ name: 'gpt-5.4', label: 'OpenAI GPT-5.4', provider: 'copilot' }),
-            decorateModel({ name: 'gpt-4o', label: 'OpenAI GPT-4o', provider: 'copilot' }),
-            decorateModel({ name: 'gemini-3-flash', label: 'Google Gemini 3 Flash', provider: 'copilot' }),
-            decorateModel({ name: 'claude-sonnet-4.5', label: 'Anthropic Claude Sonnet 4.5', provider: 'copilot' }),
-            decorateModel({ name: 'claude-opus-4.5', label: 'Anthropic Claude Opus 4.5', provider: 'copilot' }),
-          ];
-          combinedModels = [...combinedModels, ...fallbackGithub];
         }
       }
 
@@ -1524,6 +1491,7 @@ function App() {
           const provider = apiProvidersToFetch[index];
           if (result.status === 'fulfilled') {
             combinedModels = [...combinedModels, ...result.value];
+            refreshedProviders.add(provider);
           } else {
             console.error(`Failed to fetch ${provider} models:`, result.reason);
           }
@@ -1531,16 +1499,15 @@ function App() {
       }
 
       combinedModels = ensureCurrentModelInCatalog(
-        dedupeModels([...combinedModels, ...cachedModels]),
+        dedupeModels(mergeModelCatalog(combinedModels, cachedModels, refreshedProviders)),
         config
       );
 
       if (isCancelled) return;
+      cachedModels = combinedModels;
 
-      if (combinedModels.length > 0) {
-        setModels(combinedModels);
-        localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(combinedModels));
-      }
+      setModels(combinedModels);
+      localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(combinedModels));
 
       if (combinedModels.length > 0) {
         const isCurrentModelDrawing = config.drawingModel === config.model && config.drawingProvider === config.provider;
@@ -1564,13 +1531,18 @@ function App() {
       }
     };
 
-    const timeoutId = setTimeout(fetchAllModels, MODEL_FETCH_DEBOUNCE_MS);
+    const stopRefresh = startModelRefresh({
+      refresh: fetchAllModels,
+      onError: error => console.error('Failed to refresh model catalog:', error),
+      window, document, delayMs: MODEL_FETCH_DEBOUNCE_MS,
+    });
 
     return () => {
       isCancelled = true;
-      clearTimeout(timeoutId);
+      stopRefresh();
     };
   }, [
+    isConfigLoaded,
     config.ollamaUrl,
     config.lmstudioUrl,
     config.copilotToken,
@@ -1589,6 +1561,7 @@ function App() {
     config.tongyiApiKey,
     config.doubaoApiKey,
     config.showAllEnabledApiModels,
+    config.providerEnabled,
     config.provider,
     config.model,
     config.drawingModel,
@@ -1631,9 +1604,32 @@ function App() {
     }
   };
 
-  const rollbackAssistantEffects = async (assistantMessage) => {
+  const rollbackAssistantEffects = async (assistantMessage, userMessage, action = 'edit') => {
+    if (userMessage?.checkpoint?.id && currentChatId) {
+      const actionLabel = action === 'edit' ? getLocalText('编辑', 'edit') : action === 'redo' ? getLocalText('重做', 'redo') : getLocalText('删除', 'delete');
+      if (!window.confirm(getLocalText(
+        `继续${actionLabel}将撤回此轮及之后的对话，并完整恢复工作区文件和目录（包括终端修改与删除）；不会影响 Git 元数据、工作区外文件或会话记录。此操作不可直接撤销，确定继续吗？`,
+        `Continuing will rewind this turn and later conversation and fully restore workspace files and folders, including terminal edits and deletions. Git metadata, files outside the workspace, and session records are excluded. This cannot be directly undone. Continue?`
+      ))) return false;
+      try {
+        const result = await restoreCheckpoint(BACKEND_URL, currentChatId, userMessage.checkpoint.id);
+        setMessages(result.messages);
+        latestMessagesRef.current = result.messages;
+        setCurrentPendingRequest(null);
+        setContextStatus(calculateContextStatusFromMessages(result.messages, config));
+        refreshHistory();
+        return true;
+      } catch (error) {
+        window.alert(`${getLocalText('工作区还原失败，对话未撤回', 'Workspace restore failed; the conversation was not rewound')}: ${error.message}`);
+        return false;
+      }
+    }
     const payloads = createRollbackPayloads(assistantMessage);
     if (payloads.length === 0) return true;
+    if (!window.confirm(getLocalText(
+      '继续操作将尝试回溯此轮产生的文件更改，但旧对话没有完整工作区检查点，无法保证恢复目录操作或终端更改。确定继续吗？',
+      'Continue to roll back file changes from this turn? This older conversation has no full workspace checkpoint, so directory operations and terminal changes cannot be guaranteed to be restored.'
+    ))) return false;
 
     const results = await Promise.allSettled(
       payloads.map(payload => axios.post(`${BACKEND_URL}/api/files/rollback`, payload))
@@ -1714,15 +1710,22 @@ function App() {
     const isCurrent = () => epochCurrent() && currentChatIdRef.current === chatId;
     queueStore.pause(chatId, '后台运行恢复中；结束后请确认记录并继续队列。');
     if (bgPollRef.current) clearInterval(bgPollRef.current);
-    bgPollRef.current = setInterval(() => {
+    let pollInFlight = false;
+    const poll = setInterval(() => {
       if (!isCurrent()) {
-        clearInterval(bgPollRef.current);
-        bgPollRef.current = null;
+        clearInterval(poll);
+        if (bgPollRef.current === poll) bgPollRef.current = null;
         return;
       }
-      axios.get(`${BACKEND_URL}/api/history/${chatId}`)
-        .then(response => {
-          if (!isCurrent() || runningRef.current) return null;
+      if (pollInFlight) return;
+      pollInFlight = true;
+      Promise.allSettled([
+        axios.get(`${BACKEND_URL}/api/history/${chatId}`),
+        axios.get(`${BACKEND_URL}/api/chat/running`),
+      ]).then(([historyResult, runningResult]) => {
+        if (!isCurrent()) return;
+        if (historyResult.status === 'fulfilled' && !runningRef.current) {
+          const response = historyResult.value;
           const msgs = response.data.messages || [];
           setMessages(msgs);
           latestMessagesRef.current = msgs;
@@ -1730,18 +1733,21 @@ function App() {
           setCurrentPendingRequest(response.data.pendingRequest || null);
           const cs = calculateContextStatusFromMessages(msgs, configRef.current);
           setContextStatus(cs);
-          return axios.get(`${BACKEND_URL}/api/chat/running`);
-        })
-        .then(r => {
-          if (!isCurrent()) return;
-          if (r && !(r.data.running || []).includes(chatId)) {
+        } else if (historyResult.status === 'rejected') {
+          console.warn('Failed to refresh chat while recovering background run:', historyResult.reason);
+        }
+        if (runningResult.status === 'fulfilled' && !(runningResult.value.data.running || []).includes(chatId)) {
+          if (bgPollRef.current === poll) {
             setIsGenerating(false);
-            clearInterval(bgPollRef.current);
+            clearInterval(poll);
             bgPollRef.current = null;
           }
-        })
-        .catch(() => {});
+        }
+      }).finally(() => {
+        pollInFlight = false;
+      });
     }, 1500);
+    bgPollRef.current = poll;
   };
 
   const confirmLeaveActiveResearch = () => true;
@@ -1751,9 +1757,7 @@ function App() {
       ? 'deep-reading'
       : (options.usePpt
         ? 'ppt'
-        : (options.useTruthCheck
-          ? 'credibility-check'
-          : (options.useStoryGlass ? 'story-glass' : 'chat'))),
+        : (options.useStoryGlass ? 'story-glass' : 'chat')),
     message: text,
     assistantMsgId,
     uploadedFiles: files,
@@ -1763,10 +1767,8 @@ function App() {
       useSearch: Boolean(options.useSearch),
       useWeb: Boolean(options.useWeb),
       useMcp: Boolean(options.useMcp),
-      useSd: Boolean(options.useSd),
       useMemory: Boolean(options.useMemory),
       usePpt: Boolean(options.usePpt),
-      useTruthCheck: Boolean(options.useTruthCheck),
       useStoryGlass: Boolean(options.useStoryGlass),
       storyGlassOverlay: Boolean(options.storyGlassOverlay),
       storyGlassPreferences: options.storyGlassPreferences || null
@@ -1928,10 +1930,8 @@ function App() {
           ollamaUrl: config.ollamaUrl,
           searchEnabled: options.useSearch || false,
           mcpEnabled: options.useMcp || false,
-          useSd: options.useSd || false,
           useDeep: options.useWeb || false,
           usePpt: options.usePpt || false,
-          useTruthCheck: options.useTruthCheck || false,
           useStoryGlass: options.useStoryGlass || false,
           storyGlassPreferences: options.storyGlassPreferences || null,
           useMemory: options.useMemory || false,
@@ -2048,7 +2048,7 @@ function App() {
             if (data.type === 'storyGlass' || data.storyGlass) {
               const storyGlassData = data.storyGlass || data;
               const generatedFile = storyGlassData.generatedFile || data.generatedFile;
-              if (isCompletedStoryGlassPayload(storyGlassData)) {
+              if (storyGlassData.presentation !== 'agent' && isCompletedStoryGlassPayload(storyGlassData)) {
                 startStoryGlassTastingAnimation();
               }
               setMessages(prevMsgs => {
@@ -2130,7 +2130,7 @@ function App() {
       if (activityAnimation === 'thinking') {
         setCurrentExpression('normal.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
-      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
+      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt) {
         setCurrentExpression('ok.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       }
@@ -2237,7 +2237,7 @@ function App() {
     if (!group) return;
 
     if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage);
+      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
       if (!didRollback) return;
     }
 
@@ -2261,7 +2261,7 @@ function App() {
     if (!group) return false;
 
     if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage);
+      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
       if (!didRollback) return false;
     }
 
@@ -2282,7 +2282,7 @@ function App() {
     if (!group?.userMessage) return;
 
     if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage);
+      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'edit');
       if (!didRollback) return;
     }
 
@@ -2298,6 +2298,34 @@ function App() {
       files: Array.isArray(group.userMessage.attachedFiles) ? group.userMessage.attachedFiles : [],
       timestamp: Date.now()
     });
+  };
+
+  const handleRevisePpt = async (messageId, slideId, instruction, restore = false, imageRequest = null) => {
+    const chatId = currentChatIdRef.current;
+    if (!chatId || runningRef.current) throw new Error(getLocalText('请等待当前生成结束后再修改。', 'Wait for the current generation to finish.'));
+    const original = latestMessagesRef.current.find(message => message.id === messageId);
+    if (!original?.pptData) throw new Error(getLocalText('找不到演示稿。', 'Presentation not found.'));
+    const response = await axios.post(`${BACKEND_URL}/api/ppt/${imageRequest ? 'image' : 'revise'}`, {
+      data: original.pptData, slideId, instruction, restore, config, ...imageRequest,
+    });
+    if (currentChatIdRef.current !== chatId || runningRef.current
+        || latestMessagesRef.current.find(message => message.id === messageId) !== original) {
+      throw new Error(getLocalText('对话已变化，本次修改未保存，请重试。', 'The conversation changed. Revision was not saved; please retry.'));
+    }
+    const updated = { ...original, pptData: response.data.pptData, generatedFiles: [] };
+    const nextMessages = latestMessagesRef.current.map(message => message.id === messageId ? updated : message);
+    latestMessagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    try {
+      await persistChatState(chatId, nextMessages, currentPendingRequest);
+    } catch (error) {
+      if (currentChatIdRef.current === chatId) {
+        const reverted = latestMessagesRef.current.map(message => message === updated ? original : message);
+        latestMessagesRef.current = reverted;
+        setMessages(reverted);
+      }
+      throw error;
+    }
   };
 
   const handleUpdateMessageText = (idx, newText) => {
@@ -2394,10 +2422,8 @@ function App() {
           ollamaUrl: config.ollamaUrl,
           searchEnabled: options.useSearch || false,
           mcpEnabled: options.useMcp || false,
-          useSd: options.useSd || false,
           useDeep: options.useWeb || false,
           usePpt: options.usePpt || false,
-          useTruthCheck: options.useTruthCheck || false,
           useStoryGlass: options.useStoryGlass || false,
           storyGlassPreferences: options.storyGlassPreferences || null,
           useMemory: options.useMemory || false,
@@ -2552,7 +2578,7 @@ function App() {
             if (data.type === 'storyGlass' || data.storyGlass) {
               const storyGlassData = data.storyGlass || data;
               const generatedFile = storyGlassData.generatedFile || data.generatedFile;
-              if (isCompletedStoryGlassPayload(storyGlassData)) {
+              if (storyGlassData.presentation !== 'agent' && isCompletedStoryGlassPayload(storyGlassData)) {
                 startStoryGlassTastingAnimation();
               }
               setMessages(prevMsgs => {
@@ -2714,7 +2740,7 @@ function App() {
       if (activityAnimation === 'thinking') {
         setCurrentExpression('normal.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
-      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt || options.useTruthCheck) {
+      } else if ((options.useStoryGlass && !keepStoryGlassTasting) || options.useWeb || options.usePpt) {
         setCurrentExpression('ok.png');
         setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       }
@@ -2768,6 +2794,10 @@ function App() {
   const sendMessageWithContext = async ({ text, files = [], options = {}, baseMessages = null }) => {
     if (runningRef.current || bgPollRef.current || loadingChatRef.current || checkpointRestoreRef.current) return false;
     const config = getDispatchConfig(configRef, options);
+    if (!isChatProviderEnabled(config, config.provider)) {
+      window.alert(getLocalText('该服务商已关闭，请先在设置中开启。', 'This provider is disabled. Enable it in Settings first.'));
+      return false;
+    }
 
     let activeChatId = currentChatIdRef.current;
     if (!activeChatId) {
@@ -2782,10 +2812,8 @@ function App() {
       useSearch: Boolean(options.useSearch),
       useWeb: Boolean(options.useWeb),
       useMcp: Boolean(options.useMcp),
-      useSd: Boolean(options.useSd),
       useMemory: Boolean(options.useMemory),
       usePpt: Boolean(options.usePpt),
-      useTruthCheck: Boolean(options.useTruthCheck),
       useStoryGlass: Boolean(options.useStoryGlass),
       storyGlassOverlay: Boolean(options.storyGlassOverlay),
       storyGlassPreferences: options.storyGlassPreferences || null
@@ -2986,7 +3014,7 @@ function App() {
     if (!group?.userMessage) return;
 
     if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage);
+      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'redo');
       if (!didRollback) return;
     }
 
@@ -3525,7 +3553,8 @@ function App() {
         <Header
           toggleSidebar={() => setSidebarOpen(!isSidebarOpen)}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-          onExport={exportToImage}
+          onExport={handleConversationExport}
+          isExporting={isExporting}
           isMusicPlaying={isMusicPlaying}
           onToggleMusic={toggleMusicMode}
           hasMessages={messages.length > 0}
@@ -3573,6 +3602,7 @@ function App() {
                onDeleteStoryGlassRecord={handleDeleteStoryGlassRecord}
                onEditMessage={handleEditMessage}
                onUpdateMessageText={handleUpdateMessageText}
+               onRevisePpt={handleRevisePpt}
                onOpenFileManager={() => openFileManagerModal('select')}
                onOpenSettings={openSettingsModal}
                externalFile={selectedWorkspaceFile}

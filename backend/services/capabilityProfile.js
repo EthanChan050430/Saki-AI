@@ -66,7 +66,7 @@ function buildCapabilityProfile({
         : 'available, but not active in this chat unless the user turns memory on or explicitly asks you to remember something';
     const mcpState = mcpEnabled
         ? `enabled in this chat with ${mcpToolCount} loaded MCP tool${mcpToolCount === 1 ? '' : 's'}`
-        : 'available if the user enables MCP and configures servers';
+        : 'available by selecting configured servers with @ in the composer';
     const musicState = config?.musicEnabled === false
         ? 'disabled in settings'
         : 'enabled for short instrumental MIDI sketches such as BGM, loops, and melody ideas';
@@ -94,7 +94,7 @@ function buildCapabilityProfile({
         `- Drawing: ${getDrawingCapabilityState(config)}.`,
         `- Instrumental music: ${musicState}.`,
         `- Voice output: ${getTtsCapabilityState(config)}.`,
-        '- Skills: search installed skills, read their workflows, and install extra skills from OpenHub when useful.',
+        '- Skills: select installed skills with @ for this message; only selected skills can be searched or read in this turn.',
         '- Hosted tasks: schedule one-off or recurring agent jobs.',
         `- QQ bridge: ${getQqBridgeCapabilityState(config)}.`,
         '',

@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Plus, Paperclip, ChevronDown, ChevronUp, Bot, User, Terminal, Square, Search, Globe, Server, Palette, Download, Activity, Share2, Copy, Volume2, RotateCcw, Check, X, FileDiff, Undo2, HardDrive, Brain, Presentation, Mic, MicOff, FileText, Shield, Music2, Play, Pause, Trash2, PencilLine, Sparkles, ListChecks, Cpu, ArrowLeft, Image, ArrowUp, Feather, BookOpen, ArrowUpRight } from 'lucide-react';
+import { Plus, Paperclip, ChevronDown, ChevronUp, Bot, User, Terminal, Square, Search, Globe, Server, Download, Activity, Copy, Volume2, RotateCcw, Check, X, FileDiff, Undo2, HardDrive, Brain, Presentation, Mic, MicOff, FileText, Shield, Music2, Play, Pause, Trash2, PencilLine, Sparkles, ListChecks, Cpu, ArrowLeft, Image, ArrowUp, Feather, BookOpen, ArrowUpRight } from 'lucide-react';
 import WorkspaceSelector from './WorkspaceSelector';
 import AgentMessageParts, { ThinkingBlock } from './AgentActivity';
 import CodeChangesSummary from './CodeChangesSummary';
@@ -15,6 +15,7 @@ import { localize, localizeWith, isChineseLanguage, isJapaneseLanguage } from '.
 import ErrorBoundary from './ErrorBoundary';
 import ChatMessageItem from './ChatMessageItem';
 import ChatTurnNavigator from './ChatTurnNavigator';
+import CapabilityMentions from './CapabilityMentions';
 
 const CredibilityCheckView = React.lazy(() => import('./CredibilityCheckView'));
 const DeepReadingView = React.lazy(() => import('./DeepReadingView'));
@@ -1269,19 +1270,6 @@ const SLASH_COMMANDS = [
     }
   },
   {
-    id: 'glass',
-    trigger: '/glass',
-    aliases: ['/mix'],
-    labels: {
-      zh: '切换到故事杯',
-      en: 'Switch to Story Glass'
-    },
-    descriptions: {
-      zh: '把下一条输入调成一张 Saki 风格的情绪特调卡',
-      en: 'Turn the next prompt into a Saki-style mood drink card'
-    }
-  },
-  {
     id: 'deep',
     trigger: '/deep',
     aliases: ['/research'],
@@ -1292,19 +1280,6 @@ const SLASH_COMMANDS = [
     descriptions: {
       zh: '启动联网深度研究流程',
       en: 'Start the deep research workflow'
-    }
-  },
-  {
-    id: 'truth',
-    trigger: '/truth',
-    aliases: ['/verify'],
-    labels: {
-      zh: '切换到智链核验',
-      en: 'Switch to credibility check'
-    },
-    descriptions: {
-      zh: '提取关键词并用多搜索引擎联合查证真假',
-      en: 'Extract keywords and verify the claim across multiple search engines'
     }
   }
 ];
@@ -1553,24 +1528,6 @@ const countTextLines = (text = '') => {
   return normalized.split(/\r?\n/).length;
 };
 
-const getDrawingProviderLabel = (provider = '') => {
-  switch (provider) {
-    case 'stable-diffusion':
-      return 'Stable Diffusion';
-    case 'ollama':
-      return 'Ollama API';
-    case 'copilot':
-    case 'github':
-      return 'GitHub Copilot API';
-    case 'custom':
-      return localize('自定义 API', 'Custom API');
-    case 'none':
-      return localize('未启用', 'Disabled');
-    default:
-      return provider || localize('绘图 API', 'Image API');
-  }
-};
-
 const isTodoClosed = (todo) => {
   const status = String(todo?.status || '').toLowerCase();
   return Boolean(todo?.closed) || ['done', 'completed', 'complete', 'closed', 'finished'].includes(status);
@@ -1689,6 +1646,7 @@ export default function Chat({
   onDeleteStoryGlassRecord,
   onEditMessage,
   onUpdateMessageText,
+  onRevisePpt,
   onOpenFileManager,
   onOpenSettings,
   externalFile,
@@ -1721,11 +1679,8 @@ export default function Chat({
   const [diagnosticsMsg, setDiagnosticsMsg] = useState(null);
   const [files, setFiles] = useState([]);
   const [useWeb, setUseWeb] = useState(false);
-  const [useMcp, setUseMcp] = useState(false);
-  const [useSd, setUseSd] = useState(false);
   const [useMemory, setUseMemory] = useState(false);
   const [usePpt, setUsePpt] = useState(false);
-  const [useTruthCheck, setUseTruthCheck] = useState(false);
   const [useStoryGlass, setUseStoryGlass] = useState(false);
   const [storyGlassPreferences, setStoryGlassPreferences] = useState(DEFAULT_STORY_GLASS_PREFERENCES);
   const [localStoryGlassOverlayOpen, setLocalStoryGlassOverlayOpen] = useState(false);
@@ -1940,10 +1895,10 @@ export default function Chat({
       const options = composerPreset.options;
       restoredOptionsRef.current = options;
       setStoryGlassPreferences(options.storyGlassPreferences || DEFAULT_STORY_GLASS_PREFERENCES);
-      setUseWeb(Boolean(options.useWeb)); setUseMcp(Boolean(options.useMcp));
-      setUseSd(Boolean(options.useSd)); setUseMemory(Boolean(options.useMemory));
-      setUsePpt(Boolean(options.usePpt)); setUseTruthCheck(Boolean(options.useTruthCheck));
-      setUseStoryGlass(Boolean(options.useStoryGlass));
+      setUseWeb(Boolean(options.useWeb));
+      setUseMemory(Boolean(options.useMemory));
+      setUsePpt(Boolean(options.usePpt));
+      setUseStoryGlass(false);
     }
     onComposerPresetConsumed?.();
     requestAnimationFrame(() => {
@@ -1976,35 +1931,9 @@ export default function Chat({
   }, [slashToken]);
 
   useEffect(() => {
-    if (useWeb) {
-      if (!config.searchEnabled) {
-        setConfig(prev => ({ ...prev, searchEnabled: true }));
-      }
-      setUseMcp(false);
-      setUseSd(false);
-      setUseTruthCheck(false);
-    }
-  }, [useWeb]);
-
-  useEffect(() => {
-    if (useTruthCheck) {
-      if (!config.searchEnabled) {
-        setConfig(prev => ({ ...prev, searchEnabled: true }));
-      }
-      setUseWeb(false);
-      setUseMcp(false);
-      setUseSd(false);
-      setUsePpt(false);
-    }
-  }, [useTruthCheck]);
-
-  useEffect(() => {
     if (useStoryGlass) {
       setUseWeb(false);
-      setUseMcp(false);
-      setUseSd(false);
       setUsePpt(false);
-      setUseTruthCheck(false);
     }
   }, [useStoryGlass]);
 
@@ -2022,17 +1951,12 @@ export default function Chat({
   }, [useStoryGlass]);
 
   useEffect(() => {
-    if (useWeb || useMcp || useSd || usePpt || useTruthCheck) {
+    if (useWeb || usePpt) {
       setUseStoryGlass(false);
     }
-  }, [useWeb, useMcp, useSd, usePpt, useTruthCheck]);
+  }, [useWeb, usePpt]);
 
-  const [mcpStatus, setMcpStatus] = useState(null);
-  const [sdStatus, setSdStatus] = useState(null);
-  const [drawingApiStatus, setDrawingApiStatus] = useState(null);
   const [sovitsStatus, setSovitsStatus] = useState(null);
-  const [showMcpStatus, setShowMcpStatus] = useState(false);
-  const [showSdStatus, setShowSdStatus] = useState(false);
   const [showSovitsStatus, setShowSovitsStatus] = useState(false);
   const [diffModalFile, setDiffModalFile] = useState(null);
   const [isDiffModalOpen, setIsDiffModalOpen] = useState(false);
@@ -2079,67 +2003,6 @@ export default function Chat({
 
   const fileInputRef = useRef(null);
   const endRef = useRef(null);
-  const isStableDiffusionDrawing = config.drawingProvider === 'stable-diffusion';
-  const activeDrawingStatus = isStableDiffusionDrawing ? sdStatus : drawingApiStatus;
-
-  useEffect(() => {
-    let interval;
-    if (useSd || showSdStatus) {
-      const fetchDrawingStatus = async () => {
-        try {
-          if (config.drawingProvider === 'stable-diffusion') {
-            const sdUrl = config.sdUrl || 'http://127.0.0.1:7860';
-            const res = await fetch(`${backendUrl}/api/sd/status?url=${encodeURIComponent(sdUrl)}`);
-            const data = await res.json();
-            setSdStatus(data);
-            setDrawingApiStatus(null);
-            return;
-          }
-
-          const res = await fetch(`${backendUrl}/api/drawing/status`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              provider: config.drawingProvider || '',
-              model: config.drawingModel || '',
-              ollamaUrl: config.ollamaUrl || '',
-              copilotToken: config.copilotToken || '',
-              customDrawingUrl: config.customDrawingUrl || '',
-              customDrawingKey: config.customDrawingKey || '',
-              customDrawingModel: config.customDrawingModel || ''
-            })
-          });
-          const data = await res.json();
-          setDrawingApiStatus(data);
-          setSdStatus(null);
-        } catch (e) {
-          console.error("Failed to fetch drawing status", e);
-        }
-      };
-      fetchDrawingStatus();
-      interval = setInterval(fetchDrawingStatus, 5000);
-    }
-    return () => interval && clearInterval(interval);
-  }, [useSd, showSdStatus, backendUrl, config.sdUrl, config.drawingProvider, config.drawingModel, config.ollamaUrl, config.copilotToken, config.customDrawingUrl, config.customDrawingKey, config.customDrawingModel]);
-
-  useEffect(() => {
-    let interval;
-    if (useMcp || showMcpStatus) {
-      const fetchStatus = async () => {
-        if (typeof document !== 'undefined' && document.hidden) return;
-        try {
-          const res = await fetch(`${backendUrl}/api/mcp/status`);
-          const data = await res.json();
-          setMcpStatus(data);
-        } catch (e) {
-          console.error("Failed to fetch MCP status", e);
-        }
-      };
-      fetchStatus();
-      interval = setInterval(fetchStatus, 3000);
-    }
-    return () => interval && clearInterval(interval);
-  }, [useMcp, showMcpStatus, backendUrl]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2318,10 +2181,8 @@ export default function Chat({
     const nextOptions = { ...baseOptions };
 
     if (commandId === 'image') {
-      nextOptions.useSd = true;
       nextOptions.useWeb = false;
       nextOptions.usePpt = false;
-      nextOptions.useTruthCheck = false;
       nextOptions.useStoryGlass = false;
       return nextOptions;
     }
@@ -2329,37 +2190,14 @@ export default function Chat({
     if (commandId === 'ppt') {
       nextOptions.usePpt = true;
       nextOptions.useWeb = false;
-      nextOptions.useSd = false;
-      nextOptions.useTruthCheck = false;
       nextOptions.useStoryGlass = false;
       return nextOptions;
     }
 
-    if (commandId === 'glass') {
-      nextOptions.useStoryGlass = true;
-      nextOptions.usePpt = false;
-      nextOptions.useWeb = false;
-      nextOptions.useSd = false;
-      nextOptions.useTruthCheck = false;
-      nextOptions.useMcp = false;
-      return nextOptions;
-    }
 
     if (commandId === 'deep') {
       nextOptions.useWeb = true;
       nextOptions.usePpt = false;
-      nextOptions.useSd = false;
-      nextOptions.useTruthCheck = false;
-      nextOptions.useStoryGlass = false;
-      nextOptions.useSearch = true;
-      return nextOptions;
-    }
-
-    if (commandId === 'truth') {
-      nextOptions.useTruthCheck = true;
-      nextOptions.usePpt = false;
-      nextOptions.useWeb = false;
-      nextOptions.useSd = false;
       nextOptions.useStoryGlass = false;
       nextOptions.useSearch = true;
       return nextOptions;
@@ -2372,43 +2210,21 @@ export default function Chat({
     if (!command) return;
 
     if (command.id === 'image') {
-      setUseSd(true);
       setUsePpt(false);
       setUseWeb(false);
-      setUseTruthCheck(false);
       setUseStoryGlass(false);
     }
 
     if (command.id === 'ppt') {
       setUsePpt(true);
       setUseWeb(false);
-      setUseSd(false);
-      setUseTruthCheck(false);
       setUseStoryGlass(false);
     }
 
-    if (command.id === 'glass') {
-      setUseStoryGlass(true);
-      setUsePpt(false);
-      setUseWeb(false);
-      setUseSd(false);
-      setUseTruthCheck(false);
-      setUseMcp(false);
-    }
 
     if (command.id === 'deep') {
       setUseWeb(true);
       setUsePpt(false);
-      setUseSd(false);
-      setUseTruthCheck(false);
-      setUseStoryGlass(false);
-    }
-
-    if (command.id === 'truth') {
-      setUseTruthCheck(true);
-      setUseWeb(false);
-      setUsePpt(false);
-      setUseSd(false);
       setUseStoryGlass(false);
     }
 
@@ -2418,7 +2234,7 @@ export default function Chat({
       ? trimmedInput.slice(matchedTrigger.length).trimStart()
       : trimmedInput.replace(/^\/\S+/, '').trimStart();
 
-    setInput(remainingText);
+    setInput(command.id === 'image' ? `${getLocalText('请生成图片：', 'Generate an image:', '画像を生成してください：')} ${remainingText}` : remainingText);
     setSlashIndex(0);
 
     if (command.id === 'file') {
@@ -2436,13 +2252,10 @@ export default function Chat({
   const buildSendPayload = () => {
     const baseOptions = {
       workspacePath: restoredOptionsRef.current?.workspacePath ?? config.workspacePath ?? '',
-      useSearch: restoredOptionsRef.current?.useSearch ?? config.searchEnabled,
+      useSearch: true,
       useWeb,
-      useMcp,
-      useSd,
       useMemory,
       usePpt,
-      useTruthCheck,
       useStoryGlass,
       storyGlassPreferences
     };
@@ -2461,6 +2274,9 @@ export default function Chat({
         }
 
         nextText = trimmedInput.slice(slashToken.length).trimStart();
+        if (command.id === 'image' && (nextText.trim() || files.length > 0)) {
+          nextText = `${getLocalText('请生成图片：', 'Generate an image:', '画像を生成してください：')} ${nextText}`;
+        }
 
         if (command.id === 'file' && !nextText && files.length === 0) {
           activateSlashCommand(command);
@@ -2476,6 +2292,9 @@ export default function Chat({
 
     if (!nextText.trim() && files.length === 0) return null;
 
+    if (/(?:^|\s)@(mcp|skill):\S+/.test(nextText)) {
+      nextOptions = { ...nextOptions, useWeb: false, usePpt: false, useStoryGlass: false };
+    }
     return {
       text: nextText.trim(),
       options: nextOptions
@@ -2745,12 +2564,8 @@ export default function Chat({
       ].filter(Boolean).join('\n')
     );
 
-    onSend(remixText, [], {
-      useSearch: config.searchEnabled,
-      useStoryGlass: true,
-      storyGlassOverlay: isStoryGlassOverlayOpen,
-      storyGlassPreferences: nextPreferences,
-    });
+    setIsStoryGlassOverlayOpen(false);
+    onSend(`${remixText}\n${getLocalText('请生成故事杯卡片。偏好：', 'Present a Story Glass card. Preferences: ')}${JSON.stringify(nextPreferences)}`, [], {});
   };
 
   const closeStoryGlassOverlay = () => {
@@ -2770,21 +2585,10 @@ export default function Chat({
     setStoryGlassReviewMessageId(null);
     setUseStoryGlass(false);
     setUseWeb(false);
-    setUseMcp(false);
-    setUseSd(false);
     setUsePpt(false);
-    setUseTruthCheck(false);
 
-    onSend(storyText, [], {
-      useSearch: config.searchEnabled,
-      useStoryGlass: true,
-      storyGlassOverlay: true,
-      storyGlassPreferences: {
-        ...DEFAULT_STORY_GLASS_PREFERENCES,
-        ...(storyGlassPreferences || {}),
-        ...(nextPreferences || {}),
-      },
-    });
+    setIsStoryGlassOverlayOpen(false);
+    onSend(`${getLocalText('请把下面的故事做成故事杯卡片：', 'Create a Story Glass card for this story:')}\n${storyText}\n${JSON.stringify(nextPreferences)}`, [], {});
   };
 
   const handleGeneratedFileDownload = (file) => {
@@ -2952,6 +2756,7 @@ export default function Chat({
               setEditingMsgIdx={setEditingMsgIdx}
               setEditingMsgText={setEditingMsgText}
               onUpdateMessageText={onUpdateMessageText}
+              onRevisePpt={onRevisePpt}
               onEditMessage={onEditMessage}
               onDeleteMessage={onDeleteMessage}
               onRestoreCheckpoint={onRestoreCheckpoint}
@@ -3018,7 +2823,7 @@ export default function Chat({
             />
           )}
           <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
-          {(queue?.items?.length > 0 || queue?.note || queueStorageError) && (
+          {(queue?.items?.length > 0 || queueStorageError) && (
             <section aria-label={getLocalText('消息队列', 'Message queue')} className="mb-3 rounded-2xl border border-[var(--control-border)] bg-[var(--control-bg)] p-3 text-xs text-[var(--text-dark)]">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <strong>{getLocalText('待发送队列', 'Queued messages')} · {queue?.items?.length || 0} {queue?.paused ? getLocalText('（已暂停）', '(paused)') : ''}</strong>
@@ -3051,6 +2856,7 @@ export default function Chat({
             className="saki-input-shell relative flex items-end gap-2 bg-[var(--control-bg)] dark:bg-[#161824]/65 backdrop-blur-2xl border border-[var(--control-border)]  rounded-2xl focus-within:border-[#ff75ac]/60 focus-within:ring-2 focus-within:ring-[#ff75ac]/20 transition-all p-2 flex-wrap shadow-lg dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]"
             data-onboarding-id="chat-composer"
           >
+            <CapabilityMentions input={input} setInput={setInput} backendUrl={backendUrl} config={config} textareaRef={textareaRef} getLocalText={getLocalText} />
             {slashSuggestions.length > 0 && (
               <div className="saki-popup absolute bottom-full left-3 right-3 mb-3 rounded-[1.5rem] border border-[var(--control-border)]  bg-[var(--popup-bg)] dark:bg-[#181922]/95 p-2 shadow-2xl backdrop-blur-2xl z-[120]">
                 <div className="mb-2 flex items-center gap-2 px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">
@@ -3399,7 +3205,7 @@ export default function Chat({
                   type="button"
                   onClick={() => setShowFeatureMenu(prev => !prev)}
                   className={`saki-chip-btn ${
-                    showFeatureMenu || config.searchEnabled || useWeb || useMcp || useSd || useMemory || usePpt || useTruthCheck || useStoryGlass
+                    showFeatureMenu || useWeb || useMemory || usePpt || useStoryGlass
                       ? 'is-active'
                       : ''
                   }`}
@@ -3425,20 +3231,6 @@ export default function Chat({
                     </div>
                     <div className="flex flex-wrap gap-2">
               <FeatureTooltip
-                type="webSearch"
-                title={t('web_search')}
-                description={getLocalText('搜索网页资料并快速返回可用结果', 'Search the web and return useful results quickly')}
-              >
-                <button
-                  type="button"
-                  onClick={() => setConfig({ ...config, searchEnabled: !config.searchEnabled })}
-                  className={`saki-chip-btn ${config.searchEnabled ? 'is-active' : ''}`}
-                >
-                  <Search size={13} className={`shrink-0 ${config.searchEnabled ? 'text-saki-pink' : ''}`} />
-                  <span>{t('web_search')}</span>
-                </button>
-              </FeatureTooltip>
-              <FeatureTooltip
                 type="deepResearch"
                 title={t('deep_research')}
                 description={getLocalText('联网搜索多篇资料，进行深度研究分析，生成综合报告', 'Search multiple sources, conduct deep research analysis, and generate comprehensive reports')}
@@ -3448,9 +3240,6 @@ export default function Chat({
                   onClick={() => {
                     const nextState = !useWeb;
                     setUseWeb(nextState);
-                    if (nextState) {
-                      setUseTruthCheck(false);
-                    }
                   }}
                   className={`saki-chip-btn ${useWeb ? 'is-active' : ''}`}
                 >
@@ -3458,242 +3247,6 @@ export default function Chat({
                   <span>{t('deep_research')}</span>
                 </button>
               </FeatureTooltip>
-              <div
-                className="relative shrink-0"
-                onMouseEnter={() => setShowMcpStatus(true)}
-                onMouseLeave={() => setShowMcpStatus(false)}
-              >
-                <FloatingPopover
-                  width={192}
-                  align="start"
-                  onOpenChange={setShowMcpStatus}
-                  content={({ arrowLeft }) => (
-                    <>
-                      <div className="bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
-                        <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2">{t('service_status')}</div>
-                        <div className="space-y-2">
-                          {mcpStatus && Object.entries(mcpStatus).length > 0 ? (
-                            Object.entries(mcpStatus).map(([name, info]) => (
-                              <div key={name} className="flex flex-col gap-0.5">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span className="truncate flex-1 pr-2 font-medium">{name}</span>
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${info.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
-                                    <span className="text-[var(--text-tertiary)]">{info.connected ? t('tools_count', { count: info.toolCount }) : t('connect_fail')}</span>
-                                  </div>
-                                </div>
-                                {info.error && !info.connected && (
-                                  <div className="text-[9px] text-red-400 truncate opacity-80" title={info.error}>
-                                    {info.error}
-                                  </div>
-                                )}
-                              </div>
-                            ))
-                          ) : (
-                            <div className="text-[11px] text-[var(--text-tertiary)] italic">{t('connecting_server')}</div>
-                          )}
-                        </div>
-                      </div>
-                      <div
-                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
-                        style={{ left: arrowLeft }}
-                      />
-                    </>
-                  )}
-                >
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const hasConfig = config?.mcpConfig?.mcpServers && Object.keys(config.mcpConfig.mcpServers).length > 0;
-                    if (!hasConfig) {
-                      alert(t('configure_mcp_first'));
-                      return;
-                    }
-
-                    const nextState = !useMcp;
-                    setUseMcp(nextState);
-                    if (nextState) {
-                      setUseTruthCheck(false);
-                    }
-
-                    if (nextState) {
-                      try {
-                        await fetch(`${backendUrl}/api/mcp/init`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ mcpServers: config.mcpConfig.mcpServers })
-                        });
-                      } catch (e) {
-                        console.error("Failed to init MCP", e);
-                      }
-                    }
-                  }}
-                  className={`saki-chip-btn ${useMcp ? 'is-active' : ''}`}
-                  title={t('mcp_service')}
-                >
-                  <Server size={13} className={`shrink-0 ${useMcp ? 'text-saki-pink' : ''}`} />
-                  <span>{t('mcp_service')}</span>
-                </button>
-                </FloatingPopover>
-
-              </div>
-
-              <div
-                className="relative shrink-0"
-                onMouseEnter={() => setShowSdStatus(true)}
-                onMouseLeave={() => setShowSdStatus(false)}
-              >
-                <FloatingPopover
-                  width={224}
-                  align="start"
-                  interactive
-                  onOpenChange={setShowSdStatus}
-                  content={({ arrowLeft }) => (
-                    <>
-                      <div className="bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
-                        <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2 flex items-center justify-between">
-                          {isStableDiffusionDrawing ? t('sd_status') : 'API Status'}
-                          {activeDrawingStatus && (
-                            <span className={`w-1.5 h-1.5 rounded-full ${activeDrawingStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
-                          )}
-                        </div>
-
-                        {!activeDrawingStatus ? (
-                          <div className="text-[11px] text-[var(--text-tertiary)] italic">{t('connecting_server')}</div>
-                        ) : isStableDiffusionDrawing ? (activeDrawingStatus.connected ? (
-                          <div className="space-y-2">
-                            <label className="block text-[10px] text-[var(--text-tertiary)] mb-1">{t('select_model')}</label>
-                            <select
-                              className="w-full border border-[var(--control-border)] rounded-md px-2 py-1 text-[11px] bg-[var(--control-bg)] outline-none focus:ring-1 focus:ring-pink-500"
-                              value={config.sdModel || ''}
-                              onChange={(e) => setConfig({ ...config, sdModel: e.target.value })}
-                            >
-                              <option value="">{t('default_model')}</option>
-                              {activeDrawingStatus.models.map(m => (
-                                <option key={m} value={m}>{m.split(' [')[0]}</option>
-                              ))}
-                            </select>
-                            <div className="text-[9px] text-pink-500 font-medium">{t('drawing_model_change_tip')}</div>
-                          </div>
-                        ) : (
-                          <div className="text-[11px] text-red-400 bg-red-50 p-2 rounded-lg break-all">
-                            {activeDrawingStatus.error || 'Stable Diffusion API is unavailable.'}
-                          </div>
-                        )) : (
-                          <div className="space-y-2">
-                            <div className="rounded-lg bg-[var(--surface-inset)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
-                              <div className="font-semibold text-[var(--text-dark)]">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
-                              <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                                {getLocalText('模型', 'Model', 'モデル')}: {activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || getLocalText('未配置', 'not configured', '未設定')}
-                              </div>
-                              {activeDrawingStatus.endpoint && (
-                                <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                                  {getLocalText('接口地址', 'Endpoint', 'エンドポイント')}: {activeDrawingStatus.endpoint}
-                                </div>
-                              )}
-                              {typeof activeDrawingStatus.modelCount === 'number' && activeDrawingStatus.connected && (
-                                <div className="mt-1 text-[10px] text-emerald-600">
-                                  {getLocalText('可用模型', 'Available models', '利用可能なモデル')}: {activeDrawingStatus.modelCount}
-                                </div>
-                              )}
-                            </div>
-                            {activeDrawingStatus.connected ? (
-                              <div className="text-[10px] text-emerald-600 font-medium">
-                                {getLocalText('API 已连接，可以开始绘图。', 'API is connected and ready for drawing.', 'API に接続済み、描画の準備ができました。')}
-                              </div>
-                            ) : (
-                              <div className="text-[11px] text-red-400 bg-red-50 p-2 rounded-lg break-all">
-                                {activeDrawingStatus.error || 'Drawing API is unavailable.'}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div
-                        className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
-                        style={{ left: arrowLeft }}
-                      />
-                    </>
-                  )}
-                >
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextState = !useSd;
-                    setUseSd(nextState);
-                    if (nextState) {
-                      setUseTruthCheck(false);
-                    }
-                  }}
-                  disabled={config.drawingProvider === 'none'}
-                  className={`saki-chip-btn ${useSd ? 'is-active' : ''}`}
-                  title={t('intelligent_drawing')}
-                >
-                  <Palette size={13} className={`shrink-0 ${useSd ? 'text-saki-pink' : ''}`} />
-                  <span>{t('intelligent_drawing')}</span>
-                </button>
-                </FloatingPopover>
-
-                {false && showSdStatus && activeDrawingStatus && (
-                  <div className="absolute bottom-full left-0 pb-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                    <div className="w-56 bg-[var(--popup-bg)] backdrop-blur-xl border border-[var(--control-border)] shadow-xl rounded-xl p-3 text-[var(--text-dark)] font-sans">
-                      <div className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2 flex items-center justify-between">
-                        {isStableDiffusionDrawing ? t('sd_status') : 'API 状态'}
-                        <span className={`w-1.5 h-1.5 rounded-full ${activeDrawingStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-400'}`}></span>
-                      </div>
-
-                      {isStableDiffusionDrawing ? (activeDrawingStatus.connected ? (
-                        <div className="space-y-2">
-                          <label className="block text-[10px] text-[var(--text-tertiary)] mb-1">{t('select_model')}</label>
-                          <select
-                            className="w-full border border-[var(--control-border)] rounded-md px-2 py-1 text-[11px] bg-[var(--control-bg)] outline-none focus:ring-1 focus:ring-pink-500"
-                            value={config.sdModel || ''}
-                            onChange={(e) => setConfig({ ...config, sdModel: e.target.value })}
-                          >
-                            <option value="">{t('default_model')}</option>
-                            {activeDrawingStatus.models.map(m => (
-                              <option key={m} value={m}>{m.split(' [')[0]}</option>
-                            ))}
-                          </select>
-                          <div className="text-[9px] text-pink-500 font-medium">{t('drawing_model_change_tip')}</div>
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-red-400 bg-red-50 p-2 rounded-lg break-all">
-                          {activeDrawingStatus.error || '无法连接到 SD API，请检查地址是否正确并开启了 --api'}
-                        </div>
-                      )) : (
-                        <div className="space-y-2">
-                          <div className="rounded-lg bg-[var(--surface-inset)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
-                            <div className="font-semibold text-[var(--text-dark)]">{getDrawingProviderLabel(activeDrawingStatus.provider || config.drawingProvider)}</div>
-                            <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                              模型：{activeDrawingStatus.model || config.customDrawingModel || config.drawingModel || '未配置'}
-                            </div>
-                            {activeDrawingStatus.endpoint && (
-                              <div className="mt-1 break-all text-[10px] text-[var(--text-secondary)]">
-                                地址：{activeDrawingStatus.endpoint}
-                              </div>
-                            )}
-                            {typeof activeDrawingStatus.modelCount === 'number' && activeDrawingStatus.connected && (
-                              <div className="mt-1 text-[10px] text-emerald-600">
-                                可用模型数：{activeDrawingStatus.modelCount}
-                              </div>
-                            )}
-                          </div>
-                          {activeDrawingStatus.connected ? (
-                            <div className="text-[10px] text-emerald-600 font-medium">
-                              API 连接正常，可以直接用于智能绘图。
-                            </div>
-                          ) : (
-                            <div className="text-[11px] text-red-400 bg-red-50 p-2 rounded-lg break-all">
-                              {activeDrawingStatus.error || '当前绘图 API 暂时不可用，请检查配置。'}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
 
               <FeatureTooltip
                 type="memory"
@@ -3719,52 +3272,11 @@ export default function Chat({
                   onClick={() => {
                     const nextState = !usePpt;
                     setUsePpt(nextState);
-                    if (nextState) {
-                      setUseTruthCheck(false);
-                    }
                   }}
                   className={`saki-chip-btn ${usePpt ? 'is-active' : ''}`}
                 >
                   <Presentation size={13} className={`shrink-0 ${usePpt ? 'text-saki-pink' : ''}`} />
                   <span>{t('smart_ppt')}</span>
-                </button>
-              </FeatureTooltip>
-              <FeatureTooltip
-                type="credibility"
-                title={getLocalText('智链可信度核验', 'Credibility check')}
-                description={getLocalText('多维度验证信息可信度，识别虚假内容', 'Verify information credibility across multiple dimensions and identify false content')}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextState = !useTruthCheck;
-                    setUseTruthCheck(nextState);
-                  }}
-                  className={`saki-chip-btn ${useTruthCheck ? 'is-active' : ''}`}
-                >
-                  <Share2 size={13} className={`shrink-0 ${useTruthCheck ? 'text-saki-pink' : ''}`} />
-                  <span>{getLocalText('智链', 'Zhilian')}</span>
-                </button>
-              </FeatureTooltip>
-              <FeatureTooltip
-                type="storyGlass"
-                description={getLocalText('把你的故事调成一张更像 Saki 的情绪特调卡，生成名字、风味、配方和适饮时刻。', 'Turn your story into a Saki-style signature drink card with a name, flavor, recipe, and perfect moment.')}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isRecording) {
-                      stopRecording();
-                    }
-                    onEnsureChat?.();
-                    setStoryGlassReviewMessageId(null);
-                    setUseStoryGlass(false);
-                    setIsStoryGlassOverlayOpen(true);
-                  }}
-                  className={`saki-chip-btn ${isStoryGlassOverlayOpen ? 'is-active' : ''}`}
-                >
-                  <Sparkles size={13} className={`shrink-0 ${isStoryGlassOverlayOpen ? 'text-saki-pink' : ''}`} />
-                  <span>{getLocalText('故事杯', 'Story Glass')}</span>
                 </button>
               </FeatureTooltip>
                     </div>

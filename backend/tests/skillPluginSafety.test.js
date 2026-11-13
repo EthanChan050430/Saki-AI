@@ -21,6 +21,50 @@ async function fixture(t) {
     return { dataDir, skills, plugins };
 }
 
+test('local skill packages retain resources, replace stale files and roll back failed updates', async t => {
+    const { dataDir, skills } = await fixture(t);
+    const source = path.join(dataDir, 'package');
+    await fs.outputFile(path.join(source, 'SKILL.md'), '# Package\nUse scripts/helper.js');
+    await fs.outputFile(path.join(source, 'scripts', 'helper.js'), 'version one');
+    const installed = await skills.installFromLocal(source);
+    const target = path.dirname(installed.path);
+    assert.equal(await fs.readFile(path.join(target, 'scripts', 'helper.js'), 'utf8'), 'version one');
+    await skills.setSkillEnabled(installed.id, false);
+    const before = await skills.loadStore();
+    await fs.outputFile(path.join(source, 'scripts', 'helper.js'), 'version two');
+    const save = skills.saveStore;
+    let fail = true;
+    skills.saveStore = async function (store) {
+        await save.call(this, store);
+        if (fail) { fail = false; throw new Error('injected store failure'); }
+    };
+    await assert.rejects(skills.installFromLocal(source), /injected store failure/);
+    skills.saveStore = save;
+    assert.deepEqual(await skills.loadStore(), before);
+    assert.equal(await fs.readFile(path.join(target, 'scripts', 'helper.js'), 'utf8'), 'version one');
+    await fs.remove(path.join(source, 'scripts', 'helper.js'));
+    await fs.outputFile(path.join(source, 'templates', 'new.txt'), 'new template');
+    await skills.installFromLocal(source);
+    assert.equal(await fs.pathExists(path.join(target, 'scripts', 'helper.js')), false);
+    assert.equal(await fs.readFile(path.join(target, 'templates', 'new.txt'), 'utf8'), 'new template');
+    assert.equal((await skills.getSkill(installed.id)).enabled, false);
+});
+
+test('Git skill packages retain resources after clone cleanup', async t => {
+    const { dataDir, skills } = await fixture(t);
+    const { execFileSync } = require('node:child_process');
+    const source = path.join(dataDir, 'git-package');
+    await fs.outputFile(path.join(source, 'SKILL.md'), '# Git package');
+    await fs.outputFile(path.join(source, 'references', 'note.txt'), 'reference');
+    const git = args => execFileSync('git', args, { cwd: source, stdio: 'pipe' });
+    git(['init']); git(['add', '.']);
+    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture']);
+    const installed = await skills.installFromGit(source);
+    assert.equal(await fs.readFile(path.join(path.dirname(installed.path), 'references', 'note.txt'), 'utf8'), 'reference');
+    assert.equal(await fs.pathExists(path.join(path.dirname(installed.path), '.git')), false);
+    assert.ok(!(await fs.readdir(skills.skillsDir)).some(name => name.startsWith('_git_') || name.startsWith('_install_')));
+});
+
 test('default migration retains both defaults, canonical files and unrelated paths', async t => {
     const { dataDir, skills } = await fixture(t);
     const canonical = path.join(skills.skillsDir, 'elite-longterm-memory', 'SKILL.md');

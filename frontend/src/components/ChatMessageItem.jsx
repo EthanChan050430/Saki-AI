@@ -20,6 +20,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
   setEditingMsgIdx,
   setEditingMsgText,
   onUpdateMessageText,
+  onRevisePpt,
   onEditMessage,
   onDeleteMessage,
   onRestoreCheckpoint,
@@ -56,7 +57,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
   const isAssistant = m.role === 'assistant';
   const isStoryGlassOverlayMessage = Boolean(m.requestOptions?.storyGlassOverlay);
   const isStoryGlassOverlayAssistant = Boolean(
-    isAssistant && (isStoryGlassOverlayMessage || (m.placeholderMode === 'story-glass' || m.storyGlassData))
+    isAssistant && m.storyGlassData?.presentation !== 'agent' && (isStoryGlassOverlayMessage || (m.placeholderMode === 'story-glass' || m.storyGlassData))
   );
 
   if (isStoryGlassOverlayAssistant && StoryGlassArchiveCard) {
@@ -279,7 +280,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                         {m.pptData && (
                           <React.Suspense fallback={null}>
                             <div className="mt-4 w-full">
-                              <PPTView data={m.pptData} isEmbedded={true} />
+                              <PPTView data={m.pptData} isEmbedded={true} onRevise={onRevisePpt ? (slideId, instruction, restore, imageRequest) => onRevisePpt(m.id, slideId, instruction, restore, imageRequest) : undefined} editingDisabled={isGenerating} />
                             </div>
                           </React.Suspense>
                         )}

@@ -1,7 +1,9 @@
 // One catalog drives both prompt discovery and executable tool parsing.
 const BUILTIN_TOOLS = [
-    ['search', ['query'], 'Search the web for current information.', 'query', 'search'],
+    ['search', ['query'], 'Search the web when current information, external sources, or uncertain facts are needed. Do not search for greetings or tasks answerable from the provided context. Never submit private content.', 'query'],
+    ['verifyClaim', ['claim'], 'Gather multi-source evidence for a specific public factual claim when verification is requested or needed. Compare supporting and contradicting evidence, cite source URLs, distinguish snippets from full text, and explain uncertainty. No evidence is not proof of falsehood. Never submit private content.', 'claim'],
     ['browse', ['url'], 'Fetch and read webpage content.'],
+    ['presentStoryGlass', ['json'], 'Present a drink story card ONLY when the user asks for one or a remix, never for ordinary emotional conversation. Compose the content yourself in the current conversation. Pass a JSON string with cocktailName, storySummary, flavorDescription, sakiComment and recipeList (ingredient strings with amounts). Optional: language (zh/en), recipeMode (night-bar/comfort-home/zero-proof), cocktailNameEn, cocktailSubtitle, featuredQuote, storyTags, tastingNotes, pairingSuggestions, glassware, garnish, servingMoment, request. Honor non-alcoholic and home-ingredient requests; zero-proof must contain no alcohol. Use draw separately only if an illustration is requested. Continue the conversation after presenting the card.', 'json'],
     ['terminal', ['command', 'timeoutSeconds'], 'Run a terminal command in the active workspace. timeoutSeconds is optional; 0 disables the timeout. Commands run non-interactively, without automatic confirmation.', 'command'],
     ['readFile', ['path', 'startLine', 'endLine'], 'Read text with line numbers and SHA256. Use narrow ranges for large files.'],
     ['planFileRead', ['path', 'chunkLines'], 'Plan reading a large file in chunks.'],
@@ -10,7 +12,8 @@ const BUILTIN_TOOLS = [
     ['editFile', ['path', 'startLine', 'endLine', 'content', 'expectedHash'], 'Replace inclusive 1-based lines. expectedHash from the latest readFile is required.', 'content'],
     ['replaceInFile', ['path', 'oldText', 'newText', 'expectedHash', 'occurrence'], 'Replace exact text. expectedHash is required; occurrence disambiguates repeated matches.'],
     ['replaceBlocks', ['path', 'blocks', 'expectedHash'], 'Apply unique SEARCH/REPLACE blocks. Preferred for code edits. expectedHash is required.', 'blocks'],
-    ['deleteFile', ['path', 'expectedHash'], 'Delete a file with its latest SHA256.'],
+    ['deleteFile', ['path', 'expectedHash'], 'Move a regular text file to Trash with its latest SHA256 from readFile. Never use for directories; use deleteDirectory for folders.'],
+    ['deleteDirectory', ['path'], 'Move a directory and all its contents to Trash, after explicit path approval. Inspect with listDir first. Never use deleteFile for folders. Filesystem roots and protected directories cannot be deleted.'],
     ['listDir', ['path', 'limit', 'offset', 'includeIgnored'], 'List directory entries with pagination.'],
     ['getRepoMap', ['path'], 'Scan code structures in a repository.'],
     ['createProjectFolder', ['name'], 'Create a project folder under the active workspace.'],
@@ -35,8 +38,8 @@ const BUILTIN_TOOLS = [
     ['saveMemory', ['name', 'content'], 'Save durable user preferences or project constraints.', 'content', 'memory'],
 ];
 
-function createToolRegistry({ searchEnabled = false, drawingEnabled = false, musicEnabled = true, memoryEnabled = false, mcpTools = [] } = {}) {
-    const enabled = { search: searchEnabled, drawing: drawingEnabled, music: musicEnabled, memory: memoryEnabled };
+function createToolRegistry({ drawingEnabled = false, musicEnabled = true, memoryEnabled = false, mcpTools = [] } = {}) {
+    const enabled = { drawing: drawingEnabled, music: musicEnabled, memory: memoryEnabled };
     const registry = new Map();
     for (const [name, params, description, bodyParam, feature] of BUILTIN_TOOLS) {
         if (feature && !enabled[feature]) continue;
@@ -76,7 +79,7 @@ function decodeArgument(raw) {
 }
 
 // Delimit only at the top level: JSON objects/arrays and quoted commas stay intact.
-function splitArguments(raw) {
+function splitArguments(raw, decode = true) {
     if (!raw.trim()) return [];
     const args = [];
     let start = 0, quote = '', escaped = false;
@@ -93,12 +96,12 @@ function splitArguments(raw) {
             const expected = { ']': '[', '}': '{', ')': '(' }[char];
             if (stack.pop() !== expected) throw new Error('Unbalanced tool arguments.');
         } else if (char === ',' && stack.length === 0) {
-            args.push(decodeArgument(raw.slice(start, i)));
+            args.push(decode ? decodeArgument(raw.slice(start, i)) : raw.slice(start, i).trim());
             start = i + 1;
         }
     }
     if (quote || stack.length) throw new Error('Incomplete tool arguments.');
-    args.push(decodeArgument(raw.slice(start)));
+    args.push(decode ? decodeArgument(raw.slice(start)) : raw.slice(start).trim());
     return args;
 }
 
@@ -106,18 +109,18 @@ function parseToolCalls(response, registry) {
     // A quoted example in prose, reasoning, or a Markdown code block is not an action.
     const text = String(response || '');
     const calls = [];
-    const startPattern = /(?:(?:Tool|工具)[:：]\s*([\w.:-]+)\s*\(|<([\w.:-]+)(?:\s+([^>]*))?>)|(^[ \t]*(?:`{3,}|~{3,})[^\n]*)/gmi;
+    const startPattern = /(?:(?:Tool|工具)[:：]\s*([\w.:-]+)\s*\(|^\s*([\w.:-]+)\s*\(|<([\w.:-]+)(?:\s+([^>]*))?>)|(^[ \t]*(?:`{3,}|~{3,})[^\n]*)/gmi;
     let match;
     while ((match = startPattern.exec(text))) {
-        if (match[4]) {
-            const fence = match[4].trim().match(/^(?:`+|~+)/)[0];
+        if (match[5]) {
+            const fence = match[5].trim().match(/^(?:`+|~+)/)[0];
             const closing = new RegExp(`^[ \\t]*${fence[0]}{${fence.length},}[ \\t]*\\r?$`, 'gm');
             closing.lastIndex = startPattern.lastIndex;
             const end = closing.exec(text);
             startPattern.lastIndex = end ? closing.lastIndex : text.length;
             continue;
         }
-        if (match[2]?.toLowerCase() === 'think') {
+        if (match[3]?.toLowerCase() === 'think') {
             const end = text.toLowerCase().indexOf('</think>', startPattern.lastIndex);
             startPattern.lastIndex = end < 0 ? text.length : end + '</think>'.length;
             continue;
@@ -125,7 +128,7 @@ function parseToolCalls(response, registry) {
         const lineStart = text.lastIndexOf('\n', match.index - 1) + 1;
         const prefixStart = Math.max(lineStart, calls.length ? calls[calls.length - 1].end : 0);
         if (text.slice(prefixStart, match.index).trim()) continue;
-        let name = match[1], rawArgs = '', parsedArgs;
+        let name = match[1] || match[2], rawArgs = '', parsedArgs;
         if (name) {
             let depth = 1, quote = '', escaped = false, end = startPattern.lastIndex;
             for (; end < text.length; end++) {
@@ -139,15 +142,16 @@ function parseToolCalls(response, registry) {
                 else if (char === ')' && --depth === 0) break;
             }
             if (depth) continue;
+            if (match[2] && (text.slice(0, match.index).trim() || text.slice(end + 1).trim())) continue;
             rawArgs = text.slice(startPattern.lastIndex, end);
             startPattern.lastIndex = end + 1;
         } else {
-            const tag = match[2];
+            const tag = match[3];
             const endTag = `</${tag}>`;
             const end = text.indexOf(endTag, startPattern.lastIndex);
             if (end < 0) continue;
             const attrs = Object.create(null);
-            for (const attr of (match[3] || '').matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+            for (const attr of (match[4] || '').matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
                 attrs[attr[1]] = attr[2] ?? attr[3] ?? attr[4];
             }
             name = /^(?:tool_call|call)$/i.test(tag) ? attrs.name : tag.replace(/^call:/i, '');
@@ -160,7 +164,24 @@ function parseToolCalls(response, registry) {
         const tool = registry.get(String(name || '').toLowerCase());
         if (!tool) continue;
         try {
-            calls.push({ name: tool.name, rawArgs, parsedArgs: parsedArgs || splitArguments(rawArgs), end: startPattern.lastIndex });
+            const args = parsedArgs || splitArguments(rawArgs);
+            const rawTokens = parsedArgs ? [] : splitArguments(rawArgs, false);
+            const namedArgs = rawTokens.length > 0 && rawTokens.every(arg => /^[\w-]+\s*[:=]/.test(arg));
+            let resolvedArgs = args;
+            if (namedArgs && !tool.mcp && !(args.length === 1 && args[0].trim().startsWith('{'))) {
+                const values = Object.create(null);
+                for (const arg of rawTokens) {
+                    const separator = arg.search(/[:=]/);
+                    const key = arg.slice(0, separator).trim();
+                    const target = key;
+                    if (!tool.params.includes(target) || Object.hasOwn(values, target)) {
+                        throw new Error(`Unknown or repeated argument: ${key}`);
+                    }
+                    values[target] = decodeArgument(arg.slice(separator + 1));
+                }
+                resolvedArgs = tool.params.map(param => values[param] ?? '');
+            }
+            calls.push({ name: tool.name, rawArgs, parsedArgs: resolvedArgs, end: startPattern.lastIndex });
         } catch (error) {
             calls.push({ name: tool.name, rawArgs, parsedArgs: [], error: error.message, end: startPattern.lastIndex });
         }
