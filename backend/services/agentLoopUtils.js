@@ -166,6 +166,81 @@ function parseProviderFrame(text) {
     return frame;
 }
 
+/** Read stream error payloads so axios stream 400/500 responses retain provider error messages. */
+async function hydrateAxiosStreamError(error) {
+    const stream = error?.response?.data;
+    if (!stream || typeof stream.on !== 'function' || stream.readableEnded) return error;
+    try {
+        const chunks = [];
+        let total = 0;
+        for await (const chunk of stream) {
+            const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+            chunks.push(buf);
+            total += buf.length;
+            if (total >= 16384) {
+                stream.destroy?.();
+                break;
+            }
+        }
+        const raw = Buffer.concat(chunks).toString('utf8').trim();
+        if (!raw) return error;
+        let parsed = null;
+        try { parsed = JSON.parse(raw); } catch { /* leave as raw text */ }
+        error.response.data = parsed || raw;
+        const detail = typeof parsed?.error === 'string'
+            ? parsed.error
+            : parsed?.error?.message || parsed?.message || '';
+        if (detail && !String(error.message || '').includes(detail)) {
+            error.message = detail;
+        }
+    } catch {
+        // Best-effort extraction; keep original axios error.
+    }
+    return error;
+}
+
+function isOllamaThinkingUnsupportedError(error) {
+    const status = Number(error?.response?.status || error?.status || 0);
+    const data = error?.response?.data;
+    const message = [
+        error?.message,
+        typeof data === 'string' ? data : '',
+        data?.error?.message,
+        typeof data?.error === 'string' ? data.error : '',
+        data?.message,
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!message) return false;
+    return /does not support thinking|unknown field.*\bthink\b|thinking is not supported/i.test(message)
+        || (status === 400 && /\bthink\b|thinking/.test(message) && /unsupported|not support|unknown|invalid/.test(message));
+}
+
+function buildOllamaChatOptions(config = {}, { nativeToolsEnabled = false, numCtx, isAgent = true } = {}) {
+    const options = {};
+    if (Number.isFinite(Number(numCtx)) && Number(numCtx) > 0) {
+        options.num_ctx = Number(numCtx);
+    }
+    if (Number.isFinite(Number(config?.maxTokens)) && Number(config.maxTokens) > 0) {
+        options.num_predict = Number(config.maxTokens);
+    } else if (isAgent) {
+        options.num_predict = 8192;
+    }
+    if (Array.isArray(config?.stop) && config.stop.length > 0) {
+        options.stop = config.stop;
+    } else if (isAgent && !nativeToolsEnabled) {
+        options.stop = AGENT_STOP_SEQUENCES;
+    }
+    if (Number.isFinite(Number(config?.temperature))) {
+        options.temperature = Number(config.temperature);
+    } else if (isAgent) {
+        // Lower temperature from Modelfile defaults (often 1.0) to stabilize structured tool calling.
+        options.temperature = 0.6;
+    }
+    if (Number.isFinite(Number(config?.repeatPenalty))) {
+        options.repeat_penalty = Number(config.repeatPenalty);
+    }
+    return options;
+}
+
 module.exports = {
     createKeyedSerialQueue,
     isCurrentRun,
@@ -178,5 +253,8 @@ module.exports = {
     partitionRespond,
     createRepeatCallTracker,
     resolveOllamaNumCtx,
+    hydrateAxiosStreamError,
+    isOllamaThinkingUnsupportedError,
+    buildOllamaChatOptions,
     READ_ONLY_TOOLS,
 };

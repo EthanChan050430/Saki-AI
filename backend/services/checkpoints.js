@@ -9,6 +9,7 @@ const inside = (root, target) => {
 };
 const failure = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode });
 const rootKey = root => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class CheckpointService {
     constructor({ storeDir, excludePaths = [], maxFiles = 100000, maxBytes = 2 * 1024 ** 3 }) {
@@ -52,22 +53,101 @@ class CheckpointService {
         finally { release(); if (this.sessionLocks.get(key) === queued) this.sessionLocks.delete(key); }
     }
 
-    async withWorkspace(root, callback) {
-        const key = path.resolve(root);
-        if ((this.workspaceContext.getStore() || []).some(owned => this.workspaceLocks.get(owned.root) === owned.token && inside(owned.root, key))) return callback();
-        return this.withWorkspaces([key], callback);
+    pruneWorkspaceLocks() {
+        for (const [lockKey, bucket] of this.workspaceLocks.entries()) {
+            for (const [token, lease] of bucket.entries()) {
+                if (lease?.isActive && !lease.isActive()) {
+                    bucket.delete(token);
+                }
+            }
+            if (bucket.size === 0) this.workspaceLocks.delete(lockKey);
+        }
     }
 
-    async withWorkspaces(roots, callback) {
+    findBlockingWorkspaceLocks(outer, requestedKind = '') {
+        this.pruneWorkspaceLocks();
+        const conflicts = [];
+        for (const bucket of this.workspaceLocks.values()) {
+            for (const lease of bucket.values()) {
+                if (!outer.some(key => inside(lease.root, key) || inside(key, lease.root))) continue;
+                // Snapshot capture already detects concurrent disk edits atomically; only serialize against active restores or running tools.
+                if (requestedKind === 'prepare' && lease.kind === 'agent') continue;
+                conflicts.push(lease);
+            }
+        }
+        return conflicts;
+    }
+
+    workspaceConflictError(conflicts) {
+        const restoring = conflicts.find(item => item.kind === 'restore');
+        if (restoring) return failure('此工作区正在还原检查点，请稍后重试。');
+        const labeled = conflicts.find(item => item.label || item.chatId);
+        if (labeled) {
+            return failure(`此工作区仍有任务运行（${labeled.label || labeled.chatId}），请先停止该任务后重试。`);
+        }
+        return failure('此工作区仍有任务运行或正在还原，请先停止任务后重试。');
+    }
+
+    async acquireWorkspaces(roots, options = {}) {
+        const { kind = 'run', chatId = null, label = '', isActive = null, waitMs = 500 } = options;
         const keys = [...new Map(roots.map(root => [rootKey(root), path.resolve(root)])).values()];
         const outer = keys.filter(key => !keys.some(parent => parent !== key && inside(parent, key)));
-        if ([...this.workspaceLocks.keys()].some(active => outer.some(key => inside(active, key) || inside(key, active)))) {
-            throw failure('此工作区仍有任务运行或正在还原，请先停止任务后重试。');
+        const deadline = Date.now() + Math.max(0, waitMs);
+        let conflicts = this.findBlockingWorkspaceLocks(outer, kind);
+        while (conflicts.length && conflicts.every(item => item.kind === 'prepare') && Date.now() < deadline) {
+            await sleep(25);
+            conflicts = this.findBlockingWorkspaceLocks(outer, kind);
         }
+        if (conflicts.length) throw this.workspaceConflictError(conflicts);
+
         const token = Symbol('workspace-lease');
-        outer.forEach(key => this.workspaceLocks.set(key, token));
-        try { return await this.workspaceContext.run(outer.map(root => ({ root, token })), callback); }
-        finally { outer.forEach(key => { if (this.workspaceLocks.get(key) === token) this.workspaceLocks.delete(key); }); }
+        const entries = outer.map(root => ({
+            token,
+            root,
+            lockKey: rootKey(root),
+            kind,
+            chatId: chatId == null ? null : String(chatId),
+            label: String(label || ''),
+            isActive: typeof isActive === 'function' ? isActive : null,
+        }));
+        for (const entry of entries) {
+            let bucket = this.workspaceLocks.get(entry.lockKey);
+            if (!bucket) {
+                bucket = new Map();
+                this.workspaceLocks.set(entry.lockKey, bucket);
+            }
+            bucket.set(token, entry);
+        }
+        const release = () => {
+            for (const entry of entries) {
+                const bucket = this.workspaceLocks.get(entry.lockKey);
+                if (!bucket) continue;
+                bucket.delete(token);
+                if (bucket.size === 0) this.workspaceLocks.delete(entry.lockKey);
+            }
+        };
+        return { token, entries, release };
+    }
+
+    async acquireWorkspace(root, options = {}) {
+        return this.acquireWorkspaces([path.resolve(root)], options);
+    }
+
+    async withWorkspace(root, callback, options = {}) {
+        const key = path.resolve(root);
+        if ((this.workspaceContext.getStore() || []).some(owned => this.workspaceLocks.get(owned.lockKey)?.has(owned.token) && inside(owned.root, key))) {
+            return callback();
+        }
+        return this.withWorkspaces([key], callback, options);
+    }
+
+    async withWorkspaces(roots, callback, options = {}) {
+        const lease = await this.acquireWorkspaces(roots, options);
+        try {
+            return await this.workspaceContext.run(lease.entries.map(entry => ({ root: entry.root, lockKey: entry.lockKey, token: entry.token })), callback);
+        } finally {
+            lease.release();
+        }
     }
 
     async atomicJson(file, value) {
@@ -334,7 +414,7 @@ class CheckpointService {
                 catch (recoveryError) { throw failure(`还原失败且自动恢复未完成。恢复备份：${recoveries.map(item => item.id).join(', ')}。${error.message}；${recoveryError.message}`, 500); }
                 throw error;
             }
-        });
+        }, { kind: 'restore', chatId });
     }
 }
 

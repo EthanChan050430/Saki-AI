@@ -140,21 +140,31 @@ function toolHistoryProvider(provider) {
     return normalized === 'anthropic' ? 'anthropic' : 'openai';
 }
 
-function isToolSchemaRejection(error) {
-    const status = Number(error?.response?.status || error?.status || 0);
+function extractErrorText(error) {
     const data = error?.response?.data;
-    const message = [
+    return [
         error?.message,
         typeof data === 'string' ? data : '',
         data?.error?.message,
-        data?.error,
+        typeof data?.error === 'string' ? data.error : '',
         data?.message,
     ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function isToolSchemaRejection(error) {
+    const status = Number(error?.response?.status || error?.status || 0);
+    const message = extractErrorText(error);
     if (!message) return false;
     const mentionsTools = /tool|function.?call|input_schema/.test(message);
     const rejected = status === 400 || status === 404 || status === 422
         || /unsupported|not support|unknown parameter|invalid|unrecognized|does not|doesn't/.test(message);
     return mentionsTools && rejected;
+}
+
+function isOllamaToolParseError(error) {
+    const message = extractErrorText(error);
+    if (!message) return false;
+    return /xml syntax error|tool.?call pars(?:e|ing) failed|failed to parse tool.?call|unexpected eof.*xml|tool parser/i.test(message);
 }
 
 /**
@@ -296,7 +306,7 @@ function toOllamaMessage(message) {
 const NATIVE_PROTOCOL_NOTE = `## Native tool protocol
 Structured function calls are enabled for this model.
 Prefer the provider's native function-calling channel. Do not also write Tool: or XML for a call you already made natively.
-If the native channel is unavailable, fall back to one Tool: or XML call per action.
+If the native channel is unavailable, fall back to one Tool: call per action.
 Never write an Observation yourself. A final answer must be a respond call, not plain text.
 Do not call respond in the same turn as another tool. That respond is dropped until the tool results come back.`;
 
@@ -317,6 +327,7 @@ module.exports = {
     supportsNativeTools,
     toolHistoryProvider,
     isToolSchemaRejection,
+    isOllamaToolParseError,
     appendToolExchange,
     alignNativeToolHistory,
     recordDeferredNativeRespond,

@@ -1,6 +1,10 @@
 const path = require('path');
 const fs = require('fs-extra');
 const { randomUUID, createHash } = require('node:crypto');
+const {
+    getNeedles, mentionsDeletedMemory, cleanArchiveMarkdown,
+    cleanSessionState, cleanWorkingMemory, atomicText,
+} = require('./memoryLifecycle');
 
 async function writeJsonAtomic(filePath, value) {
     const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
@@ -9,6 +13,30 @@ async function writeJsonAtomic(filePath, value) {
         await fs.rename(temporaryPath, filePath);
     } finally {
         await fs.remove(temporaryPath);
+    }
+}
+
+// Serialize read-modify-write transactions per physical store path, even across
+// MemoryService instances in this Node process. Failures never poison the queue.
+const mutationTails = new Map();
+function withStoreLock(storePath, operation) {
+    const key = path.resolve(storePath);
+    const previous = mutationTails.get(key) || Promise.resolve();
+    const current = previous.then(operation, operation);
+    const settled = current.then(() => {}, () => {});
+    mutationTails.set(key, settled);
+    settled.then(() => {
+        if (mutationTails.get(key) === settled) mutationTails.delete(key);
+    });
+    return current;
+}
+
+async function readJsonOrDefault(filePath, fallback) {
+    try {
+        return await fs.readJson(filePath);
+    } catch (error) {
+        if (error.code === 'ENOENT') return fallback;
+        throw new Error(`Unable to read ${filePath} without data loss: ${error.message}`);
     }
 }
 
@@ -51,6 +79,16 @@ const DECISION_COMMIT_PATTERNS = [
     /\u4eca\u540e\u90fd/, /\u4ee5\u540e\u5c31\u7528/, /\u6c38\u8fdc\u90fd/,
     /\balways use\b/i, /\bfrom now on\b/i, /\blet'?s use\b/i, /\bi'?ve decided\b/i, /\bi decide to\b/i, /\bwe will use\b/i,
 ];
+
+function normalizeFactKey(value = '') {
+    return String(value || '').trim().toLowerCase()
+        .replace(/[^a-z0-9._:-]+/g, '_').slice(0, 120);
+}
+
+function includesSecret(text = '') {
+    return /(?:api[_-]?key|access[_-]?token|password|private[_-]?key|client[_-]?secret)\s*[:=]\s*\S{6,}/i.test(String(text)) ||
+        /\bsk-[a-z0-9_-]{16,}\b/i.test(String(text));
+}
 
 function sanitizeMemoryText(text = '') {
     return String(text || '')
@@ -776,6 +814,14 @@ class MemoryService {
 
     async init() {
         if (this.initialized) return;
+        if (this.initPromise) return this.initPromise;
+        this.initPromise = this._initializeMemory().finally(() => {
+            this.initPromise = null;
+        });
+        return this.initPromise;
+    }
+
+    async _initializeMemory() {
         await fs.ensureDir(this.dataDir);
         await fs.ensureDir(this.memoriesDir);
         await fs.ensureDir(this.workingDir);
@@ -793,14 +839,18 @@ class MemoryService {
             await fs.writeJson(this.knowledgeGraphPath, defaultKnowledgeGraphStore(), { spaces: 2 });
         }
         await this.ensureWorkspaceMemoryFiles();
-        await this.importLegacyTxtMemories();
-        
-        // Pre-warm the embedding model asynchronously in the background so it is ready
-        if (this.embeddingMode === 'warm') this.getEmbeddingExtractor().catch(err => {
-            console.warn('[Memory] Failed to pre-warm embedding model:', err.message);
-        });
-
+        // Legacy migration can call saveStore -> syncCuratedArchive -> loadStore.
+        // Mark initialization ready before that internal reentry, then rollback on error.
         this.initialized = true;
+        try {
+            await this.importLegacyTxtMemories();
+            if (this.embeddingMode === 'warm') this.getEmbeddingExtractor().catch(err => {
+                console.warn('[Memory] Failed to pre-warm embedding model:', err.message);
+            });
+        } catch (error) {
+            this.initialized = false;
+            throw error;
+        }
     }
 
     async loadStore() {
@@ -825,10 +875,19 @@ class MemoryService {
         await this.syncCuratedArchive(store);
     }
 
+    async mutateStore(mutator) {
+        return withStoreLock(this.storePath, async () => {
+            const store = await this.loadStore();
+            const result = await mutator(store);
+            await this.saveStore(store);
+            return result;
+        });
+    }
+
     async loadKnowledgeGraph() {
         await this.init();
         const fallback = defaultKnowledgeGraphStore();
-        const store = await fs.readJson(this.knowledgeGraphPath).catch(() => fallback);
+        const store = await readJsonOrDefault(this.knowledgeGraphPath, fallback);
         return {
             ...fallback,
             ...store,
@@ -855,7 +914,7 @@ class MemoryService {
     async loadVectorStore() {
         await this.init();
         const fallback = { version: 1, model: this.embeddingModelName, vectors: {} };
-        const store = await fs.readJson(this.vectorStorePath).catch(() => fallback);
+        const store = await readJsonOrDefault(this.vectorStorePath, fallback);
         return {
             ...fallback,
             ...store,
@@ -875,7 +934,7 @@ class MemoryService {
     async loadShortTermStore() {
         await this.init();
         const fallback = defaultShortTermStore();
-        const store = await fs.readJson(this.shortTermPath).catch(() => fallback);
+        const store = await readJsonOrDefault(this.shortTermPath, fallback);
         return {
             ...fallback,
             ...store,
@@ -897,7 +956,7 @@ class MemoryService {
     async loadSleepStore() {
         await this.init();
         const fallback = defaultSleepStore();
-        const store = await fs.readJson(this.sleepStorePath).catch(() => fallback);
+        const store = await readJsonOrDefault(this.sleepStorePath, fallback);
         return {
             ...fallback,
             ...store,
@@ -924,10 +983,15 @@ class MemoryService {
 
     isTombstoned(store, input = {}) {
         const signature = buildContentSignature(input.content || input.summary || '');
+        const hashed = value => value ? createHash('sha256').update(String(value)).digest('hex') : '';
         return (store.tombstones || []).some(item =>
             item.scopeId === this.scopeId
-            && ((input.id && item.id === input.id) || (input.slug && item.slug === input.slug)
-                || (input.name && item.name === input.name) || (signature && item.signature === signature))
+            && (
+                (input.id && (item.id === input.id || item.idHash === hashed(input.id))) ||
+                (input.slug && (item.slug === input.slug || item.slugHash === hashed(input.slug))) ||
+                (input.name && (item.name === input.name || item.nameHash === hashed(input.name))) ||
+                (signature && (item.signature === signature || item.signatureHash === hashed(signature)))
+            )
         );
     }
 
@@ -1005,14 +1069,23 @@ class MemoryService {
         };
     }
 
-    async upsertKnowledgeGraph({ summary = '', entities = [], relations = [], reflection = null, source = 'offline-reflection', runAt = nowIso(), scopeId = this.scopeId } = {}) {
+    async upsertKnowledgeGraph(input = {}) {
+        return withStoreLock(this.knowledgeGraphPath, () => this._upsertKnowledgeGraphUnlocked(input));
+    }
+
+    async _upsertKnowledgeGraphUnlocked({ summary = '', entities = [], relations = [], reflection = null, source = 'offline-reflection', runAt = nowIso(), scopeId = this.scopeId } = {}) {
         const store = await this.loadKnowledgeGraph();
+        const deletedStore = await this.loadStore();
         const normalizedEntities = (Array.isArray(entities) ? entities : [])
             .map(entity => this.normalizeKnowledgeEntity(entity, { source, runAt }))
-            .filter(Boolean);
+            .filter(item => item && !this.isTombstoned(deletedStore, {
+                name: item.name, content: item.summary || item.status,
+            }));
         const normalizedRelations = (Array.isArray(relations) ? relations : [])
             .map(relation => this.normalizeKnowledgeRelation(relation, { source, runAt }))
-            .filter(Boolean);
+            .filter(item => item && !this.isTombstoned(deletedStore, {
+                content: item.evidence || item.object,
+            }));
         for (const item of [...normalizedEntities, ...normalizedRelations]) item.scopeId = scopeId;
 
         for (const entity of normalizedEntities) {
@@ -1136,9 +1209,9 @@ class MemoryService {
     }
 
     async recordOfflineReflectionRun({ summary = '', provider = '', model = '', entities = [], relations = [], runAt = nowIso() } = {}) {
-        const store = await this.loadStore();
-        store.stats.lastOfflineReflectionAt = runAt;
-        await this.saveStore(store);
+        await this.mutateStore(store => {
+            store.stats.lastOfflineReflectionAt = runAt;
+        });
 
         return this.upsertKnowledgeGraph({
             summary,
@@ -1190,6 +1263,12 @@ class MemoryService {
     }
 
     async upsertVectorEntry(memory, vectorStore = null) {
+        if (!vectorStore) return withStoreLock(this.vectorStorePath,
+            () => this._upsertVectorEntryUnlocked(memory, null));
+        return this._upsertVectorEntryUnlocked(memory, vectorStore);
+    }
+
+    async _upsertVectorEntryUnlocked(memory, vectorStore = null) {
         if (!memory?.id) return vectorStore;
         const store = vectorStore || await this.loadVectorStore();
         const embedding = await this.embedText(buildMemoryDocument(memory));
@@ -1205,6 +1284,12 @@ class MemoryService {
     }
 
     async deleteVectorEntry(memoryId, vectorStore = null) {
+        if (!vectorStore) return withStoreLock(this.vectorStorePath,
+            () => this._deleteVectorEntryUnlocked(memoryId, null));
+        return this._deleteVectorEntryUnlocked(memoryId, vectorStore);
+    }
+
+    async _deleteVectorEntryUnlocked(memoryId, vectorStore = null) {
         if (!memoryId) return vectorStore;
         const store = vectorStore || await this.loadVectorStore();
         if (store.vectors[memoryId]) {
@@ -1217,6 +1302,10 @@ class MemoryService {
     }
 
     async rebuildVectorIndex() {
+        return withStoreLock(this.vectorStorePath, () => this._rebuildVectorIndexUnlocked());
+    }
+
+    async _rebuildVectorIndexUnlocked() {
         const memories = (await this.loadStore()).memories;
         const vectors = await this.loadVectorStore();
         const liveIds = new Set(memories.map(memory => memory.id));
@@ -1372,7 +1461,7 @@ class MemoryService {
             memoryPressure: '[Stable]',
             updatedAt: nowIso(),
         };
-        const root = await fs.readJson(this.sessionStateJsonPath).catch(() => ({}));
+        const root = await readJsonOrDefault(this.sessionStateJsonPath, {});
         const chats = (root && typeof root === 'object' && root.chats) || {};
         const stored = chats[chatKey] || {};
         const merged = { ...fallback, ...stored };
@@ -1381,6 +1470,10 @@ class MemoryService {
     }
 
     async saveSessionState(state, chatId = '') {
+        return withStoreLock(this.sessionStateJsonPath, () => this._saveSessionStateUnlocked(state, chatId));
+    }
+
+    async _saveSessionStateUnlocked(state, chatId = '') {
         const chatKey = normalizeChatKey(chatId);
         const normalized = {
             currentTask: state.currentTask || '[None]',
@@ -1391,11 +1484,11 @@ class MemoryService {
             memoryPressure: state.memoryPressure || '[Stable]',
             updatedAt: nowIso(),
         };
-        const root = await fs.readJson(this.sessionStateJsonPath).catch(() => ({}));
+        const root = await readJsonOrDefault(this.sessionStateJsonPath, {});
         const nextRoot = (root && typeof root === 'object') ? { ...root } : {};
         nextRoot.chats = nextRoot.chats || {};
         nextRoot.chats[chatKey] = normalized;
-        await fs.writeJson(this.sessionStateJsonPath, nextRoot, { spaces: 2 });
+        await writeJsonAtomic(this.sessionStateJsonPath, nextRoot);
         await fs.writeFile(this.sessionStatePath, this.renderSessionState(normalized), 'utf8');
         return normalized;
     }
@@ -1466,6 +1559,8 @@ class MemoryService {
             turns: Number(candidate.turns || candidate.observationCount || candidate.items?.length || 1),
             source: candidate.source || 'auto-fallback',
             provenance: candidate.provenance || null,
+            factKey: normalizeFactKey(candidate.factKey),
+            factValue: candidate.factValue ?? null,
             createdAt: candidate.createdAt || nowIso(),
         };
     }
@@ -1546,8 +1641,10 @@ class MemoryService {
                 importance: clampNumber(Math.max(candidate.importance, evaluation.score), 0.4, 0.99),
                 auto: true,
                 provenance: candidate.provenance,
+                factKey: candidate.factKey,
+                factValue: candidate.factValue,
                 source: `${source}:${candidate.source || 'candidate'}`,
-                merge,
+                merge: candidate.factKey ? false : merge,
             });
             saved.push(memory);
             promotedCandidates.push(candidate);
@@ -1584,6 +1681,10 @@ class MemoryService {
 
         for (const [chatId, chat] of Object.entries(nextStore.chats || {})) {
             const topics = Object.entries(chat?.topics || {})
+                .filter(([, topic]) => {
+                    const age = new Date(topic?.updatedAt || topic?.createdAt || 0).getTime();
+                    return Number.isFinite(age) && age >= cutoff;
+                })
                 .sort((left, right) => new Date(right[1]?.updatedAt || 0) - new Date(left[1]?.updatedAt || 0))
                 .slice(0, 10)
                 .reduce((acc, [key, value]) => {
@@ -1609,7 +1710,20 @@ class MemoryService {
         return nextStore;
     }
 
-    async updateShortTermMemory(chatId, { userMessage = '', assistantMessage = '' } = {}) {
+    async pruneStaleShortTerm() {
+        return withStoreLock(this.shortTermPath, async () => {
+            const store = await this.loadShortTermStore();
+            const pruned = this.pruneShortTermStore(store);
+            await this.saveShortTermStore(pruned);
+            return pruned;
+        });
+    }
+
+    async updateShortTermMemory(chatId, payload = {}) {
+        return withStoreLock(this.shortTermPath, () => this._updateShortTermMemoryUnlocked(chatId, payload));
+    }
+
+    async _updateShortTermMemoryUnlocked(chatId, { userMessage = '', assistantMessage = '' } = {}) {
         if (!chatId) return { buffered: [], flushed: [], sensory: this.captureSensorySnapshot({ userMessage, assistantMessage }) };
 
         const sensory = this.captureSensorySnapshot({ userMessage, assistantMessage });
@@ -1743,6 +1857,10 @@ class MemoryService {
     }
 
     async enqueueSleepCandidates(candidates = [], reason = 'auto') {
+        return withStoreLock(this.sleepStorePath, () => this._enqueueSleepCandidatesUnlocked(candidates, reason));
+    }
+
+    async _enqueueSleepCandidatesUnlocked(candidates = [], reason = 'auto') {
         const validCandidates = (candidates || []).filter(item => item?.content || item?.summary);
         if (!validCandidates.length) return [];
 
@@ -1766,6 +1884,8 @@ class MemoryService {
                 turns: Number(candidate.turns) || 1,
                 source: candidate.source || 'sleep-queue',
                 provenance: candidate.provenance || null,
+                factKey: normalizeFactKey(candidate.factKey),
+                factValue: candidate.factValue ?? null,
                 chatIds: uniqueList([candidate.chatId].filter(Boolean)),
                 scopeId: candidate.scopeId || this.scopeId,
                 createdAt: candidate.createdAt || nowIso(),
@@ -1806,6 +1926,38 @@ class MemoryService {
             .slice(0, 200);
         await this.saveSleepStore(sleepStore);
         return queued;
+    }
+
+    async reviewPendingMemory({ id, action, changes = {} } = {}) {
+        if (!id || !['approve', 'discard'].includes(action)) throw new Error('Invalid manual review action');
+        return withStoreLock(this.sleepStorePath, async () => {
+            const store = await this.loadSleepStore();
+            const candidate = store.queue.find(item => item.id === id && this.isInScope(item));
+            if (!candidate) throw new Error('Pending candidate no longer exists');
+            let saved = null;
+            if (action === 'approve') {
+                const name = String(changes.name || candidate.name || deriveCanonicalMemoryName(candidate)).trim().slice(0, 120);
+                const content = String(changes.content ?? candidate.content ?? '').trim().slice(0, 3200);
+                const summary = String(changes.summary ?? candidate.summary ?? '').trim().slice(0, 280);
+                if (!name || !content) throw new Error('Approved memory needs a name and content');
+                if (includesSecret(content)) throw new Error('Memory content appears to contain a credential');
+                saved = await this.upsertMemory({
+                    name, summary, content,
+                    category: String(changes.category || candidate.category || 'general').slice(0, 40),
+                    importance: clampNumber(changes.importance ?? candidate.importance ?? 0.7),
+                    factKey: String(changes.factKey ?? candidate.factKey ?? '').slice(0, 120),
+                    factValue: changes.factValue ?? candidate.factValue ?? null,
+                    provenance: candidate.provenance || null,
+                    source: 'manual-sleep-review', merge: false, auto: false,
+                });
+            }
+            store.queue = store.queue.filter(item => item.id !== id);
+            await this.saveSleepStore(store);
+            await this.appendSleepLog({
+                finishedAt: nowIso(), reason: `manual-${action}`, processed: 1,
+            }, [candidate]);
+            return { action, id, memory: saved, queueSize: store.queue.length };
+        });
     }
 
     async searchPendingMemories(query = '', limit = 4, chatId = '') {
@@ -1885,7 +2037,17 @@ class MemoryService {
         await fs.writeFile(filePath, `${existing.trimEnd()}\n${lines.join('\n')}\n`, 'utf8');
     }
 
-    async runSleepCycle({ reason = 'manual', sleepStore = null, force = false } = {}) {
+    async runSleepCycle(options = {}) {
+        if (this.sleepCycleInFlight) return this.sleepCycleInFlight;
+        this.sleepCycleInFlight = this._runSleepCycleImpl(options);
+        try {
+            return await this.sleepCycleInFlight;
+        } finally {
+            this.sleepCycleInFlight = null;
+        }
+    }
+
+    async _runSleepCycleImpl({ reason = 'manual', sleepStore = null, force = false } = {}) {
         const queueStore = sleepStore || await this.loadSleepStore();
         if (!queueStore.queue.length && !force) {
             return { processed: 0, consolidated: [], queueSize: 0, skipped: true };
@@ -1901,11 +2063,14 @@ class MemoryService {
         }
 
         const storeBeforeSleep = await this.loadStore();
-        const consolidatedCandidates = Array.from(groups.values())
-            .map(group => this.combineSleepCandidates(group))
-            .filter(candidate => !this.isTombstoned(storeBeforeSleep, {
+        const eligibleGroups = Array.from(groups.values()).filter(group => {
+            const candidate = this.combineSleepCandidates(group);
+            return !this.isTombstoned(storeBeforeSleep, {
                 ...candidate, name: deriveCanonicalMemoryName(candidate),
-            }));
+            }) && this.shouldPromoteAutonomously(candidate).shouldPromote;
+        });
+        const consolidatedCandidates = eligibleGroups.map(group => this.combineSleepCandidates(group));
+        const processedIds = new Set(eligibleGroups.flatMap(group => group.map(item => item.id)));
         const consolidatedMemories = [];
 
         for (const candidate of consolidatedCandidates) {
@@ -1920,42 +2085,59 @@ class MemoryService {
                 auto: true,
                 source: `sleep-cycle:${candidate.source || 'queue'}`,
                 provenance: candidate.provenance || null,
-                merge: true,
+                factKey: candidate.factKey,
+                factValue: candidate.factValue,
+                merge: !candidate.factKey,
             });
             consolidatedMemories.push(memory);
         }
 
         const finishedAt = nowIso();
-        queueStore.queue = queueStore.queue.filter(item => !this.isInScope(item));
-        queueStore.lastRunAt = finishedAt;
-        queueStore.runs.unshift({
-            id: slugify(`sleep-${finishedAt}`),
-            reason,
-            processed: consolidatedCandidates.length,
-            finishedAt,
-            topics: consolidatedCandidates
-                .map(item => `[${item.category}] ${item.topicLabel || item.summary}`)
-                .slice(0, 12),
+        let remaining = 0;
+        await withStoreLock(this.sleepStorePath, async () => {
+            const liveQueue = await this.loadSleepStore();
+            // Preserve arrivals that were enqueued while consolidation ran.
+            const expiry = Date.now() - 14 * 24 * 60 * 60 * 1000;
+            liveQueue.queue = liveQueue.queue.filter(item =>
+                !processedIds.has(item.id) &&
+                new Date(item.createdAt || item.updatedAt || 0).getTime() >= expiry
+            );
+            liveQueue.lastRunAt = finishedAt;
+            liveQueue.runs.unshift({
+                id: slugify(`sleep-${finishedAt}`),
+                reason,
+                processed: consolidatedCandidates.length,
+                finishedAt,
+                topics: consolidatedCandidates
+                    .map(item => `[${item.category}] ${item.topicLabel || item.summary}`)
+                    .slice(0, 12),
+            });
+            remaining = liveQueue.queue.length;
+            await this.saveSleepStore(liveQueue);
         });
-        await this.saveSleepStore(queueStore);
         await this.appendSleepLog({
             reason,
             processed: consolidatedCandidates.length,
             finishedAt,
         }, consolidatedCandidates);
 
-        const store = await this.loadStore();
-        store.stats.lastSleepCycleAt = finishedAt;
-        await this.saveStore(store);
+        await this.mutateStore(store => {
+            store.stats.lastSleepCycleAt = finishedAt;
+        });
 
         return {
             processed: consolidatedCandidates.length,
             consolidated: consolidatedMemories,
-            queueSize: queueStore.queue.length,
+            queueSize: remaining,
         };
     }
 
     async maybeRunSleepCycle({ force = false, reason = 'auto' } = {}) {
+        // Prevent any legacy scheduled caller from silently promoting memories.
+        return { processed: 0, consolidated: [], queueSize: (await this.loadSleepStore()).queue.length, skipped: true, manualOnly: true };
+    }
+
+    async _legacyMaybeRunSleepCycle({ force = false, reason = 'auto' } = {}) {
         const sleepStore = await this.loadSleepStore();
         if (!sleepStore.queue.length) {
             return { processed: 0, consolidated: [], queueSize: 0, skipped: true };
@@ -1963,10 +2145,11 @@ class MemoryService {
 
         const lastRunMs = sleepStore.lastRunAt ? new Date(sleepStore.lastRunAt).getTime() : 0;
         const oldestMs = new Date(sleepStore.queue[sleepStore.queue.length - 1]?.updatedAt || Date.now()).getTime();
-        const shouldRun = force
-            || sleepStore.queue.length >= 8
+        const reviewDue = !lastRunMs || (Date.now() - lastRunMs) >= (20 * 60 * 1000);
+        const shouldRun = force || (reviewDue && (
+            sleepStore.queue.length >= 8
             || (Date.now() - oldestMs) >= (20 * 60 * 1000)
-            || (lastRunMs && (Date.now() - lastRunMs) >= (30 * 60 * 1000));
+        ));
 
         if (!shouldRun) {
             return { processed: 0, consolidated: [], queueSize: sleepStore.queue.length, skipped: true };
@@ -2097,9 +2280,13 @@ class MemoryService {
     }
 
     async rememberDecision(entry = '') {
+        return withStoreLock(this.coldStorePath, () => this._rememberDecisionUnlocked(entry));
+    }
+
+    async _rememberDecisionUnlocked(entry = '') {
         const decision = String(entry || '').trim();
         if (!decision) return null;
-        const store = await fs.readJson(this.coldStorePath).catch(() => ({ version: 1, decisions: [], updatedAt: null }));
+        const store = await readJsonOrDefault(this.coldStorePath, { version: 1, decisions: [], updatedAt: null });
         store.decisions = Array.isArray(store.decisions) ? store.decisions : [];
         const item = {
             id: slugify(`${decision}-${Date.now()}`),
@@ -2109,7 +2296,7 @@ class MemoryService {
         store.decisions.unshift(item);
         store.decisions = store.decisions.slice(0, 200);
         store.updatedAt = nowIso();
-        await fs.writeJson(this.coldStorePath, store, { spaces: 2 });
+        await writeJsonAtomic(this.coldStorePath, store);
 
         const topicFile = path.join(this.memoryTopicsDir, 'decisions.md');
         const existing = await fs.readFile(topicFile, 'utf8').catch(() => '# Decisions\n');
@@ -2284,6 +2471,10 @@ class MemoryService {
     }
 
     async getMemory(identifier) {
+        return withStoreLock(this.storePath, () => this._getMemoryUnlocked(identifier));
+    }
+
+    async _getMemoryUnlocked(identifier) {
         const store = await this.loadStore();
         const normalized = String(identifier || '').trim();
         const memory = store.memories.find(item =>
@@ -2326,6 +2517,10 @@ class MemoryService {
     }
 
     async upsertMemory(input) {
+        return withStoreLock(this.storePath, () => this._upsertMemoryUnlocked(input));
+    }
+
+    async _upsertMemoryUnlocked(input) {
         if (input.scopeId && input.scopeId !== this.scopeId) {
             throw new Error('Memory scope does not match this service instance');
         }
@@ -2339,7 +2534,8 @@ class MemoryService {
         const existing = store.memories.find(memory =>
             this.isInScope(memory) && (memory.slug === slug ||
             memory.name === name ||
-            memory.fileName === `${sanitizeName(name)}.txt`)
+            memory.fileName === `${sanitizeName(name)}.txt` ||
+            (normalizeFactKey(input.factKey) && memory.factKey === normalizeFactKey(input.factKey)))
         );
         if (!existing && this.isTombstoned(store, { ...input, name, slug }) && input.restoreDeleted !== true) {
             throw new Error('This memory was explicitly deleted in the current scope and cannot be recreated from derived sources.');
@@ -2347,21 +2543,26 @@ class MemoryService {
         const timestamp = nowIso();
 
         if (existing) {
-            const replacing = input.merge === false;
+            // A stable fact key identifies one changing fact, not an append-only note.
+            const replacing = input.merge === false ||
+                (!!normalizeFactKey(input.factKey) && existing.factKey === normalizeFactKey(input.factKey));
             if (replacing && (existing.content !== (input.content || existing.content) || existing.summary !== summary)) {
                 existing.history = [...(existing.history || []), {
                     content: existing.content,
                     summary: existing.summary,
                     provenance: existing.provenance || null,
+                    factValue: existing.factValue ?? null,
                     validFrom: existing.validFrom || existing.createdAt,
                     validTo: timestamp,
                 }];
                 existing.validFrom = timestamp;
             }
-            const appendedContent = input.merge === false
+            const appendedContent = replacing
                 ? (input.content || existing.content)
                 : dedupeTextBlocks([existing.content, input.content], 4000);
             existing.name = name;
+            if (input.factKey) existing.factKey = normalizeFactKey(input.factKey);
+            if (input.factValue !== undefined) existing.factValue = input.factValue;
             existing.summary = replacing ? summary : summarizeSalientText(
                 [existing.summary, summary].filter(Boolean).join('. '),
                 { maxSentences: 4, maxChars: 240 }
@@ -2401,6 +2602,8 @@ class MemoryService {
             aliases,
             source: input.source || 'manual',
             provenance: input.provenance || null,
+            factKey: normalizeFactKey(input.factKey),
+            factValue: input.factValue ?? null,
             validFrom: timestamp,
             scopeId: input.scopeId || this.scopeId,
             importance: input.importance || inferImportance(input.content || '', name, category),
@@ -2421,6 +2624,10 @@ class MemoryService {
     }
 
     async deleteMemory(identifier, trashHandler) {
+        return withStoreLock(this.storePath, () => this._deleteMemoryUnlocked(identifier, trashHandler));
+    }
+
+    async _deleteMemoryUnlocked(identifier, trashHandler) {
         const store = await this.loadStore();
         const index = store.memories.findIndex(memory =>
             this.isInScope(memory) && (memory.id === identifier ||
@@ -2431,70 +2638,153 @@ class MemoryService {
         if (index === -1) return false;
         const [memory] = store.memories.splice(index, 1);
         store.tombstones = (store.tombstones || []).filter(item => item.id !== memory.id);
-        store.tombstones.unshift({
-            id: memory.id,
-            slug: memory.slug,
-            name: memory.name,
-            signature: buildContentSignature(memory.content || memory.summary || ''),
+        const hashed = value => createHash('sha256').update(String(value || '')).digest('hex');
+        const tombstone = {
+            idHash: hashed(memory.id),
+            slugHash: hashed(memory.slug),
+            nameHash: hashed(memory.name),
+            signatureHash: hashed(buildContentSignature(memory.content || memory.summary || '')),
             scopeId: this.scopeId,
             deletedAt: nowIso(),
-        });
+            purgePending: true,
+            purgeSnapshot: memory,
+        };
+        store.tombstones.unshift(tombstone);
         this.rebuildProfiles(store);
         await this.saveStore(store);
-        const sleepStore = await this.loadSleepStore();
-        sleepStore.queue = sleepStore.queue.filter(item =>
-            !this.isInScope(item) || (item.name !== memory.name && item.topicKey !== memory.slug
-                && buildContentSignature(item.content || item.summary || '') !== buildContentSignature(memory.content || memory.summary || ''))
-        );
-        await this.saveSleepStore(sleepStore);
-        const shortTerm = await this.loadShortTermStore();
-        for (const [chatId, chat] of Object.entries(shortTerm.chats)) {
-            if (chat.topics && chatId === memory.provenance?.chatId) {
-                delete shortTerm.chats[chatId].topics[memory.provenance?.topicKey];
-            }
-            for (const [key, topic] of Object.entries(chat.topics || {})) {
-                topic.items = (topic.items || []).filter(item =>
-                    buildContentSignature(item.text || item.summary || '') !== buildContentSignature(memory.content || memory.summary || '')
-                );
-                if (!topic.items.length) delete chat.topics[key];
-                else topic.summary = summarizeTopicItems(topic.items);
-            }
-        }
-        await this.saveShortTermStore(shortTerm);
-        const graph = await this.loadKnowledgeGraph();
-        graph.entities = graph.entities.filter(item => item.sourceMemoryId !== memory.id);
-        graph.relations = graph.relations.filter(item => item.sourceMemoryId !== memory.id);
-        await this.saveKnowledgeGraph(graph);
-        const mirrorPath = path.join(this.memoriesDir, memory.fileName || `${sanitizeName(memory.name)}.txt`);
-        if (await fs.pathExists(mirrorPath)) {
-            if (trashHandler) await trashHandler(mirrorPath);
-            else await fs.remove(mirrorPath);
-        }
-        await this.deleteVectorEntry(memory.id);
-        this.rebuildProfiles(store);
+        await this._purgeDerivedMemory(memory);
+        delete tombstone.purgeSnapshot;
+        delete tombstone.purgePending;
         await this.saveStore(store);
         return true;
+    }
+
+    async _purgeDerivedMemory(memory) {
+        const needles = getNeedles(memory);
+        await withStoreLock(this.sleepStorePath, async () => {
+            const sleepStore = await this.loadSleepStore();
+            sleepStore.queue = sleepStore.queue.filter(item =>
+                !mentionsDeletedMemory(item, memory, needles) &&
+                item.name !== memory.name && item.topicKey !== memory.slug
+            );
+            await this.saveSleepStore(sleepStore);
+        });
+        await withStoreLock(this.shortTermPath, async () => {
+            const shortTerm = await this.loadShortTermStore();
+            for (const chat of Object.values(shortTerm.chats || {})) {
+                chat.recentTurns = (chat.recentTurns || []).filter(item =>
+                    !mentionsDeletedMemory(item, memory, needles)
+                );
+                for (const [key, topic] of Object.entries(chat.topics || {})) {
+                    topic.items = (topic.items || []).filter(item =>
+                        !mentionsDeletedMemory(item, memory, needles)
+                    );
+                    if (!topic.items.length || mentionsDeletedMemory(
+                        [topic.topicLabel, topic.summary].join(' '), memory, needles
+                    )) delete chat.topics[key];
+                    else topic.summary = summarizeTopicItems(topic.items);
+                }
+            }
+            await this.saveShortTermStore(shortTerm);
+        });
+        await withStoreLock(this.knowledgeGraphPath, async () => {
+            const graph = await this.loadKnowledgeGraph();
+            graph.entities = graph.entities.filter(item => !mentionsDeletedMemory(item, memory, needles));
+            graph.relations = graph.relations.filter(item => !mentionsDeletedMemory(item, memory, needles));
+            graph.reflections = graph.reflections.filter(item => !mentionsDeletedMemory(item, memory, needles));
+            await this.saveKnowledgeGraph(graph);
+        });
+        await withStoreLock(this.sessionStateJsonPath, async () => {
+            if (!(await fs.pathExists(this.sessionStateJsonPath))) return;
+            const root = await fs.readJson(this.sessionStateJsonPath);
+            await writeJsonAtomic(this.sessionStateJsonPath, cleanSessionState(root, memory, needles));
+        });
+        await withStoreLock(this.coldStorePath, async () => {
+            if (!(await fs.pathExists(this.coldStorePath))) return;
+            const cold = await fs.readJson(this.coldStorePath);
+            cold.decisions = (cold.decisions || []).filter(item =>
+                !mentionsDeletedMemory(item, memory, needles)
+            );
+            await writeJsonAtomic(this.coldStorePath, cold);
+        });
+        for (const fileName of await fs.readdir(this.workingDir).catch(() => [])) {
+            if (!fileName.endsWith('.json')) continue;
+            const filePath = path.join(this.workingDir, fileName);
+            await withStoreLock(filePath, async () => {
+                const data = await fs.readJson(filePath);
+                await writeJsonAtomic(filePath, cleanWorkingMemory(data, memory, needles));
+            });
+        }
+        if (this.captureQueue) await this.captureQueue.dropForDeletedMemory(memory);
+        // Manual reflection drafts are also derivative storage. Erase matching
+        // proposals so a deleted memory does not remain in a review draft.
+        const reviewDraftFile = path.join(this.dataDir, 'memory_review_draft.json');
+        if (await fs.pathExists(reviewDraftFile)) {
+            const reviewDraft = await fs.readJson(reviewDraftFile);
+            let changed = false;
+            for (const key of ['memoryCandidates', 'entities', 'relations']) {
+                if (!Array.isArray(reviewDraft[key])) continue;
+                const before = reviewDraft[key].length;
+                reviewDraft[key] = reviewDraft[key].filter(item =>
+                    !mentionsDeletedMemory(item, memory, needles)
+                );
+                if (before !== reviewDraft[key].length) changed = true;
+            }
+            if (changed) await writeJsonAtomic(reviewDraftFile, reviewDraft);
+        }
+        await cleanArchiveMarkdown(this.memoryArchiveDir, memory, needles);
+        if (await fs.pathExists(this.sessionStatePath)) {
+            const original = await fs.readFile(this.sessionStatePath, 'utf8');
+            const updated = original.split(/\r?\n/).filter(line =>
+                !mentionsDeletedMemory(line, memory, needles)
+            ).join('\n');
+            if (updated !== original.replace(/\r\n/g, '\n')) {
+                await atomicText(this.sessionStatePath, updated);
+            }
+        }
+        const mirrorPath = path.join(this.memoriesDir, memory.fileName || `${sanitizeName(memory.name)}.txt`);
+        // Deliberate forgetting must not leave the mirror in the Trash.
+        await fs.remove(mirrorPath);
+        await this.deleteVectorEntry(memory.id);
+        await this.syncCuratedArchive(await this.loadStore());
+    }
+
+    async recoverPendingPurges() {
+        return withStoreLock(this.storePath, async () => {
+            const store = await this.loadStore();
+            for (const tombstone of store.tombstones || []) {
+                if (!tombstone.purgePending || !tombstone.purgeSnapshot) continue;
+                await this._purgeDerivedMemory(tombstone.purgeSnapshot);
+                delete tombstone.purgeSnapshot;
+                delete tombstone.purgePending;
+                await this.saveStore(store);
+            }
+        });
     }
 
     async updateWorkingMemory(chatId, payload) {
         if (!chatId) return null;
         await this.init();
         const filePath = path.join(this.workingDir, `${chatId}.json`);
-        const prev = await fs.readJson(filePath).catch(() => ({ chatId, turns: [], summary: '', updatedAt: null }));
-        prev.turns.push({
-            at: nowIso(),
-            user: payload.user || '',
-            assistant: payload.assistant || '',
-            notes: payload.notes || '',
+        return withStoreLock(filePath, async () => {
+            const prev = await readJsonOrDefault(filePath, { chatId, turns: [], summary: '', updatedAt: null });
+            if (payload.jobId && prev.turns.some(turn => turn.jobId === payload.jobId)) return prev;
+            prev.turns.push({
+                at: nowIso(),
+                jobId: payload.jobId || null,
+                user: payload.user || '',
+                assistant: payload.assistant || '',
+                notes: payload.notes || '',
+            });
+            prev.turns = prev.turns.slice(-12);
+            prev.summary = prev.turns
+                .slice(-6)
+                .map(turn => `User: ${previewText(turn.user, 80)}\nAssistant: ${previewText(turn.assistant, 100)}`)
+                .join('\n\n');
+            prev.updatedAt = nowIso();
+            await writeJsonAtomic(filePath, prev);
+            return prev;
         });
-        prev.turns = prev.turns.slice(-12);
-        prev.summary = prev.turns
-            .slice(-6)
-            .map(turn => `User: ${previewText(turn.user, 80)}\nAssistant: ${previewText(turn.assistant, 100)}`)
-            .join('\n\n');
-        prev.updatedAt = nowIso();
-        await fs.writeJson(filePath, prev, { spaces: 2 });
-        return prev;
     }
 
     async getWorkingMemory(chatId) {
@@ -2568,6 +2858,7 @@ class MemoryService {
     extractExplicitMemories(userMessage = '') {
         if (!isExplicitRememberRequest(userMessage)) return [];
         const cleaned = stripRememberInstruction(userMessage) || userMessage;
+        if (includesSecret(cleaned)) return [];
         const category = detectCategory(cleaned, cleaned);
         return [{
             name: deriveExplicitMemoryName(cleaned, category),
@@ -2581,7 +2872,7 @@ class MemoryService {
         }];
     }
 
-    async autoCaptureFromTurn({ chatId = '', userMessage, assistantMessage, provider, model, ollamaUrl, config, callLLM }) {
+    async autoCaptureFromTurn({ chatId = '', userMessage, assistantMessage, provider, model, ollamaUrl, config, callLLM, retryOnModelError = false }) {
         const explicit = this.extractExplicitMemories(userMessage);
         const fallback = explicit.length > 0 ? [] : this.fallbackAutoMemories(userMessage, assistantMessage);
         let candidates = explicit.length > 0 ? [...explicit] : [...fallback];
@@ -2600,8 +2891,9 @@ Rules:
 - Extract only facts explicitly stated by the user. Assistant suggestions are not user facts.
 - Include evidenceText: an exact quote from the user message supporting each fact.
 - Return JSON array only.
+- For facts that can change, include a stable factKey (such as user.drink_preference) and factValue. Use the SAME factKey when the user corrects or changes that fact.
 - Each item schema:
-  {"name":"short title","summary":"one sentence","content":"detailed memory","category":"identity|preference|project|interaction|relationship|general","importance":0.0-1.0,"evidenceText":"exact user quote"}
+  {"name":"short title","summary":"one sentence","content":"detailed memory","category":"identity|preference|project|interaction|relationship|general","importance":0.0-1.0,"evidenceText":"exact user quote","factKey":"optional stable fact key","factValue":"optional current value"}
 - Return [] if nothing is worth storing.
 
 User:
@@ -2627,11 +2919,14 @@ ${assistantMessage || ''}
                             ...item,
                             auto: true,
                             source: 'auto-llm',
+                            factKey: normalizeFactKey(item.factKey),
+                            factValue: item.factValue ?? null,
                             importance: Math.max(0, Math.min(1, Number(item.importance) || 0.7)),
                         }));
                     candidates = explicit.length > 0 ? [...explicit, ...llmCandidates] : llmCandidates;
                 }
             } catch (error) {
+                if (retryOnModelError) throw error;
                 console.warn('[Memory] Auto extraction failed, using fallback:', error.message);
             }
         }
@@ -2646,7 +2941,7 @@ ${assistantMessage || ''}
         }
 
         const eligible = deduped
-            .filter(item => (item.importance || 0) >= 0.55)
+            .filter(item => (item.importance || 0) >= 0.55 && !includesSecret(item.content))
             .map(item => this.normalizePromotionCandidate({
                 ...item,
                 chatId,
@@ -2707,7 +3002,8 @@ ${assistantMessage || ''}
             ...staged,
             ...shortTermPromotion.pending,
         ], 'auto-capture');
-        const sleepRun = await this.maybeRunSleepCycle({ reason: 'auto-capture' });
+        // Candidates stay pending until a human reviews them in Memory Manager.
+        const sleepRun = { processed: 0, consolidated: [], skipped: true };
 
         const allSaved = Array.from(
             new Map(
@@ -2719,12 +3015,10 @@ ${assistantMessage || ''}
         await this.syncAutonomousSessionState(allSaved, queued, chatId);
 
         if (allSaved.length > 0 || queued.length > 0 || sleepRun.processed > 0) {
-            const store = await this.loadStore();
-            store.stats.lastAutoCaptureAt = nowIso();
-            if (sleepRun.processed > 0) {
-                store.stats.lastSleepCycleAt = nowIso();
-            }
-            await this.saveStore(store);
+            await this.mutateStore(store => {
+                store.stats.lastAutoCaptureAt = nowIso();
+                if (sleepRun.processed > 0) store.stats.lastSleepCycleAt = nowIso();
+            });
             await this.appendDailyLog({
                 chatId,
                 userMessage,

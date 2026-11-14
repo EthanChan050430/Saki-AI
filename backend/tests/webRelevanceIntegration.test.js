@@ -159,8 +159,10 @@ test('context encodes crawled content as data, preserving malicious strings with
 test('server wiring uses effective config on both agent paths, anchored research and relevance-first checks', () => {
     // Read code only: importing server would start services and read private runtime data.
     const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-    assert.ok(server.includes('searchComplexQuery(arg, { config: searchConfig })'));
-    assert.ok(server.includes('searchComplexQuery(args[0], { config: searchConfig })'));
+    assert.ok(server.includes('searchForAgent(arg, { config: searchConfig })'));
+    assert.ok(server.includes('searchForAgent(args[0], { config: searchConfig })'));
+    assert.ok(server.includes('.then(formatSearchObservation)'));
+    assert.ok(server.includes('formatSearchObservation(await searchForAgent'));
     assert.ok(server.includes('searchAcrossEngines(q, { config: searchConfig, limitPerEngine: 5 })'));
     assert.ok(server.includes('buildQueries(step.title, message, step.queries)'));
     assert.ok(server.includes('mergeRankedSearchResults(rawResults, relevanceQuery)'));

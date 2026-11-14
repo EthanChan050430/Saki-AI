@@ -1,24 +1,10 @@
-import { applyTextStreamEvent } from '../utils/streamText';
-import React, { useState, useEffect, useRef } from 'react';
-import { X, Play, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle, MessageSquare, ChevronRight, Clock, Loader2, Search, Brain, Server } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Play, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle, MessageSquare, ChevronRight, Clock, Loader2, Brain } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import Chat from './Chat';
 import { getFeatureLocale } from '../utils/featureLocale';
 import { localizeWith } from '../utils/localize';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
-
-function upsertGeneratedFile(files = [], generatedFile) {
-  if (!generatedFile?.filePath) return files;
-  const nextFiles = Array.isArray(files) ? [...files] : [];
-  const existingIndex = nextFiles.findIndex(file => file.filePath === generatedFile.filePath);
-  if (existingIndex >= 0) {
-    nextFiles[existingIndex] = generatedFile;
-  } else {
-    nextFiles.push(generatedFile);
-  }
-  return nextFiles;
-}
 
 function getScheduleLabel(ui, scheduleType) {
   const map = {
@@ -30,7 +16,7 @@ function getScheduleLabel(ui, scheduleType) {
   return map[scheduleType] || scheduleType;
 }
 
-export default function HostedTasksModal({ isOpen, onClose, config, setConfig, BACKEND_URL, windowed = false }) {
+export default function HostedTasksModal({ isOpen, onClose, onSelectSession, BACKEND_URL, windowed = false }) {
   const { t, i18n } = useTranslation();
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language).hostedTasks;
   const getLocalText = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
@@ -48,159 +34,11 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
     },
   });
   const [selectedTaskHistory, setSelectedTaskHistory] = useState(null);
-  const [viewingChatSession, setViewingChatSession] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const abortControllerRef = useRef(null);
-  const chatContainerRef = useRef(null);
-  const latestSessionMessagesRef = useRef([]);
 
-  useEffect(() => {
-    if (viewingChatSession) {
-      latestSessionMessagesRef.current = viewingChatSession.messages;
-    }
-  }, [viewingChatSession?.id]);
-
-  const handleSendMessage = async (text, files = [], options = {}) => {
-    if (!text.trim() && files.length === 0) return;
-    if (isGenerating || !viewingChatSession) return;
-
-    const sentMsgId = Date.now();
-    const assistantMsgId = sentMsgId + 1;
-    const userMsg = {
-      role: 'user',
-      content: text,
-      files: files.map(f => f.name),
-      attachedFiles: files,
-      id: sentMsgId,
-    };
-
-    setIsGenerating(true);
-    setViewingChatSession(prev => {
-      const newMsgs = [...prev.messages, userMsg];
-      latestSessionMessagesRef.current = newMsgs;
-      return { ...prev, messages: newMsgs };
-    });
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    try {
-      const response = await fetch(`${BACKEND_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          message: text,
-          history: latestSessionMessagesRef.current,
-          provider: config.provider,
-          model: config.model,
-          ollamaUrl: config.ollamaUrl,
-          searchEnabled: options.useSearch !== undefined ? options.useSearch : true,
-          mcpEnabled: options.useMcp || false,
-          useDeep: options.useWeb || false,
-          usePpt: options.usePpt || false,
-          useMemory: options.useMemory !== undefined ? options.useMemory : true,
-          uploadedFiles: files,
-          chatId: viewingChatSession.id,
-          config,
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to send message');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      setViewingChatSession(prev => {
-        if (prev.messages.some(m => m.id === assistantMsgId)) return prev;
-        const newMsgs = [...prev.messages, { role: 'assistant', parts: [], generatedFiles: [], id: assistantMsgId }];
-        latestSessionMessagesRef.current = newMsgs;
-        return { ...prev, messages: newMsgs };
-      });
-
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
-
-          const dataStr = trimmedLine.slice(6).trim();
-          if (dataStr === '[DONE]') break;
-
-          try {
-            const data = JSON.parse(dataStr);
-
-            setViewingChatSession(prev => {
-              const newMsgs = prev.messages.map(m => {
-                if (m.id === assistantMsgId) {
-                  const textBit = data.text || data.content;
-                  let parts = data.type !== 'action'
-                    ? applyTextStreamEvent(m.parts || [], { ...data, text: textBit })
-                    : [...(m.parts || [])];
-
-                  if (data.type === 'action' || data.action) {
-                    parts.push({ type: 'action', data: data.data || data.action });
-                  }
-
-                  if (data.observation || data.fileMetadata) {
-                    for (let i = parts.length - 1; i >= 0; i--) {
-                      if (parts[i].type === 'action') {
-                        if (data.observation) parts[i].observation = data.observation;
-                        if (data.fileMetadata) parts[i].fileMetadata = data.fileMetadata;
-                        break;
-                      }
-                    }
-                  }
-
-                  const generatedFiles = data.generatedFile
-                    ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
-                    : (m.generatedFiles || []);
-
-                  return { ...m, parts, generatedFiles };
-                }
-                return m;
-              });
-              latestSessionMessagesRef.current = newMsgs;
-              return { ...prev, messages: newMsgs };
-            });
-          } catch (e) {
-            console.error('Error parsing SSE', e);
-          }
-        }
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        console.error('Stream error:', e);
-        alert(`Send failed: ${e.message}`);
-      }
-    } finally {
-      setIsGenerating(false);
-      abortControllerRef.current = null;
-    }
-  };
-
-  const stopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsGenerating(false);
-    }
-  };
-
-  const handleRedo = (idx) => {
-    const newMessages = [...viewingChatSession.messages];
-    const userMsg = newMessages[idx - 1];
-    if (!userMsg) return;
-
-    const filtered = newMessages.slice(0, idx - 1);
-    setViewingChatSession(prev => ({ ...prev, messages: filtered }));
-    handleSendMessage(userMsg.content, userMsg.attachedFiles || []);
+  const openSessionInChat = (sessionId) => {
+    if (!sessionId) return;
+    onSelectSession?.(sessionId);
+    onClose?.();
   };
 
   useEffect(() => {
@@ -259,6 +97,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
     if (!confirm(ui.confirmDeleteTask)) return;
     try {
       await fetch(`${BACKEND_URL}/api/hosted-tasks/${id}`, { method: 'DELETE' });
+      if (selectedTaskHistory?.id === id) setSelectedTaskHistory(null);
       fetchTasks();
     } catch (e) {
       console.error(e);
@@ -297,31 +136,20 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
     }
   };
 
-  const fetchSessionDetails = async (sessionId) => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/history/${sessionId}`);
-      const data = await res.json();
-      setViewingChatSession({ id: sessionId, messages: data.messages || [] });
-    } catch (e) {
-      console.error('Failed to load session:', e);
-      alert(ui.loadHistoryFailed);
-    }
-  };
-
   if (!isOpen) return null;
 
   return (
     <motion.div
-      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4'}
+      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4'}
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
       <motion.div data-saki-dialog="true"
-        className={windowed ? 'bg-[var(--surface-bg)]  rounded-[28px] shadow-none w-full h-full flex flex-col overflow-hidden text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden text-[var(--text-dark)] '}
+        className={windowed ? 'bg-[var(--surface-bg)]  rounded-[28px] shadow-none w-full h-full flex flex-col overflow-hidden text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  rounded-none sm:rounded-2xl shadow-2xl w-full max-w-6xl h-full sm:h-[90vh] flex flex-col overflow-hidden text-[var(--text-dark)] '}
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
+        <div className="px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 flex items-center justify-center bg-saki-pink/15 rounded-lg text-[var(--accent-text)] shrink-0">
               <Clock size={16} />
@@ -337,7 +165,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
         </div>
 
         <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-          <div className={`flex-1 overflow-y-auto p-4 border-r bg-[var(--surface-bg-light)] ${selectedTaskHistory || viewingChatSession ? 'hidden lg:block' : ''}`}>
+          <div className={`flex-1 overflow-y-auto p-3 sm:p-4 border-b md:border-b-0 md:border-r bg-[var(--surface-bg-light)] ${selectedTaskHistory ? 'hidden md:block' : ''}`}>
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-[var(--text-dark)] flex items-center gap-2">
                 {ui.taskList}
@@ -352,13 +180,13 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
               <div className="flex flex-col gap-3 mb-3">
                 <input
                   placeholder={ui.taskNamePlaceholder}
-                  className="w-full p-3 text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none transition-all"
+                  className="w-full p-3 text-base sm:text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none transition-all"
                   value={newTask.desc}
                   onChange={e => setNewTask({ ...newTask, desc: e.target.value })}
                 />
                 <div className="flex gap-2">
                   <select
-                    className="shrink-0 w-28 p-3 text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none bg-[var(--surface-bg)] cursor-pointer"
+                    className="shrink-0 w-24 sm:w-28 p-3 text-base sm:text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none bg-[var(--surface-bg)] cursor-pointer"
                     value={newTask.scheduleType}
                     onChange={e => setNewTask({ ...newTask, scheduleType: e.target.value })}
                   >
@@ -370,7 +198,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                   <input
                     type="text"
                     placeholder={newTask.scheduleType === 'daily' ? ui.timePlaceholderDaily : ui.timePlaceholderOther}
-                    className="flex-1 min-w-0 p-3 text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none font-mono"
+                    className="flex-1 min-w-0 p-3 text-base sm:text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none font-mono"
                     value={newTask.time}
                     onChange={e => setNewTask({ ...newTask, time: e.target.value })}
                   />
@@ -379,7 +207,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
               <div className="relative mb-3">
                 <textarea
                   placeholder={ui.taskPromptPlaceholder}
-                  className="w-full p-3 pb-12 text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none h-32 resize-none transition-all"
+                  className="w-full p-3 pb-12 text-base sm:text-sm rounded-xl border border-[var(--surface-border-subtle)] focus:ring-2 focus:ring-[#ff75ac]/20 focus:border-saki-pink outline-none h-32 resize-none transition-all"
                   value={newTask.task}
                   onChange={e => setNewTask({ ...newTask, task: e.target.value })}
                 />
@@ -450,7 +278,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                       </button>
                       <button
                         onClick={(e) => handleDelete(task.id, e)}
-                        className="p-2 text-red-500 hover:bg-red-50 rounded-xl transition-colors opacity-0 group-hover:opacity-100"
+                        className="saki-touch-visible p-2 text-red-500 hover:bg-red-50 rounded-xl transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
                         title={t('delete')}
                       >
                         <Trash2 size={18} />
@@ -474,14 +302,14 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
             </div>
           </div>
 
-          <div className={`flex-1 flex flex-col h-full overflow-hidden bg-[var(--surface-bg)] ${!selectedTaskHistory ? 'items-center justify-center p-10 text-[var(--text-tertiary)]' : ''}`}>
+          <div className={`flex-1 flex flex-col h-full overflow-hidden bg-[var(--surface-bg)] ${!selectedTaskHistory ? 'hidden md:flex items-center justify-center p-10 text-[var(--text-tertiary)]' : ''}`}>
             {selectedTaskHistory ? (
               <div className="flex flex-col h-full w-full animate-in slide-in-from-right duration-200">
                 <div className="px-4 py-2.5 border-b flex justify-between items-center bg-[var(--surface-bg-light)] shrink-0">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <button
                       onClick={() => setSelectedTaskHistory(null)}
-                      className="lg:hidden p-1.5 hover:bg-[var(--surface-bg-light)] rounded-lg"
+                      className="md:hidden p-1.5 hover:bg-[var(--surface-bg-light)] rounded-lg"
                     >
                       <ChevronRight className="rotate-180" size={16} />
                     </button>
@@ -509,10 +337,35 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                   </div>
                 </div>
                 <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[var(--surface-bg-light)]">
+                  {selectedTaskHistory.status === 'running' && selectedTaskHistory.activeSessionId && (
+                    <div
+                      onClick={() => openSessionInChat(selectedTaskHistory.activeSessionId)}
+                      className="group p-4 rounded-2xl border border-saki-pink/40 bg-saki-pink/5 transition-all hover:shadow-lg hover:border-saki-pink cursor-pointer"
+                    >
+                      <div className="flex justify-between items-center gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center bg-saki-pink/15 text-[var(--accent-text)] shrink-0">
+                            <Loader2 size={16} className="animate-spin" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-[var(--text-dark)] truncate">
+                              {ui.running}
+                            </p>
+                            <p className="text-[11px] text-[var(--text-secondary)] truncate">
+                              {getLocalText('会话已同步到聊天栏，点击直接进入查看', 'Synced to chat sidebar — click to open in chat', 'チャット欄に同期済み — クリックして開く')}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-[var(--accent-text)] font-bold bg-saki-pink/10 px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0">
+                          {getLocalText('在聊天中打开', 'Open in chat', 'チャットで開く')} <ChevronRight size={10} strokeWidth={3} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {selectedTaskHistory.results?.map((res, idx) => (
                     <div
                       key={idx}
-                      onClick={() => res.sessionId && fetchSessionDetails(res.sessionId)}
+                      onClick={() => res.sessionId && openSessionInChat(res.sessionId)}
                       className={`group p-4 rounded-2xl border bg-[var(--surface-bg)] transition-all hover:shadow-lg hover:border-saki-pink/40 ${res.sessionId ? 'cursor-pointer' : ''}`}
                     >
                       <div className="flex justify-between items-start mb-3">
@@ -531,13 +384,13 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                         </div>
                         <div className="flex items-center gap-2">
                           {res.sessionId && (
-                            <div className="text-[10px] text-[var(--accent-text)] font-bold bg-saki-pink/10 px-2 py-1 rounded-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
-                              {ui.detail} <ChevronRight size={10} strokeWidth={3} />
+                            <div className="text-[10px] text-[var(--accent-text)] font-bold bg-saki-pink/10 px-2 py-1 rounded-full flex items-center gap-1 saki-touch-visible opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all md:transform md:translate-x-2 md:group-hover:translate-x-0">
+                              {getLocalText('在聊天中打开', 'Open in chat', 'チャットで開く')} <ChevronRight size={10} strokeWidth={3} />
                             </div>
                           )}
                           <button
                             onClick={(e) => handleDeleteResult(selectedTaskHistory.id, idx, e)}
-                            className="p-1.5 text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            className="p-1.5 text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-50 rounded-lg transition-all saki-touch-visible opacity-100 md:opacity-0 md:group-hover:opacity-100"
                             title={ui.deleteRecord}
                           >
                             <Trash2 size={14} />
@@ -549,7 +402,7 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
                       </div>
                     </div>
                   ))}
-                  {!selectedTaskHistory.results?.length && (
+                  {!selectedTaskHistory.results?.length && !(selectedTaskHistory.status === 'running' && selectedTaskHistory.activeSessionId) && (
                     <div className="text-center py-20 text-[var(--text-tertiary)] flex flex-col items-center gap-2">
                       <AlertCircle size={32} className="opacity-20" />
                       <p className="text-sm">{ui.noRecords}</p>
@@ -565,48 +418,6 @@ export default function HostedTasksModal({ isOpen, onClose, config, setConfig, B
             )}
           </div>
         </div>
-
-        {viewingChatSession && (
-          <div className="absolute inset-0 bg-[var(--surface-bg)] z-[60] flex flex-col animate-in slide-in-from-right duration-300 shadow-2xl">
-            <div className="px-4 py-2.5 border-b flex justify-between items-center bg-[var(--surface-bg-light)] backdrop-blur-md sticky top-0 z-10 shrink-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <button
-                  onClick={() => setViewingChatSession(null)}
-                  className="p-1.5 hover:bg-[var(--surface-inset)] rounded-lg transition-all shadow-sm bg-[var(--surface-bg)] shrink-0"
-                >
-                  <ChevronRight className="rotate-180" size={16} />
-                </button>
-                <div className="min-w-0">
-                  <h3 className="font-bold text-sm text-[var(--text-dark)] leading-tight truncate">{ui.chatDetailTitle}</h3>
-                  <div className="flex items-center gap-2 mt-0.5 leading-tight">
-                    <span className="text-[10px] text-[var(--text-tertiary)] font-mono truncate">ID: {viewingChatSession.id}</span>
-                    <span className="w-0.5 h-0.5 rounded-full bg-[var(--surface-inset)]"></span>
-                    <span className="text-[10px] text-[var(--accent-text)] font-bold">{ui.hostedMode}</span>
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => setViewingChatSession(null)} className="p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors text-[var(--text-tertiary)] shrink-0">
-                <X size={16} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-hidden bg-[var(--surface-bg)] flex flex-col">
-              <Chat
-                messages={viewingChatSession.messages}
-                onSend={handleSendMessage}
-                isGenerating={isGenerating}
-                onStop={stopGeneration}
-                backendUrl={BACKEND_URL}
-                containerRef={chatContainerRef}
-                config={config}
-                setConfig={setConfig}
-                onRedo={handleRedo}
-                onDeepDataUpdate={() => {}}
-                setShowDeepModal={() => {}}
-                onOpenFileManager={() => {}}
-              />
-            </div>
-          </div>
-        )}
       </motion.div>
     </motion.div>
   );

@@ -31,8 +31,8 @@ export default function ImageCropperModal({ image, onCropComplete, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[calc(100dvh-1.5rem)] overflow-y-auto flex flex-col shadow-2xl">
         <div className="px-4 py-2.5 border-b flex items-center justify-between shrink-0">
           <h3 className="text-sm font-bold text-gray-800">{t('crop_image')}</h3>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
@@ -40,7 +40,7 @@ export default function ImageCropperModal({ image, onCropComplete, onClose }) {
           </button>
         </div>
 
-        <div className="relative h-80 bg-gray-100">
+        <div className="relative h-[min(20rem,45dvh)] sm:h-80 bg-gray-100 shrink-0">
           <Cropper
             image={image}
             crop={crop}
@@ -52,7 +52,7 @@ export default function ImageCropperModal({ image, onCropComplete, onClose }) {
           />
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-5 sm:space-y-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6">
           <div className="space-y-2">
             <div className="flex justify-between text-xs font-medium text-gray-400 uppercase tracking-wider">
               <span>{t('zoom')}</span>

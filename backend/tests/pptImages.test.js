@@ -1,7 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const cheerio = require('cheerio');
-const { imageSlot, insertImage, createPptImageHandler } = require('../services/pptImages');
+const {
+    imageSlot,
+    insertImage,
+    createPptImageHandler,
+    prepareSlideImageSlotHtml,
+    removeSlideImageSlotHtml,
+    searchPptImageAsDataUri,
+} = require('../services/pptImages');
 const { revisePresentation } = require('../services/pptRevision');
 const source = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX2kAAAAASUVORK5CYII=';
 const fixture = () => ({ status: 'completed', steps: [
@@ -61,4 +68,92 @@ test('uncertain failures are retained and not resubmitted', async () => {
         await handler(req, res);
     }
     assert.equal(calls, 1);
+});
+
+test('prepareSlideImageSlotHtml adds/normalizes right-side slot and removeSlideImageSlotHtml cleans empty slots', () => {
+    const plainSlide = '<div class="slide" style="width:960px;height:540px"><div class="p-16"><h1 class="text-5xl">Title</h1><div class="grid grid-cols-4 gap-4"><p>Body text</p></div></div></div>';
+    const prepared = prepareSlideImageSlotHtml(plainSlide, { slotId: 'hero', alt: 'Demo graphic' });
+    assert.equal(prepared.hasSlot, true);
+    const dom = cheerio.load(prepared.html, null, false);
+    const rootStyle = dom('.slide').attr('style') || '';
+    assert.match(rootStyle, /position\s*:\s*relative/i);
+    assert.equal(dom('img[data-ppt-image-slot="hero"]').length, 1);
+    assert.match(dom('.p-16').attr('style') || '', /padding-right\s*:\s*(?:420|460)px/i);
+    assert.equal(dom('.p-16 h1').hasClass('text-3xl'), true);
+    assert.equal(dom('.p-16 .grid').hasClass('grid-cols-2'), true);
+
+    const cleaned = removeSlideImageSlotHtml(prepared.html, 'hero');
+    const cleanDom = cheerio.load(cleaned, null, false);
+    assert.equal(cleanDom('img[data-ppt-image-slot="hero"]').length, 0);
+
+    const insetSlide = `<div class="slide relative bg-white" style="width:960px;height:540px;position:relative;"><div class="absolute inset-0 p-16 overflow-hidden flex flex-col"><h2>禁忌、窥视与欲望的安全释放</h2><p>正文内容说明</p></div></div>`;
+    const insetPrepared = prepareSlideImageSlotHtml(insetSlide, { slotId: 'hero', alt: 'Safe overlay test' });
+    const insetDom = cheerio.load(insetPrepared.html, null, false);
+    assert.match(insetDom('.inset-0').attr('style') || '', /padding-right\s*:\s*460px/i);
+    assert.match(insetDom('img[data-ppt-image-slot="hero"]').attr('style') || '', /top:\s*145px/i);
+});
+
+test('searchPptImageAsDataUri parses Bing async candidates and downloads persistent image data URI', async () => {
+    const bingHtml = `<a m='{"murl":"https://img.example.com/photo.png","turl":"https://ts.example.com/thumb.jpg"}'></a>`;
+    const fakeHttpClient = {
+        async get(url) {
+            if (url.includes('cn.bing.com/images/async')) {
+                return { status: 200, data: bingHtml };
+            }
+            return { status: 404, data: {} };
+        },
+    };
+    const res = await searchPptImageAsDataUri({
+        query: 'cinema camera',
+        httpClient: fakeHttpClient,
+        downloadImage: async (targetUrl) => {
+            assert.equal(targetUrl, 'https://img.example.com/photo.png');
+            return source;
+        },
+    });
+    assert.equal(res.mode, 'search');
+    assert.equal(res.source, source);
+    assert.equal(res.sourceUrl, 'https://img.example.com/photo.png');
+});
+
+test('createPptImageHandler supports search mode with autoPrepareSlot and preserves undo to original slide', async () => {
+    const noSlotDeck = {
+        status: 'completed',
+        steps: [
+            { id: 0, title: 'Slide One', content: '<div class="slide" style="width:960px;height:540px"><div class="p-16"><p>Original content</p></div></div>', thinking: 'Design note' },
+        ],
+    };
+    const handler = createPptImageHandler({
+        generate: async () => { throw new Error('Should not invoke paid drawing in search mode'); },
+        extractSource: value => value,
+        searchImage: async ({ query }) => {
+            assert.equal(query, 'cyberpunk city');
+            return { source, sourceUrl: 'https://img.example.com/city.png', mode: 'search' };
+        },
+    });
+    const res = { code: 200, status(code) { this.code = code; return this; }, json(value) { this.value = value; } };
+    await handler({
+        body: {
+            data: noSlotDeck,
+            slideId: 0,
+            slotId: 'hero',
+            prompt: 'cyberpunk city',
+            requestId: 'search-request-000001',
+            confirmed: true,
+            mode: 'search',
+            autoPrepareSlot: true,
+        },
+    }, res);
+
+    assert.equal(res.code, 200);
+    assert.equal(res.value.mode, 'search');
+    const updatedStep = res.value.pptData.steps[0];
+    assert.equal(updatedStep.imageStatus, 'completed');
+    assert.equal(updatedStep.imageMode, 'search');
+    const $ = cheerio.load(updatedStep.content, null, false);
+    assert.equal($('img[data-ppt-image-slot="hero"]').attr('src'), source);
+    assert.equal($('p').text(), 'Original content');
+
+    const restored = revisePresentation(res.value.pptData, 0, null, true);
+    assert.equal(restored.steps[0].content, noSlotDeck.steps[0].content);
 });

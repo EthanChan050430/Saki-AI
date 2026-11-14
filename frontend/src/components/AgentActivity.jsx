@@ -2,9 +2,10 @@ import React, { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BookOpen, Brain, ChevronRight, Terminal, Search, Globe, FolderOpen, PencilLine, Server, Loader2, AlertCircle, Clock, FileDiff, Undo2, X, Copy, Check, Palette, Music2, GitBranch } from 'lucide-react';
+import { BookOpen, Brain, ChevronRight, Terminal, Search, Globe, FolderOpen, PencilLine, Server, Loader2, AlertCircle, Clock, FileDiff, Undo2, X, Copy, Check, Palette, Music2, GitBranch, ShieldCheck } from 'lucide-react';
 import { actionKind, actionCategory, actionState, changeStats, fileName, activitySegments, activityBatches, activitySummary } from '../utils/agentActivity';
 import { localize } from '../utils/localize';
+import { parseSearchObservation, parseVerificationObservation } from '../utils/searchResults';
 import '../styles/agentActivity.css';
 
 function useLocale() {
@@ -29,7 +30,7 @@ function ActivityIcon({ part, state }) {
   if (state === 'approval') return <Clock size={14} />;
   const kind = actionKind(part);
   const Icon = part.type === 'reasoning' ? Brain : kind === 'browse' ? Globe : kind === 'draw' ? Palette
-    : kind === 'composemusic' ? Music2 : { read: BookOpen, edit: PencilLine, command: Terminal, search: Search, explore: FolderOpen }[actionCategory(part)] || Server;
+    : kind === 'composemusic' ? Music2 : { read: BookOpen, edit: PencilLine, command: Terminal, search: Search, verify: ShieldCheck, explore: FolderOpen }[actionCategory(part)] || Server;
   return <Icon size={14} strokeWidth={1.6} />;
 }
 
@@ -39,6 +40,7 @@ function summaryText(counts, local) {
     counts.edit && local(`修改 ${counts.edit} 个文件`, `Changed ${counts.edit} file${counts.edit === 1 ? '' : 's'}`),
     counts.command && local(`运行 ${counts.command} 条命令`, `Ran ${counts.command} command${counts.command === 1 ? '' : 's'}`),
     counts.search && local(`检索 ${counts.search} 次`, `${counts.search} search${counts.search === 1 ? '' : 'es'}`),
+    counts.verify && local(`核查 ${counts.verify} 次`, `${counts.verify} verification${counts.verify === 1 ? '' : 's'}`),
     counts.explore && local(`探索 ${counts.explore} 次`, `${counts.explore} exploration${counts.explore === 1 ? '' : 's'}`),
     counts.tool && local(`调用 ${counts.tool} 个工具`, `${counts.tool} tool call${counts.tool === 1 ? '' : 's'}`),
   ].filter(Boolean).join(local('，', ', '));
@@ -56,7 +58,7 @@ function ToolTarget({ part }) {
     readskill: local('阅读技能', 'Read skill'), readmemory: local('读取记忆', 'Read memory'), inspectopenhubskill: local('查看技能', 'Inspect skill'),
     writefile: local('写入', 'Write'), editfile: local('编辑', 'Edit'), replaceinfile: local('编辑', 'Edit'), replaceblocks: local('编辑', 'Edit'),
     deletefile: local('删除', 'Delete'), deletedirectory: local('移入回收站', 'Move folder to Trash'), ensuredir: local('创建目录', 'Create folder'), createprojectfolder: local('创建项目', 'Create project'),
-    terminal: local('运行命令', 'Run command'), search: local('搜索', 'Search'), browse: local('浏览', 'Browse'),
+    terminal: local('运行命令', 'Run command'), search: local('搜索', 'Search'), verifyclaim: local('核查说法', 'Verify claim'), browse: local('浏览', 'Browse'),
     listdir: local('查看目录', 'List directory'), getrepomap: local('查看代码结构', 'Explore code'),
     draw: local('生成图片', 'Generate image'), composemusic: local('创作音乐', 'Compose music'),
     diagram: local('绘制图表', 'Render diagram'), manage_hosted_tasks: local('管理定时任务', 'Manage scheduled tasks'),
@@ -79,6 +81,45 @@ function CopyDetail({ text }) {
   }}>{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? local('已复制', 'Copied') : local('复制', 'Copy')}</button>;
 }
 
+function SearchResultDetail({ report, raw }) {
+  const local = useLocale();
+  const labels = { direct: local('高度匹配', 'Strong match'), background: local('部分匹配', 'Partial match'), weak: local('弱匹配', 'Weak match') };
+  return <div>
+    <p>{report.status === 'no_results' ? local('未找到匹配的网页结果，可尝试更换或简化关键词。', 'No matching web results found. Try different or simpler keywords.')
+      : report.status === 'background_only' ? local('仅找到部分相关结果，尚未完整匹配全部关键词。', 'Only partially relevant results found; not all keywords matched.')
+        : local('以下为网页检索结果：', 'Web search results:')}</p>
+    {report.results.map((source, index) => <article key={`${source.url}:${index}`} className="agent-detail-section">
+      <a href={source.url} target="_blank" rel="noopener noreferrer">{index + 1}. {source.title}</a>
+      <div>{new URL(source.url).hostname}{source.publishedDate ? ` · ${source.publishedDate}` : ''} · {labels[source.matchType] || local('未分类', 'Unclassified')}</div>
+      <p>{source.content}</p>
+      {(source.missingPhrases.length > 0 || source.missingTerms.length > 0) && <p>{local('摘要中未匹配：', 'Not matched in excerpt: ')}{[...new Set([...source.missingPhrases, ...source.missingTerms])].join(', ')}</p>}
+      <small>{source.pageReadStatus === 'read' ? local('已读取网页正文片段', 'Page passage retrieved')
+        : source.pageReadStatus === 'unavailable' ? local('正文不可用，保留检索摘要', 'Page unavailable; search excerpt retained')
+          : local('检索摘要，尚未读取正文', 'Search excerpt; page not read')}</small>
+    </article>)}
+    {report.warnings.map((warning, index) => <p key={index} role="status">{warning}</p>)}
+    <details><summary>{local('原始检索数据', 'Raw search data')}</summary><pre>{raw}</pre></details>
+  </div>;
+}
+
+function VerifyClaimDetail({ report, raw }) {
+  const local = useLocale();
+  return <div>
+    <p>{report.status === 'insufficient-evidence'
+      ? local('未找到足够核查证据；缺少证据不代表待核查说法为假。', 'Insufficient verification evidence found; missing evidence does not disprove the claim.')
+      : local('已收集多源核查证据，请结合来源时间与上下文对比判断。', 'Multi-source verification evidence collected; assess dates, context, and supporting or contradicting details.')}</p>
+    {report.claim && <p><strong>{local('待核查说法：', 'Claim: ')}</strong>{report.claim}</p>}
+    {report.sources.map((source, index) => <article key={`${source.url}:${index}`} className="agent-detail-section">
+      <a href={source.url} target="_blank" rel="noopener noreferrer">{index + 1}. {source.title}</a>
+      <div>{source.domain} · {source.evidenceType === 'page' ? local('网页正文证据', 'Page passage') : local('检索摘要证据', 'Search excerpt')}</div>
+      {source.evidence && <p>{source.evidence}</p>}
+      {source.readError && <small role="status">{source.readError}</small>}
+    </article>)}
+    {report.errors.map((item, index) => <p key={index} role="status">{item.query ? `${item.query}: ` : ''}{item.error}</p>)}
+    <details><summary>{local('原始核查数据', 'Raw verification data')}</summary><pre>{raw}</pre></details>
+  </div>;
+}
+
 function ToolRow({ part, active, onViewChanges, onRollback, onSkipAction, renderOutput }) {
   const local = useLocale();
   const id = useId();
@@ -93,6 +134,8 @@ function ToolRow({ part, active, onViewChanges, onRollback, onSkipAction, render
   const canSkip = state === 'running' && kind === 'terminal' && part.data?.id && onSkipAction;
   const input = args.map((arg, index) => typeof arg === 'string' ? `${args.length > 1 ? `${index + 1}. ` : ''}${arg}` : JSON.stringify(arg, null, 2)).join('\n\n');
   const output = String(part.observation ?? '');
+  const searchReport = kind === 'search' ? parseSearchObservation(output) : null;
+  const verificationReport = kind === 'verifyclaim' ? parseVerificationObservation(output) : null;
   const hasChanges = part.fileMetadata && typeof onViewChanges === 'function';
   return <div className={`agent-tool-step agent-state-${state}`} data-activity-state={state}>
     <div className="agent-step-line">
@@ -120,9 +163,11 @@ function ToolRow({ part, active, onViewChanges, onRollback, onSkipAction, render
       </div>
       {input && <div className="agent-detail-section"><span className="agent-detail-label">{local('输入', 'Input')}</span><pre>{input}</pre></div>}
       {output && <div className="agent-detail-section"><span className="agent-detail-label">{local('结果', 'Result')}</span>
-        {renderOutput && !['terminal', 'readfile', 'readfilechunk', 'planfileread'].includes(kind)
-          ? <div className="agent-rich-result">{renderOutput(part)}</div>
-          : <pre>{output.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')}</pre>}
+        {searchReport ? <SearchResultDetail report={searchReport} raw={output} />
+          : verificationReport ? <VerifyClaimDetail report={verificationReport} raw={output} />
+            : renderOutput && !['terminal', 'readfile', 'readfilechunk', 'planfileread'].includes(kind)
+            ? <div className="agent-rich-result">{renderOutput(part)}</div>
+            : <pre>{output.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')}</pre>}
       </div>}
       {!output && <p className="agent-step-notice">{active ? local('等待工具返回结果…', 'Waiting for the result…') : local('没有可用的执行结果。', 'No execution result is available.')}</p>}
     </div>}
@@ -133,7 +178,12 @@ export function ThinkingBlock({ text, defaultOpen = false, active = defaultOpen 
   const local = useLocale();
   const id = useId();
   const [open, toggle] = useDisclosure(false);
-  const cleaned = String(text || '').replace(/(?:[`*]*)(?:Response|回答)[:：](?:[`*]*)\s*[\s\S]*$/i, '').replace(/^<think>/i, '').replace(/<\/think>$/i, '').trim();
+  const cleaned = String(text || '')
+    .replace(/\[expression[:=]\s*[\w.-]+\s*\]/gi, '')
+    .replace(/(?:[`*]*)(?:Response|回答)[:：](?:[`*]*)\s*[\s\S]*$/i, '')
+    .replace(/^<think>/i, '')
+    .replace(/<\/think>$/i, '')
+    .trim();
   if (!cleaned) return null;
   return <div className="agent-thinking-step">
     <button type="button" className="agent-step-toggle" onClick={toggle} aria-expanded={open} aria-controls={id}>

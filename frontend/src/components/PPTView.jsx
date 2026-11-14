@@ -1,7 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { X, CheckCircle2, Circle, Loader2, FileText, Download, Presentation, Layout, Monitor, ChevronRight, ChevronLeft, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  X,
+  CheckCircle2,
+  Circle,
+  Loader2,
+  FileText,
+  Download,
+  Presentation,
+  Layout,
+  Monitor,
+  ChevronRight,
+  ChevronLeft,
+  Maximize2,
+  Minimize2,
+  Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Wand2,
+  AlertCircle,
+  Layers,
+  Image as ImageIcon,
+  Paperclip,
+  ArrowUp,
+  Undo2,
+  ArrowUpRight,
+} from 'lucide-react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -687,7 +715,374 @@ async function buildEditableSceneFromHtml(slideHtml, tempContainer) {
   };
 }
 
-export default function PPTView({ data, isEmbedded = true, onRevise, editingDisabled = false }) {
+const SAKI_PPT_ANIM_STYLE = `
+  @keyframes saki-ppt-float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-6px); }
+  }
+  @keyframes saki-ppt-shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes saki-ppt-eq {
+    0%, 100% { transform: scaleY(0.35); opacity: 0.55; }
+    50% { transform: scaleY(1); opacity: 1; }
+  }
+  @keyframes saki-ppt-orbit {
+    0% { transform: rotate(0deg) scale(1); }
+    50% { transform: rotate(180deg) scale(1.04); }
+    100% { transform: rotate(360deg) scale(1); }
+  }
+  .saki-ppt-float { animation: saki-ppt-float 3.4s ease-in-out infinite; }
+  .saki-ppt-shimmer {
+    background: linear-gradient(90deg, rgba(255,117,172,0.06) 25%, rgba(255,117,172,0.16) 50%, rgba(255,117,172,0.06) 75%);
+    background-size: 200% 100%;
+    animation: saki-ppt-shimmer 2.1s infinite linear;
+  }
+  .saki-ppt-eq-bar {
+    transform-origin: bottom center;
+    animation: saki-ppt-eq 1.1s ease-in-out infinite;
+  }
+  .saki-ppt-orbit { animation: saki-ppt-orbit 18s linear infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .saki-ppt-float, .saki-ppt-shimmer, .saki-ppt-eq-bar, .saki-ppt-orbit {
+      animation: none !important;
+    }
+  }
+`;
+
+function SakiStageAvatar({ sources, alt, className = '' }) {
+  const [idx, setIdx] = useState(0);
+  const key = sources.join('|');
+  useEffect(() => {
+    setIdx(0);
+  }, [key]);
+  const src = sources[Math.min(idx, sources.length - 1)];
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => {
+        setIdx((prev) => (prev + 1 < sources.length ? prev + 1 : prev));
+      }}
+    />
+  );
+}
+
+function SakiStudioStage({
+  stageKind,
+  step,
+  stepIndex,
+  totalContentSlides,
+  elapsedSeconds,
+  tx,
+  onBrowseFirst,
+  onOpenPreview,
+  onDownloadEditable,
+  onDownloadSnapshot,
+  downloading,
+  editableDownloading,
+}) {
+  const [quoteTick, setQuoteTick] = useState(0);
+  const planningQuotes = [
+    tx('Saki 正在为你梳理演示文稿的章节脉络与故事线~ ✨', 'Saki is mapping out your presentation narrative and chapters~ ✨', 'Sakiが構成とストーリーラインを整理しています~ ✨'),
+    tx('正在拆解每一页的核心观点与视觉版式设计 ♪', 'Breaking down key insights and layout hints for each slide ♪', '各スライドの要点とレイアウトを組み立て中 ♪'),
+    tx('马上就好啦，正在平衡封面视觉重心与内容节奏~', 'Almost ready—balancing cover impact and pacing across slides~', 'もうすぐ完了！表紙と全体のテンポを調整しています~'),
+  ];
+  const thinkingQuotes = [
+    tx(`正在推敲第 ${stepIndex + 1} 页的视觉焦点与信息层级~ ✨`, `Refining visual hierarchy for slide ${stepIndex + 1}~ ✨`, `${stepIndex + 1}ページ目の視覚設計を構想中~ ✨`),
+    tx('把长文本凝练成一眼看懂的要点卡片与结构图 ♪', 'Distilling dense points into crisp visual cards and structure ♪', '要点を読みやすいビジュアル構造へ整理しています ♪'),
+  ];
+  const codingQuotes = [
+    tx(`版式构思完成！Saki 正在为你绘制第 ${stepIndex + 1} 页的视觉元素与排版~ 🖌️✨`, `Layout ready! Saki is painting slide ${stepIndex + 1} elements and typography~ 🖌️✨`, `レイアウト確定！${stepIndex + 1}ページ目のデザインを描画中です~ 🖌️✨`),
+    tx('正在精调配色对比、留白安全区与卡片细节~', 'Fine-tuning color contrast, safe margins, and card details~', '配色バランスと余白のディテールを整えています~'),
+  ];
+
+  useEffect(() => {
+    const timer = setInterval(() => setQuoteTick((prev) => prev + 1), 3500);
+    return () => clearInterval(timer);
+  }, [stageKind, stepIndex]);
+
+  if (stageKind === 'final') {
+    return (
+      <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-rose-50/85 via-white to-orange-50/75 p-6 text-center dark:from-[#1f1824] dark:via-[#171924] dark:to-[#1f1a18]">
+        <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-pink-300/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-14 -left-10 h-52 w-52 rounded-full bg-orange-300/20 blur-3xl" />
+
+        <div className="relative z-10 flex max-w-xl flex-col items-center">
+          <div className="saki-ppt-float relative mb-3 flex h-44 w-44 items-center justify-center">
+            <div className="absolute inset-3 rounded-full bg-gradient-to-tr from-[#ff75ac]/25 via-amber-200/25 to-sky-200/20 blur-xl" />
+            <SakiStageAvatar
+              sources={['/assets/saki/ppt/ppt_complete.webp', '/assets/saki/ppt/ppt_complete.png', '/assets/saki/docked/clap.png']}
+              alt="Saki Presentation Ready"
+              className="relative h-full w-full object-contain drop-shadow-[0_14px_24px_rgba(255,117,172,0.22)]"
+            />
+          </div>
+
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/80 bg-emerald-50/90 px-3 py-1 text-xs font-bold text-emerald-700 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300">
+            <CheckCircle2 size={14} />
+            {tx(`全稿共 ${totalContentSlides} 页幻灯片已制作完成`, `All ${totalContentSlides} slides are ready`, `全${totalContentSlides}枚のスライドが完成しました`)}
+          </div>
+
+          <h4 className="mt-3 text-lg font-extrabold tracking-tight text-slate-800 dark:text-slate-100">
+            {tx('Saki 已经把整套演示文稿封装好啦~ ✨', 'Saki has finished packaging your presentation~ ✨', 'Sakiがプレゼンテーションの仕上げを完了しました~ ✨')}
+          </h4>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {tx('你可以切回第 1 页逐页微调，或直接开启全屏预览与导出 PPTX。', 'Jump back to Slide 1 to review & revise, or preview and export as PPTX.', '1ページ目から確認・編集するか、全画面プレビューやPPTX出力ができます。')}
+          </p>
+
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+            {totalContentSlides > 0 && (
+              <button
+                type="button"
+                onClick={onBrowseFirst}
+                className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] px-4 py-2 text-xs font-bold text-white shadow-md shadow-pink-500/25 transition hover:brightness-105 active:scale-95"
+              >
+                <Layers size={14} />
+                {tx('浏览第 1 页', 'Browse Slide 1', '1ページ目を見る')}
+              </button>
+            )}
+            {totalContentSlides > 0 && (
+              <button
+                type="button"
+                onClick={onOpenPreview}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-95 dark:border-white/15 dark:bg-white/10 dark:text-slate-100"
+              >
+                <Monitor size={14} />
+                {tx('全屏预览', 'Full Preview', '全画面プレビュー')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onDownloadEditable}
+              disabled={editableDownloading || downloading || totalContentSlides === 0}
+              className="flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50/80 px-3.5 py-2 text-xs font-bold text-orange-700 shadow-sm transition hover:bg-orange-100/70 active:scale-95 disabled:opacity-60 dark:border-orange-500/30 dark:bg-orange-500/15 dark:text-orange-200"
+            >
+              {editableDownloading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+              {tx('下载可编辑 PPTX', 'Editable PPTX', '編集可能 PPTX')}
+            </button>
+            <button
+              type="button"
+              onClick={onDownloadSnapshot}
+              disabled={downloading || editableDownloading || totalContentSlides === 0}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-95 disabled:opacity-60 dark:bg-white dark:text-slate-900"
+            >
+              {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              {tx('下载 PPTX', 'Download PPTX', 'PPTX を保存')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (stageKind === 'error') {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center bg-rose-50/40 p-6 text-center dark:bg-rose-950/15">
+        <SakiStageAvatar
+          sources={['/assets/saki/docked/worry.png', '/assets/saki/full/worry.png']}
+          alt="Saki Error"
+          className="h-32 w-32 object-contain"
+        />
+        <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-200">
+          <AlertCircle size={14} />
+          {tx(`第 ${stepIndex + 1} 页生成遇到问题`, `Slide ${stepIndex + 1} failed`, `${stepIndex + 1}ページ目の生成に失敗`)}
+        </div>
+        <p className="mt-2 max-w-md text-xs text-slate-600 dark:text-slate-300">
+          {step?.thinking || tx('这一页暂时未能完成渲染，可以查看其他页面或重新生成。', 'This slide could not be rendered.', 'このスライドの生成を完了できませんでした。')}
+        </p>
+      </div>
+    );
+  }
+
+  const isSearchingImage = step?.subStage === 'searching-image' || stageKind === 'searching-image';
+  const isDrawingImage = step?.subStage === 'drawing-image' || stageKind === 'drawing-image';
+  const isCoding = stageKind === 'coding' || isSearchingImage || isDrawingImage;
+  const isPlanning = stageKind === 'planning';
+  const isQueued = stageKind === 'queued';
+
+  const avatarSources = isCoding
+    ? ['/assets/saki/ppt/ppt_design.webp', '/assets/saki/ppt/ppt_design.png', '/assets/saki/docked/happy.png']
+    : ['/assets/saki/ppt/ppt_plan.webp', '/assets/saki/ppt/ppt_plan.png', '/assets/saki/docked/think.png'];
+
+  const activeQuotes = isPlanning ? planningQuotes : isCoding ? codingQuotes : thinkingQuotes;
+  const activeQuote = isQueued
+    ? tx(`第 ${stepIndex + 1} 页正在排队等待 Saki 绘制中~ ⏳`, `Slide ${stepIndex + 1} is queued next~ ⏳`, `${stepIndex + 1}ページ目は待機中です~ ⏳`)
+    : isSearchingImage
+      ? tx('Saki 正在检索与本页主题契合的高清配图~ 🔍', 'Saki is searching the web for a matching high-res image~ 🔍', 'テーマに合う高解像度画像を検索中~ 🔍')
+      : isDrawingImage
+        ? tx('Saki 正在挥动画笔，为本页绘制专属 AI 插画~ 🎨', 'Saki is painting a custom AI illustration for this slide~ 🎨', 'AIイラストを描画中~ 🎨')
+        : activeQuotes[quoteTick % activeQuotes.length];
+
+  const activePhaseIdx = isPlanning ? 0 : isCoding ? 2 : 1;
+  const phasePills = [
+    tx('01 架构拆解', '01 Outline', '01 構成設計'),
+    tx('02 版式推敲', '02 Thinking', '02 レイアウト考案'),
+    tx('03 视觉渲染', '03 Rendering', '03 ビジュアル描画'),
+  ];
+
+  const streamPct = isCoding
+    ? Math.min(96, Math.max(12, Math.round((Number(step?.streamProgress || 0) / 2200) * 100)))
+    : 0;
+  const thinkingLen = String(step?.thinking || '').length;
+
+  return (
+    <div className="relative flex h-full w-full flex-col justify-between overflow-hidden bg-gradient-to-br from-[#fff8fb] via-white to-[#f6f8ff] p-5 md:p-6 dark:from-[#171624] dark:via-[#151722] dark:to-[#1b1622]">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-45 dark:opacity-20"
+        style={{
+          backgroundImage: 'radial-gradient(rgba(255,117,172,0.18) 1px, transparent 1px)',
+          backgroundSize: '20px 20px',
+        }}
+      />
+      <div className="pointer-events-none absolute -right-10 -top-10 h-52 w-52 rounded-full bg-[#ff75ac]/15 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-10 left-8 h-44 w-44 rounded-full bg-indigo-400/12 blur-3xl" />
+
+      <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {phasePills.map((label, idx) => {
+            const done = !isQueued && idx < activePhaseIdx;
+            const current = !isQueued && idx === activePhaseIdx;
+            return (
+              <span
+                key={label}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold transition-all ${
+                  current
+                    ? 'bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white shadow-sm shadow-pink-500/25'
+                    : done
+                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30'
+                      : 'bg-white/80 text-slate-400 ring-1 ring-slate-200/80 dark:bg-white/5 dark:text-slate-500 dark:ring-white/10'
+                }`}
+              >
+                {current && <span className="h-1.5 w-1.5 animate-ping rounded-full bg-white" />}
+                {done && <CheckCircle2 size={11} />}
+                {label}
+              </span>
+            );
+          })}
+        </div>
+
+        <div className="inline-flex items-center gap-2 rounded-full border border-pink-200/70 bg-white/85 px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-sm backdrop-blur-sm dark:border-pink-400/20 dark:bg-white/10 dark:text-slate-200">
+          <div className="flex h-3 items-end gap-0.5">
+            {[0, 1, 2, 3].map((bar) => (
+              <span
+                key={bar}
+                className="saki-ppt-eq-bar w-0.5 rounded-full bg-[#ff5b9a]"
+                style={{
+                  height: `${8 + (bar % 2) * 4}px`,
+                  animationDelay: `${bar * 0.16}s`,
+                }}
+              />
+            ))}
+          </div>
+          <span>{tx(`已运行 ${elapsedSeconds}s`, `${elapsedSeconds}s elapsed`, `${elapsedSeconds}秒経過`)}</span>
+        </div>
+      </div>
+
+      <div className="relative z-10 my-auto flex flex-col items-center justify-center gap-4 py-3 md:flex-row md:gap-7">
+        <div className="relative flex shrink-0 flex-col items-center">
+          <div className="saki-ppt-orbit pointer-events-none absolute inset-1 rounded-full border border-dashed border-[#ff75ac]/35" />
+          <div className="saki-ppt-float relative flex h-40 w-40 items-center justify-center md:h-48 md:w-48">
+            <div className="absolute inset-4 rounded-full bg-gradient-to-tr from-[#ff75ac]/22 via-pink-200/20 to-indigo-300/15 blur-2xl" />
+            <SakiStageAvatar
+              sources={avatarSources}
+              alt="Saki Thinking"
+              className="relative h-full w-full object-contain drop-shadow-[0_14px_26px_rgba(255,117,172,0.24)]"
+            />
+          </div>
+        </div>
+
+        <div className="flex w-full max-w-md flex-col gap-3">
+          <div className="relative rounded-2xl border border-pink-200/75 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm backdrop-blur-md dark:border-pink-400/25 dark:bg-[#222334]/90 dark:text-slate-100">
+            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[#ff5b9a]">
+              <Sparkles size={12} />
+              <span>Saki Studio</span>
+              {thinkingLen > 0 && (
+                <span className="ml-auto rounded-full bg-pink-50 px-2 py-0.5 text-[10px] font-bold text-pink-600 dark:bg-pink-500/15 dark:text-pink-300">
+                  {tx(`已构思 ${thinkingLen} 字`, `${thinkingLen} chars thought`, `${thinkingLen}文字構想`)}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 leading-relaxed">{activeQuote}</p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/80 bg-white/85 p-3.5 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-[#1d1f2e]/85">
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-extrabold text-white dark:bg-pink-500">
+                {isPlanning ? 'OUTLINE' : `P${stepIndex + 1}`}
+              </span>
+              <h4 className="truncate text-sm font-bold text-slate-800 dark:text-slate-100">
+                {step?.title || tx('正在规划演示结构...', 'Planning slide structure...', '構成を計画中...')}
+              </h4>
+            </div>
+
+            {step?.description && (
+              <p className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                {step.description}
+              </p>
+            )}
+
+            {step?.designHint && (
+              <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-indigo-50/75 px-2.5 py-1.5 text-[11px] text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200">
+                <Wand2 size={12} className="mt-0.5 shrink-0" />
+                <span className="line-clamp-2">{step.designHint}</span>
+              </div>
+            )}
+
+            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/90 p-2.5 dark:border-white/10 dark:bg-black/25">
+              <div className="mb-2 flex items-center justify-between text-[10px] font-semibold text-slate-400">
+                <span>
+                  {isSearchingImage
+                    ? tx('🔍 正在智能检索配图...', '🔍 Searching for slide visual...', '🔍 配図を検索中...')
+                    : isDrawingImage
+                      ? tx('🎨 正在调用绘图工具生图...', '🎨 Generating AI illustration...', '🎨 AIイラスト生成中...')
+                      : isCoding
+                        ? tx('正在组装 16:9 幻灯片版面...', 'Assembling 16:9 slide canvas...', '16:9キャンバスを描画中...')
+                        : isPlanning
+                          ? tx('正在推演全稿分镜蓝图...', 'Drafting deck storyboard...', '全体構成を作成中...')
+                          : tx('正在构建页面构图骨架...', 'Structuring slide layout...', 'ページ骨格を構築中...')}
+                </span>
+                {isCoding && <span className="font-bold text-[#ff5b9a]">{streamPct}%</span>}
+              </div>
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-5 h-12 rounded-lg saki-ppt-shimmer border border-pink-200/40" />
+                <div className="col-span-7 flex flex-col gap-1.5">
+                  <div className="h-3.5 w-3/4 rounded saki-ppt-shimmer" />
+                  <div className="h-2.5 w-full rounded saki-ppt-shimmer" />
+                  <div className="h-2.5 w-5/6 rounded saki-ppt-shimmer" />
+                </div>
+              </div>
+              {isCoding && (
+                <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#ff75ac] via-pink-500 to-indigo-500 transition-all duration-300"
+                    style={{ width: `${streamPct}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative z-10 flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-500">
+        <span>{tx('AI 实时流式绘制中，完成后将自动呈现完整高清幻灯片', 'Streaming in real time — full HD slide will appear automatically', 'リアルタイム生成中・完了後に高精細スライドを表示します')}</span>
+        <span className="hidden font-mono sm:inline">960 × 540 · 16:9</span>
+      </div>
+    </div>
+  );
+}
+
+export default function PPTView({
+  data,
+  isEmbedded = true,
+  isFocusMode: controlledFocusMode,
+  onFocusModeChange,
+  backendUrl = BACKEND_URL,
+  onRevise,
+  editingDisabled = false,
+}) {
   const { t, i18n } = useTranslation();
   const tx = (zhText, enText, jaText) => localizeWith(i18n.resolvedLanguage || i18n.language, zhText, enText, jaText);
   const [activeStepIndex, setActiveStepIndex] = useState(() => {
@@ -695,90 +1090,196 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
     const initialStatus = data?.status || 'running';
     const isAllDone = initialSteps.length > 0 && initialSteps.every(s => s.status === 'completed' || s.status === 'success' || s.status === 'error');
     if ((initialStatus === 'completed' || isAllDone) && initialSteps.length > 1) {
-      return Math.max(0, initialSteps.findIndex(step => step.content));
+      const firstIdx = initialSteps.findIndex(step => step.content);
+      return firstIdx >= 0 ? firstIdx : 0;
     }
     return 0;
   });
   const [isPreviewMode, setIsPreviewMode] = useState(false);
-  const [isFocusMode, setIsFocusMode] = useState(false);
-  const [scale, setScale] = useState(0.5);
+  const [internalFocusMode, setInternalFocusMode] = useState(false);
+  const isFocusMode = controlledFocusMode !== undefined ? Boolean(controlledFocusMode) : internalFocusMode;
+  const setIsFocusMode = (nextValue) => {
+    const resolved = typeof nextValue === 'function' ? nextValue(isFocusMode) : Boolean(nextValue);
+    if (onFocusModeChange) {
+      onFocusModeChange(resolved);
+    } else {
+      setInternalFocusMode(resolved);
+    }
+  };
+  const [isThinkingOpen, setIsThinkingOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState(() => (data?.status === 'completed' ? 'revise' : 'thinking'));
+  const [fitScale, setFitScale] = useState(0.75);
+  const [zoomFactor, setZoomFactor] = useState(1);
+  const [previewListScale, setPreviewListScale] = useState(0.85);
   const [downloading, setDownloading] = useState(false);
   const [editableDownloading, setEditableDownloading] = useState(false);
   const [revisionInstruction, setRevisionInstruction] = useState('');
+  const [attachments, setAttachments] = useState([]);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [revisionHistoryLog, setRevisionHistoryLog] = useState([]);
   const [revising, setRevising] = useState(false);
   const [revisionError, setRevisionError] = useState('');
-  const [imagePrompt, setImagePrompt] = useState('');
-  const [imageConfirmed, setImageConfirmed] = useState(false);
-  const imageRequestRef = useRef(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
   const previewContainerRef = useRef(null);
+  const previewScrollRef = useRef(null);
+  const stepButtonRefs = useRef([]);
+  const fileInputRef = useRef(null);
 
   // Calculate if really running based on steps
-  let { steps = [], finalHtml = '', status = 'running', pptTitle } = data;
+  let { steps = [], finalHtml = '', status = 'running', pptTitle } = data || {};
   pptTitle = pptTitle || tx('演示文稿', 'Presentation', 'プレゼンテーション');
 
-  // Robust status check: if all steps are done but it says running, OR if it says completed but some steps are running
-  const isAllDone = steps.length > 0 && steps.every(s =>
+  // Robust status check: never override an actively running deck or step to completed
+  const hasRunningStep = steps.some(s => s.status === 'running');
+  const isAllDone = status !== 'running' && !hasRunningStep && steps.length > 0 && steps.every(s =>
     s.status === 'completed' || s.status === 'success' || s.status === 'error' || (s.content && s.thinking)
   );
   if (isAllDone && steps.length > 0) {
     status = 'completed';
   }
 
-  // Ensure steps have correct status if the whole PPT is completed or inferred completed
+  // Ensure steps have correct status if the whole PPT is completed
   if (status === 'completed') {
     steps = steps.map(s => (s.status === 'running' || s.status === 'not-started') ? { ...s, status: 'completed' } : s);
   }
 
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (prevStatusRef.current !== 'completed' && status === 'completed') {
+      setSidebarTab('revise');
+    }
+    prevStatusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    if (isEmbedded && !isFocusMode && isPreviewMode) {
+      setIsPreviewMode(false);
+    }
+  }, [isEmbedded, isFocusMode, isPreviewMode]);
+
   const activeStep = steps[activeStepIndex];
-  const imageSlots = activeStep?.content
-    ? Array.from(new DOMParser().parseFromString(activeStep.content, 'text/html').querySelectorAll('img[data-ppt-image-slot]')).map(el => el.getAttribute('data-ppt-image-slot'))
-    : [];
-  const editImage = async (prepare = false) => {
-    if (!onRevise || revising || editingDisabled) return;
-    setRevising(true);
+  const contentSlides = steps.filter(s => Boolean(s.content));
+  const completedStepsCount = steps.filter(s => s.status === 'completed' || s.status === 'success').length;
+  const deckProgressPercent = steps.length > 0
+    ? Math.round((completedStepsCount / steps.length) * 100)
+    : 0;
+
+  const handleAttachFiles = async (fileList) => {
+    const picked = Array.from(fileList || []);
+    if (!picked.length) return;
+    setUploadingAttachment(true);
     setRevisionError('');
     try {
-      if (prepare) {
-        await onRevise(activeStep.id, 'Prepare a left-text/right-image layout. Preserve all facts and citations, move text into x=48..480 without overlap. Reserve an image slot at x=520 y=120 width=380 height=300. Root must be position:relative with width:960px;height:540px. Add exactly one img with data-ppt-image-slot="hero", alt="Illustration placeholder", no src, and inline style="position:absolute;left:520px;top:120px;width:380px;height:300px;object-fit:contain;background:#e2e8f0". Do not generate an image yet. Keep content inside safe margins.', false);
-      } else {
-        const signature = JSON.stringify([activeStep.content, imagePrompt, imageSlots[0]]);
-        if (imageRequestRef.current?.signature !== signature) {
-          imageRequestRef.current = { signature, requestId: crypto.randomUUID() };
-        }
-        await onRevise(activeStep.id, '', false, {
-          slotId: imageSlots[0], prompt: imagePrompt, confirmed: imageConfirmed,
-          requestId: imageRequestRef.current.requestId,
+      const apiBase = backendUrl || BACKEND_URL;
+      const uploadedItems = [];
+      for (const file of picked) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`${apiBase}/api/upload`, {
+          method: 'POST',
+          body: formData,
         });
-        setImageConfirmed(false);
+        if (!res.ok) throw new Error(tx(`上传 ${file.name} 失败`, `Failed to upload ${file.name}`));
+        const uploaded = await res.json();
+        uploadedItems.push({
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          name: uploaded.filename || file.name,
+          filename: uploaded.filename || file.name,
+          path: uploaded.path,
+          content: uploaded.content || '',
+          isImage: Boolean(uploaded.isImage),
+          previewUrl: uploaded.isImage ? URL.createObjectURL(file) : '',
+        });
       }
-    } catch (error) {
-      setRevisionError(error.response?.data?.error || error.message);
+      setAttachments((prev) => [...prev, ...uploadedItems]);
+    } catch (err) {
+      setRevisionError(err.message || tx('附件上传失败，请重试。', 'Attachment upload failed. Please retry.'));
     } finally {
-      setRevising(false);
+      setUploadingAttachment(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
+
+  const removeAttachment = (attachmentId) => {
+    setAttachments((prev) => {
+      const removed = prev.find(item => item.id === attachmentId);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter(item => item.id !== attachmentId);
+    });
+  };
+
   const reviseSlide = async (restore = false) => {
     if (!onRevise || revising || editingDisabled || activeStep?.id == null) return;
+    const trimmed = revisionInstruction.trim();
+    if (!restore && !trimmed && attachments.length === 0) return;
+
     setRevising(true);
     setRevisionError('');
     try {
-      await onRevise(activeStep.id, revisionInstruction, restore);
-      setRevisionInstruction('');
+      if (restore) {
+        await onRevise(activeStep.id, '', true);
+        setRevisionHistoryLog((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            userText: tx('撤销修改 · 恢复上一版', 'Restore previous version'),
+            attachments: [],
+            summary: tx(`已将第 ${activeStepIndex + 1} 页恢复到上一历史版本。`, `Restored slide ${activeStepIndex + 1} to previous version.`),
+          },
+        ]);
+      } else {
+        const attachmentPayload = attachments.map(({ name, filename, path, content, isImage }) => ({
+          name,
+          filename,
+          path,
+          content,
+          isImage,
+        }));
+        const submittedText = trimmed || tx('结合附带的素材优化当前幻灯片与配图', 'Revise slide and visuals using attached files');
+        const result = await onRevise(activeStep.id, submittedText, false, null, {
+          scope: 'agent',
+          attachments: attachmentPayload,
+        });
+        setRevisionHistoryLog((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            userText: submittedText,
+            attachments: attachments.map(a => ({ name: a.name, isImage: a.isImage, previewUrl: a.previewUrl })),
+            summary: result?.summary || tx(`已完成修改（当前第 ${activeStepIndex + 1} 页）。`, `Updated slide ${activeStepIndex + 1}.`),
+          },
+        ]);
+        setRevisionInstruction('');
+        setAttachments([]);
+      }
     } catch (error) {
       setRevisionError(error.response?.data?.error || error.message || tx('修改失败，请重试。', 'Revision failed. Please retry.', '変更に失敗しました。'));
     } finally {
       setRevising(false);
     }
   };
+
   const isFinalStep = Boolean(
     activeStep &&
     !activeStep.content &&
     (
       /制作完成|封装最终演示文稿|已完成|Finished|Completed/i.test(activeStep.title || '') ||
-      (activeStepIndex === steps.length - 1 && steps.length > 1) ||
+      (activeStepIndex === steps.length - 1 && steps.length > 1 && status === 'completed') ||
       (status === 'completed' && activeStepIndex === steps.length - 1)
     )
   );
+
+  useEffect(() => {
+    if (status === 'completed') {
+      setElapsedSeconds(0);
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [status, activeStepIndex]);
 
   useEffect(() => {
     const existingScript = document.querySelector('script[data-tailwind-cdn="ppt-preview"]');
@@ -790,64 +1291,100 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
       document.head.appendChild(script);
     }
 
-    const existingStyle = document.querySelector('style[data-ppt-preview="base"]');
-    if (!existingStyle) {
-      const style = document.createElement('style');
+    let style = document.querySelector('style[data-ppt-preview="base"]');
+    if (!style) {
+      style = document.createElement('style');
       style.setAttribute('data-ppt-preview', 'base');
-      style.textContent = `
-        .slide { width: 960px; height: 540px; box-sizing: border-box; overflow: hidden; position: relative; }
-        .slide * { box-sizing: border-box; }
-        /* 修复内容溢出：强制内容区垂直缩减并处理长文本 */
-        .slide p, .slide li { 
-          word-break: break-word;
-          overflow: hidden;
-          display: -webkit-box;
-          -webkit-line-clamp: 5; /* 限制单个段落行数 */
-          -webkit-box-orient: vertical;
-        }
-        /* 针对多卡片布局的强制高度限制 */
-        .slide .grid > div, .slide .flex > div {
-          max-height: 380px; 
-          overflow: hidden;
-        }
-        /* 修复 html2canvas 不支持 text-clip-text 导致的色块问题 */
-        .slide [class*="text-transparent"] {
-          color: #4f46e5 !important; /* fallback to indigo-600 */
-          background-clip: initial !important;
-          -webkit-background-clip: initial !important;
-          background-image: none !important;
-        }
-      `;
       document.head.appendChild(style);
     }
+    style.textContent = `
+      .slide { width: 960px; height: 540px; box-sizing: border-box; overflow: hidden; position: relative; }
+      .slide * { box-sizing: border-box; }
+      /* 修复内容溢出：强制内容区垂直缩减并处理长文本 */
+      .slide p, .slide li {
+        word-break: break-word;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 5; /* 限制单个段落行数 */
+        -webkit-box-orient: vertical;
+      }
+      /* 针对多卡片布局的强制高度限制 */
+      .slide .grid > div, .slide .flex > div {
+        max-height: 380px;
+        overflow: hidden;
+      }
+      /* 修复 html2canvas 不支持 text-clip-text 导致的色块问题 */
+      .slide [class*="text-transparent"] {
+        color: #4f46e5 !important; /* fallback to indigo-600 */
+        background-clip: initial !important;
+        -webkit-background-clip: initial !important;
+        background-image: none !important;
+      }
+      ${SAKI_PPT_ANIM_STYLE}
+    `;
   }, []);
 
   useEffect(() => {
-    const updateScale = () => {
-      if (previewContainerRef.current) {
-        const containerWidth = previewContainerRef.current.offsetWidth;
-        const containerHeight = previewContainerRef.current.offsetHeight;
-        const newScale = Math.min((containerWidth - 40) / 960, (containerHeight - 40) / 540);
-        setScale(newScale);
-      }
+    const el = previewContainerRef.current;
+    if (!el) return undefined;
+
+    const computeScale = () => {
+      const containerWidth = el.clientWidth || el.offsetWidth;
+      const containerHeight = el.clientHeight || el.offsetHeight;
+      if (!containerWidth || !containerHeight) return;
+      const padX = containerWidth < 640 ? 16 : 32;
+      const padY = containerHeight < 420 ? 16 : 32;
+      const availW = Math.max(240, containerWidth - padX);
+      const availH = Math.max(180, containerHeight - padY);
+      const nextScale = clamp(Math.min(availW / 960, availH / 540), 0.25, 1.35);
+      setFitScale(nextScale);
     };
-    updateScale();
-    window.addEventListener('resize', updateScale);
-    return () => window.removeEventListener('resize', updateScale);
-  }, [activeStepIndex, isPreviewMode]);
+
+    computeScale();
+    const rafId = requestAnimationFrame(computeScale);
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(computeScale);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', computeScale);
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro?.disconnect();
+      window.removeEventListener('resize', computeScale);
+    };
+  }, [activeStepIndex, activeStep?.content, activeStep?.thinking, isPreviewMode, isFocusMode, isThinkingOpen, sidebarTab, status, steps.length]);
 
   useEffect(() => {
-    // If it's completed, don't auto-jump to a running step (which might be a leftover state)
+    if (!isPreviewMode) return undefined;
+    const el = previewScrollRef.current;
+    if (!el) return undefined;
+
+    const updateListScale = () => {
+      const w = el.clientWidth || window.innerWidth;
+      setPreviewListScale(clamp((w - 64) / 960, 0.35, 1.15));
+    };
+    updateListScale();
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(updateListScale);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', updateListScale);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', updateListScale);
+    };
+  }, [isPreviewMode, isFocusMode]);
+
+  // Auto-follow running step or jump to first content slide when completed
+  useEffect(() => {
     if (status === 'completed') {
-      // If we are currently at index 0 and it's not the final step, jump to the first content-bearing slide
-      // Only do this on mount or when steps change
-      if (activeStepIndex === 0 && steps.length > 0) {
+      if (activeStepIndex === 0 && steps.length > 0 && !steps[0]?.content) {
         const firstContentIdx = steps.findIndex(s => s.content);
         if (firstContentIdx !== -1) {
           setActiveStepIndex(firstContentIdx);
         } else if (steps.length > 1) {
-          // If no content yet but multiple steps, maybe it's the final message?
-          // Just don't get stuck on step 0 if it's the planning step
           setActiveStepIndex(1);
         }
       }
@@ -864,6 +1401,15 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
       }
     }
   }, [steps.length, status]);
+
+  useEffect(() => {
+    const btn = stepButtonRefs.current[activeStepIndex];
+    if (btn && typeof btn.scrollIntoView === 'function') {
+      btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [activeStepIndex]);
+
+  const effectiveScale = clamp(fitScale * zoomFactor, 0.25, 1.5);
 
   const downloadPptx = async () => {
     const slides = steps.filter(s => s.content);
@@ -1048,28 +1594,184 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
 
   const renderFocusButton = (focusMode = false) => (
     <button
+      type="button"
       onClick={() => setIsFocusMode(!focusMode)}
-      className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-gray-700 transition-all hover:bg-gray-50 shadow-sm"
+      className="flex items-center gap-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-all hover:bg-slate-50 active:scale-95 dark:border-white/15 dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/15"
+      title={focusMode ? tx('收起全屏，回到对话', 'Exit Fullscreen', '全画面を閉じる') : tx('全屏工作台', 'Fullscreen Studio', '全画面表示')}
     >
       {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-      {focusMode ? 'Exit Focus' : 'Focus'}
+      <span className="hidden sm:inline">{focusMode ? tx('收起全屏', 'Exit Fullscreen', '閉じる') : tx('全屏', 'Fullscreen', '全画面')}</span>
     </button>
   );
 
+  // Determine which Saki stage kind to show when slide content is not ready
+  const getStageKind = () => {
+    if (isFinalStep) return 'final';
+    if (activeStep?.status === 'error') return 'error';
+    const isPlanning = (
+      steps.length <= 1
+      && !activeStep?.content
+      && (/规划|大纲|planning|outline/i.test(activeStep?.title || '') || (!activeStep?.thinking && !activeStep?.description))
+    );
+    if (isPlanning) return 'planning';
+    if (activeStep?.status === 'not-started') return 'queued';
+    if (activeStep?.subStage === 'searching-image') return 'searching-image';
+    if (activeStep?.subStage === 'drawing-image') return 'drawing-image';
+    if (activeStep?.subStage === 'coding' || (activeStep?.thinking && !activeStep?.content && activeStep?.status === 'running')) {
+      return 'coding';
+    }
+    return 'thinking';
+  };
+
+  const canReviseInSidebar = Boolean(onRevise && status === 'completed' && contentSlides.length > 0);
+  const hasThinkingPanelContent = Boolean(activeStep?.thinking || (status !== 'completed' && !isFinalStep));
+  const activeSidebarMode = canReviseInSidebar ? sidebarTab : 'thinking';
+  const showThinkingSidebar = isThinkingOpen && (canReviseInSidebar || (!isFinalStep && hasThinkingPanelContent));
+  const stageKind = getStageKind();
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Escape' && isFocusMode) {
+      if (isPreviewMode) {
+        event.preventDefault();
+        setIsPreviewMode(false);
+        return;
+      }
+      if (event.target?.tagName !== 'INPUT' && event.target?.tagName !== 'TEXTAREA') {
+        event.preventDefault();
+        setIsFocusMode(false);
+        return;
+      }
+    }
+    if (event.target?.tagName === 'INPUT' || event.target?.tagName === 'TEXTAREA' || event.target?.isContentEditable) {
+      return;
+    }
+    if (event.key === 'ArrowLeft' && activeStepIndex > 0) {
+      event.preventDefault();
+      setActiveStepIndex((prev) => Math.max(0, prev - 1));
+    } else if (event.key === 'ArrowRight' && activeStepIndex < steps.length - 1) {
+      event.preventDefault();
+      setActiveStepIndex((prev) => Math.min(steps.length - 1, prev + 1));
+    }
+  };
+
+  const renderCompactEntryCard = () => {
+    const runningStep = steps.find(s => s.status === 'running') || activeStep;
+    const updatedCount = data?.revision || 0;
+    const isGeneratingDeck = status !== 'completed';
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setIsFocusMode(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsFocusMode(true);
+          }
+        }}
+        className="group relative flex w-full cursor-pointer flex-col gap-3 rounded-2xl border border-pink-200/80 bg-gradient-to-r from-rose-50/90 via-white to-orange-50/70 p-4 shadow-[0_10px_28px_rgba(244,114,182,0.10)] transition-all hover:-translate-y-0.5 hover:border-pink-300 hover:shadow-[0_14px_34px_rgba(244,114,182,0.16)] sm:flex-row sm:items-center sm:justify-between dark:border-pink-500/25 dark:from-[#211b2a] dark:via-[#171824] dark:to-[#221c1a]"
+      >
+        <div className="flex min-w-0 items-center gap-3.5">
+          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-pink-200/80 bg-white shadow-sm dark:border-pink-400/30 dark:bg-white/10">
+            <SakiStageAvatar
+              sources={
+                isGeneratingDeck
+                  ? ['/assets/saki/ppt/ppt_plan.webp', '/assets/saki/ppt/ppt_plan.png', '/assets/saki/docked/think.png']
+                  : ['/assets/saki/ppt/ppt_complete.webp', '/assets/saki/ppt/ppt_complete.png', '/assets/saki/docked/happy.png']
+              }
+              alt="Saki PPT Studio"
+              className="h-full w-full object-cover object-top"
+            />
+            {isGeneratingDeck && (
+              <span className="absolute bottom-1 right-1 h-2.5 w-2.5 rounded-full bg-[#ff5b9a] ring-2 ring-white animate-pulse" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-extrabold text-slate-800 dark:text-slate-100">{pptTitle}</span>
+              {isGeneratingDeck ? (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-pink-100/90 px-2 py-0.5 text-[10px] font-bold text-[#d43678] dark:bg-pink-500/20 dark:text-pink-300">
+                  <Loader2 size={10} className="animate-spin" />
+                  {tx(`制作中 ${deckProgressPercent}%`, `Creating ${deckProgressPercent}%`, `作成中 ${deckProgressPercent}%`)}
+                </span>
+              ) : (
+                <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200/80 dark:bg-emerald-500/15 dark:text-emerald-300">
+                  {tx(`${contentSlides.length} 页 · 已完成`, `${contentSlides.length} slides · Done`, `${contentSlides.length}ページ · 完了`)}
+                </span>
+              )}
+              {updatedCount > 0 && (
+                <span className="shrink-0 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-bold text-orange-700 ring-1 ring-orange-200/80 dark:bg-orange-500/15 dark:text-orange-300">
+                  V{updatedCount + 1}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+              {isGeneratingDeck
+                ? (runningStep?.title ? tx(`当前步骤：${runningStep.title}`, `Current: ${runningStep.title}`) : tx('Saki 正在实时设计幻灯片...', 'Saki is designing slides live...'))
+                : tx('点击全屏打开 PPT 工作台 · 可在左侧边栏直接与 AI 对话改版或插图', 'Click to open fullscreen PPT studio · Revise or attach visuals via AI sidebar')}
+            </p>
+            {isGeneratingDeck && steps.length > 0 && (
+              <div className="mt-2 h-1.5 w-44 max-w-full overflow-hidden rounded-full bg-pink-100/90 dark:bg-white/10">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-[#ff75ac] to-orange-500 transition-all duration-300"
+                  style={{ width: `${Math.max(8, deckProgressPercent)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {status === 'completed' && contentSlides.length > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadPptx();
+              }}
+              disabled={downloading || editableDownloading}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200/90 bg-white px-3 py-2 text-xs font-bold text-orange-700 shadow-sm transition hover:bg-orange-50 disabled:opacity-60 dark:border-orange-500/30 dark:bg-white/10 dark:text-orange-200"
+            >
+              {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+              <span>{tx('导出 PPTX', 'Export', '出力')}</span>
+            </button>
+          )}
+          <span className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#ff5b9a] to-orange-500 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition group-hover:brightness-105">
+            <Maximize2 size={13} />
+            <span>{isGeneratingDeck ? tx('全屏观看制作', 'Open Studio', '全画面表示') : tx('全屏打开工作台', 'Open Fullscreen', '全画面で開く')}</span>
+            <ArrowUpRight size={13} />
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  if (isEmbedded && !isFocusMode) {
+    return renderCompactEntryCard();
+  }
+
   if (isPreviewMode && steps.some(step => step.content)) {
     const previewView = (focusMode = false) => (
-      <div className={`flex flex-col overflow-hidden bg-white shadow-2xl animate-in fade-in zoom-in duration-300 ${focusMode ? 'h-full rounded-[2rem]' : 'h-[600px] rounded-2xl border'}`}>
-        <div className="px-4 py-2.5 border-b flex items-center justify-between bg-gradient-to-r from-orange-50 to-white shrink-0">
-          <div className="flex items-center gap-2">
-            <Presentation size={17} className="text-orange-600" />
-            <span className="text-sm font-bold text-gray-800">{pptTitle} - {tx('预览', 'Preview', 'プレビュー')}</span>
+      <div className={`flex flex-col overflow-hidden bg-white shadow-2xl animate-in fade-in zoom-in duration-300 dark:bg-[#141520] ${focusMode ? 'h-full w-full rounded-[1.75rem] border border-white/20' : 'h-[680px] rounded-2xl border border-slate-200/80 dark:border-white/10'}`}>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-gradient-to-r from-rose-50/70 via-white to-orange-50/60 px-4 py-2.5 dark:border-white/10 dark:from-[#1c1826] dark:via-[#151722] dark:to-[#1e1918]">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-[#ff75ac] to-orange-500 text-white shadow-sm">
+              <Presentation size={16} />
+            </div>
+            <div>
+              <span className="text-sm font-bold text-slate-800 dark:text-slate-100">{pptTitle}</span>
+              <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500 dark:bg-white/10 dark:text-slate-300">
+                {tx(`${contentSlides.length} 页全景预览`, `${contentSlides.length} slides`, `全${contentSlides.length}ページ`)}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {renderFocusButton(focusMode)}
             <button
+              type="button"
               onClick={downloadEditablePptx}
               disabled={editableDownloading || downloading}
-              className={`flex items-center gap-1.5 px-2.5 py-1 bg-white text-orange-700 border border-orange-200 rounded-lg text-xs font-bold hover:bg-orange-50 transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs font-bold text-orange-700 shadow-sm transition-all hover:bg-orange-50 active:scale-95 dark:border-orange-500/30 dark:bg-orange-500/15 dark:text-orange-200 ${(editableDownloading || downloading) ? 'cursor-not-allowed opacity-70' : ''}`}
             >
               {editableDownloading ? (
                 <>
@@ -1084,9 +1786,10 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
               )}
             </button>
             <button
+              type="button"
               onClick={downloadPptx}
               disabled={downloading || editableDownloading}
-              className={`flex items-center gap-1.5 px-2.5 py-1 bg-orange-600 text-white rounded-lg text-xs font-bold hover:bg-orange-700 transition-all shadow-md active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-rose-500 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:brightness-105 active:scale-95 ${(downloading || editableDownloading) ? 'cursor-not-allowed opacity-70' : ''}`}
             >
               {downloading ? (
                 <>
@@ -1101,47 +1804,54 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
               )}
             </button>
             <button
+              type="button"
               onClick={() => setIsPreviewMode(false)}
-              className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+              className="rounded-xl p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-white/10"
+              title={tx('关闭全屏预览', 'Close preview', 'プレビューを閉じる')}
             >
               <X size={16} />
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-auto bg-gray-100 p-8 flex flex-col items-center gap-4">
-          {steps.filter(s => s.content).map((step, idx) => {
-            const previewScale = Math.min(1, (window.innerWidth - 100) / 960);
-            return (
+        <div
+          ref={previewScrollRef}
+          className="flex flex-1 flex-col items-center gap-6 overflow-auto bg-slate-100/90 p-6 md:p-8 dark:bg-[#0f1018]"
+        >
+          {contentSlides.map((step, idx) => (
+            <div key={idx} className="flex flex-col items-center gap-1.5">
               <div
-                key={idx}
+                className="overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-black/5"
                 style={{
-                  width: `${960 * previewScale}px`,
-                  height: `${540 * previewScale}px`,
-                  flexShrink: 0
+                  width: `${Math.round(960 * previewListScale)}px`,
+                  height: `${Math.round(540 * previewListScale)}px`,
+                  flexShrink: 0,
                 }}
               >
                 <div
-                  className="shadow-2xl bg-white"
+                  className="bg-white"
                   style={{
                     width: '960px',
                     height: '540px',
-                    transform: `scale(${previewScale})`,
+                    transform: `scale(${previewListScale})`,
                     transformOrigin: 'top left',
                   }}
                   dangerouslySetInnerHTML={{ __html: step.content }}
                 />
               </div>
-            );
-          })}
+              <span className="text-[11px] font-semibold text-slate-400">
+                {idx + 1} / {contentSlides.length} · {step.title}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
     );
 
     return (
       <>
-        {previewView(false)}
+        {!isEmbedded && previewView(false)}
         {isFocusMode && ReactDOM.createPortal(
-          <div className="fixed inset-0 z-[170] bg-slate-950/55 p-3 backdrop-blur-md md:p-6">
+          <div className="fixed inset-0 z-[170] flex bg-slate-950/60 p-0 backdrop-blur-md sm:p-3 md:p-5">
             {previewView(true)}
           </div>,
           document.body
@@ -1150,161 +1860,545 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
     );
   }
 
-  const mainView = (
-    <div className={`relative p-4 rounded-2xl border bg-white shadow-sm overflow-hidden transition-all duration-500 ${isEmbedded ? 'w-full' : 'max-w-4xl mx-auto h-[600px] flex flex-col'}`}>
-      <div className="absolute right-4 top-4 z-10">
-        {renderFocusButton(false)}
-      </div>
-      <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-gray-100">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 bg-orange-100 rounded-lg">
-            <Presentation size={16} className="text-orange-600" />
+  const renderMainView = (focusMode = false) => (
+    <div
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className={`relative flex flex-col overflow-hidden border border-slate-200/80 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.08)] outline-none transition-all duration-300 sm:p-3.5 md:p-4 dark:border-white/10 dark:bg-[#141520]/95 ${
+        focusMode
+          ? 'h-full w-full rounded-none sm:rounded-[1.75rem]'
+          : isEmbedded
+            ? 'w-full rounded-2xl'
+            : 'mx-auto h-[min(680px,78dvh)] max-w-5xl rounded-2xl'
+      }`}
+    >
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 dark:border-white/10">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#ff75ac] to-orange-500 text-white shadow-sm shadow-pink-500/20">
+            <Presentation size={17} />
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-gray-800 leading-tight">{pptTitle}</h3>
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold leading-tight mt-0.5">{status === 'completed' ? tx('已完成', 'Completed', '完了') : tx('智能生成中...', 'Generating...', 'スマート生成中...')}</p>
-          </div>
-        </div>
-        {status === 'completed' && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => setIsPreviewMode(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold transition-all"
-            >
-              <Monitor size={13} />
-              {tx('全屏预览', 'Full screen preview', '全画面プレビュー')}
-            </button>
-            <button
-              onClick={downloadEditablePptx}
-              disabled={editableDownloading || downloading}
-              className={`flex items-center gap-1.5 px-2.5 py-1 bg-white border border-orange-200 hover:bg-orange-50 text-orange-700 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(editableDownloading || downloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
-            >
-              {editableDownloading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
-              {editableDownloading ? tx('正在生成可编辑版...', 'Generating editable version...', '編集可能版を生成中...') : tx('下载可编辑 PPTX', 'Download editable PPTX', '編集可能な PPTX をダウンロード')}
-            </button>
-            <button
-              onClick={downloadPptx}
-              disabled={downloading || editableDownloading}
-              className={`flex items-center gap-1.5 px-2.5 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 ${(downloading || editableDownloading) ? 'opacity-70 cursor-not-allowed' : ''}`}
-            >
-              {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-              {downloading ? tx('正在导出...', 'Exporting...', 'エクスポート中...') : tx('下载 PPTX', 'Download PPTX', 'PPTX をダウンロード')}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {onRevise && data.status === 'completed' && activeStep?.content && activeStep.id != null && (
-        <div className="mb-3 rounded-xl border border-orange-100 bg-orange-50/50 p-3">
-          <label className="block text-xs font-semibold text-orange-800 mb-2">
-            {tx('修改当前页 · 其他页面保持不变', 'Revise this slide · Other slides stay unchanged', 'このスライドのみ変更')}
-            <textarea value={revisionInstruction} onChange={event => setRevisionInstruction(event.target.value)} maxLength={4000} disabled={revising || editingDisabled}
-              placeholder={tx('例如：保留数据，改成左右对比布局，减少装饰。', 'Keep the data, use a comparison layout, reduce decoration.', 'データを保持して比較レイアウトに変更')}
-              className="mt-2 w-full rounded-lg border border-orange-200 bg-white p-2 text-sm text-gray-800" rows={2} />
-          </label>
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => reviseSlide(false)} disabled={revising || editingDisabled || !revisionInstruction.trim()} className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs text-white disabled:opacity-50">
-              {revising ? tx('修改并保存中...', 'Revising and saving...', '変更・保存中...') : tx('应用修改', 'Apply revision', '変更を適用')}
-            </button>
-            <button type="button" onClick={() => reviseSlide(true)} disabled={revising || editingDisabled || !activeStep.revisions?.length} className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs disabled:opacity-50">
-              {tx('恢复上一版', 'Restore previous version', '前の版に戻す')}
-            </button>
-            <span className="text-xs text-gray-500">{tx('最多保留最近 10 次修改', 'Keeps up to 10 revisions', '最大10件の変更を保持')}</span>
-          </div>
-          {revisionError && <p role="alert" className="mt-2 text-sm text-red-600">{revisionError}</p>}
-          <div className="mt-3 border-t border-orange-200 pt-3">
-            <p className="text-xs text-gray-600 mb-2">{tx('AI 配图：先预留右侧位置并检查布局，再生成一张图片。换图不改文字；恢复上一版可撤销。', 'AI illustration: prepare and review a right-side slot, then generate one image. Replacement preserves text; restore undoes it.', '右側の画像枠を準備・確認してから1枚生成します。')}</p>
-            {!imageSlots.length ? <button type="button" disabled={revising || editingDisabled} onClick={() => editImage(true)} className="rounded-lg border px-3 py-1.5 text-xs disabled:opacity-50">{tx('预留右侧配图位置', 'Prepare right-side image slot', '右側に画像枠を準備')}</button> : <>
-              <textarea aria-label={tx('图片描述', 'Image description', '画像の説明')} value={imagePrompt} onChange={event => { setImagePrompt(event.target.value); setImageConfirmed(false); }} maxLength={2000} rows={2} disabled={revising || editingDisabled} className="w-full rounded-lg border p-2 text-sm" placeholder={tx('只描述需要生成的场景，不要填写内部资料或敏感信息。', 'Describe the scene only. Do not include confidential information.', '機密情報を含めず場面を説明してください。')} />
-              <label className="block my-2 text-xs text-gray-600"><input type="checkbox" checked={imageConfirmed} onChange={event => setImageConfirmed(event.target.checked)} disabled={revising || editingDisabled} /> {tx('允许将此描述发送给设置中的生图服务，生成 1 张图；可能收费，费用由服务商决定。不会上传原稿或参考图。', 'Send this description to the configured image provider for one image. Provider charges may apply. No deck or reference images are uploaded.', '設定済み画像サービスに説明を送信します。料金が発生する場合があります。')}</label>
-              <button type="button" disabled={revising || editingDisabled || !imageConfirmed || !imagePrompt.trim()} onClick={() => editImage(false)} className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs text-white disabled:opacity-50">{tx('生成 / 替换配图', 'Generate / replace image', '画像を生成・置換')}</button>
-            </>}
-          </div>
-        </div>
-      )}
-      <div className="flex flex-col h-full overflow-hidden">
-        <div className="flex items-center gap-1 overflow-x-auto pb-2.5 mb-3 scrollbar-hide border-b border-gray-50">
-          {steps.map((step, idx) => (
-            <button
-              key={idx}
-              disabled={revising}
-              onClick={() => setActiveStepIndex(idx)}
-              className={`flex flex-col items-center min-w-[72px] p-1.5 rounded-xl transition-all relative ${activeStepIndex === idx ? 'bg-orange-50 ring-1 ring-orange-200' : 'hover:bg-gray-50'}`}
-            >
-              <div className={`mb-1 ${activeStepIndex === idx ? 'text-orange-600' : 'text-gray-400'}`}>
-                {step.status === 'completed' ? <CheckCircle2 size={14} className="text-green-500" /> :
-                  step.status === 'running' ? <Loader2 size={14} className="animate-spin text-orange-500" /> :
-                    <Circle size={14} />}
-              </div>
-              <span className={`text-[9px] font-bold text-center line-clamp-1 ${activeStepIndex === idx ? 'text-orange-700' : 'text-gray-500'}`}>
-                {step.title}
-              </span>
-              {activeStepIndex === idx && <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-orange-500 rounded-full" />}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 flex flex-col md:flex-row gap-4 overflow-hidden">
-          {isFinalStep ? (
-            <div className="w-full flex items-center justify-center rounded-xl border border-gray-100 bg-gray-50/70">
-              <div className="flex items-center gap-3 text-gray-600">
-                <CheckCircle2 size={22} className="text-green-500" />
-                <span className="text-sm font-semibold">{t('ppt_completed')}</span>
-              </div>
-            </div>
-          ) : (
-            <>
-              {activeStep?.thinking && (
-                <div
-                  className="w-full md:w-1/3 flex flex-col bg-gray-50 rounded-xl p-4 overflow-y-auto border border-gray-100"
-                  style={{ maxHeight: '540px' }}
-                >
-                  <div className="flex items-center gap-2 mb-3 text-orange-700">
-                    <Layout size={14} />
-                    <span className="text-xs font-bold uppercase tracking-tight">{t('design_thinking')}</span>
-                  </div>
-                  <div className="prose prose-sm prose-orange max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {sanitizeThinkingText(activeStep.thinking || '')}
-                    </ReactMarkdown>
-                  </div>
-                </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-sm font-extrabold text-slate-800 dark:text-slate-100">{pptTitle}</h3>
+              {status === 'completed' ? (
+                <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200/80 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30">
+                  {tx(`${contentSlides.length} 页 · 已完成`, `${contentSlides.length} slides · Done`, `${contentSlides.length}ページ · 完了`)}
+                </span>
+              ) : (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-pink-50 px-2 py-0.5 text-[10px] font-bold text-[#ff5b9a] ring-1 ring-pink-200/80 dark:bg-pink-500/15 dark:text-pink-300 dark:ring-pink-500/30">
+                  <Loader2 size={10} className="animate-spin" />
+                  {tx(`生成中 ${deckProgressPercent}%`, `Generating ${deckProgressPercent}%`, `生成中 ${deckProgressPercent}%`)}
+                </span>
               )}
+            </div>
+            {status !== 'completed' && steps.length > 0 && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <div className="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#ff75ac] to-orange-500 transition-all duration-300"
+                    style={{ width: `${Math.max(8, deckProgressPercent)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-semibold text-slate-400">
+                  {completedStepsCount}/{steps.length}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
 
-              <div
-                className={`flex-1 flex flex-col bg-white rounded-xl border border-gray-100 overflow-hidden shadow-inner ${!activeStep?.thinking ? 'w-full' : ''}`}
-                style={{ maxHeight: '540px' }}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(canReviseInSidebar || (!isFinalStep && hasThinkingPanelContent)) && (
+            <button
+              type="button"
+              onClick={() => setIsThinkingOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-bold shadow-sm transition-all active:scale-95 ${
+                isThinkingOpen
+                  ? 'border-pink-200 bg-pink-50/80 text-[#d44b83] dark:border-pink-500/30 dark:bg-pink-500/15 dark:text-pink-300'
+                  : 'border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/15 dark:bg-white/10 dark:text-slate-200'
+              }`}
+              title={isThinkingOpen ? tx('隐藏侧边栏，放大幻灯片', 'Hide sidebar', 'サイドバーを隠す') : tx('显示思考与 AI 改版侧边栏', 'Show thinking & AI revise sidebar', 'サイドバーを表示')}
+            >
+              {isThinkingOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+              <span className="hidden sm:inline">{isThinkingOpen ? tx('收起侧栏', 'Hide Sidebar', '閉じる') : tx('AI 改版 / 思考', 'Revise & Notes', 'AI修正・思考')}</span>
+            </button>
+          )}
+
+          {status === 'completed' && contentSlides.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setIsPreviewMode(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-all hover:bg-slate-50 active:scale-95 dark:border-white/15 dark:bg-white/10 dark:text-slate-200"
               >
-                <div className="px-3.5 py-1.5 border-b border-gray-50 bg-gray-50/50 flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase">{t('slide_preview', { page: activeStepIndex + 1 })}</span>
-                  <div className="flex gap-1">
-                    {[1, 2, 3].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-gray-200" />)}
+                <Monitor size={13} />
+                <span className="hidden md:inline">{tx('全屏预览', 'Full screen preview', '全画面プレビュー')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={downloadEditablePptx}
+                disabled={editableDownloading || downloading}
+                className={`flex items-center gap-1.5 rounded-xl border border-orange-200 bg-white px-2.5 py-1.5 text-xs font-bold text-orange-700 shadow-sm transition-all hover:bg-orange-50 active:scale-95 dark:border-orange-500/30 dark:bg-orange-500/15 dark:text-orange-200 ${(editableDownloading || downloading) ? 'cursor-not-allowed opacity-70' : ''}`}
+              >
+                {editableDownloading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
+                <span>{editableDownloading ? tx('生成可编辑版...', 'Generating...', '生成中...') : tx('可编辑 PPTX', 'Editable PPTX', '編集可能 PPTX')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={downloadPptx}
+                disabled={downloading || editableDownloading}
+                className={`flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-rose-500 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-all hover:brightness-105 active:scale-95 ${(downloading || editableDownloading) ? 'cursor-not-allowed opacity-70' : ''}`}
+              >
+                {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                <span>{downloading ? tx('导出中...', 'Exporting...', '出力中...') : tx('下载 PPTX', 'Download PPTX', 'PPTX 保存')}</span>
+              </button>
+            </>
+          )}
+
+          {renderFocusButton(focusMode)}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="scrollbar-hide mb-3 flex items-center gap-1.5 overflow-x-auto border-b border-slate-100 pb-2.5 dark:border-white/10">
+          {steps.map((step, idx) => {
+            const isActive = activeStepIndex === idx;
+            const isRunningStep = step.status === 'running';
+            const isDoneStep = step.status === 'completed' || step.status === 'success';
+            const isErrorStep = step.status === 'error';
+            return (
+              <button
+                key={idx}
+                ref={(el) => { stepButtonRefs.current[idx] = el; }}
+                type="button"
+                disabled={revising}
+                onClick={() => setActiveStepIndex(idx)}
+                title={step.title}
+                className={`group relative flex shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-all ${
+                  isActive
+                    ? 'bg-gradient-to-r from-pink-50 to-orange-50/80 text-[#c93672] ring-1 ring-pink-300/80 shadow-sm dark:from-pink-500/20 dark:to-orange-500/15 dark:text-pink-200 dark:ring-pink-400/40'
+                    : 'bg-slate-50/70 text-slate-600 hover:bg-slate-100/90 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10'
+                }`}
+              >
+                <span className="flex shrink-0 items-center justify-center">
+                  {isDoneStep ? (
+                    <CheckCircle2 size={14} className="text-emerald-500" />
+                  ) : isRunningStep ? (
+                    <Loader2 size={14} className="animate-spin text-[#ff5b9a]" />
+                  ) : isErrorStep ? (
+                    <AlertCircle size={14} className="text-rose-500" />
+                  ) : (
+                    <Circle size={14} className="text-slate-300 dark:text-slate-600" />
+                  )}
+                </span>
+                <div className="flex max-w-[140px] flex-col">
+                  <span className={`text-[9px] font-extrabold uppercase tracking-wider leading-none ${isActive ? 'text-[#ff5b9a]' : 'text-slate-400'}`}>
+                    P{idx + 1}
+                  </span>
+                  <span className="mt-0.5 truncate text-[11px] font-bold leading-tight">
+                    {step.title}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className={`flex min-h-[420px] flex-1 flex-col gap-3.5 overflow-hidden lg:flex-row ${focusMode ? 'h-full' : 'h-[520px]'}`}>
+          {showThinkingSidebar && (
+            <div className="flex max-h-[260px] w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-pink-100/80 bg-gradient-to-b from-rose-50/50 via-white to-slate-50/60 shadow-sm lg:max-h-none lg:w-[320px] xl:w-[345px] dark:border-white/10 dark:from-[#1d1928] dark:via-[#171925] dark:to-[#151722]">
+              <div className="flex shrink-0 flex-col gap-2 border-b border-pink-100/70 bg-white/85 px-3.5 py-2.5 backdrop-blur-sm dark:border-white/10 dark:bg-white/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl border border-pink-200/70 bg-pink-50/70 dark:border-pink-400/30 dark:bg-pink-500/15">
+                    <SakiStageAvatar
+                      sources={
+                        (activeStep?.status === 'running' || revising)
+                          ? ['/assets/saki/ppt/ppt_plan.webp', '/assets/saki/ppt/ppt_plan.png', '/assets/saki/docked/think.png']
+                          : ['/assets/saki/ppt/ppt_complete.png', '/assets/saki/docked/happy.png']
+                      }
+                      alt="Saki Studio"
+                      className="h-full w-full object-cover object-top"
+                    />
+                    {(activeStep?.status === 'running' || revising) && (
+                      <span className="absolute bottom-0.5 right-0.5 h-2 w-2 rounded-full bg-[#ff5b9a] ring-2 ring-white animate-pulse" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-800 dark:text-slate-100">
+                      {activeSidebarMode === 'revise' ? (
+                        <Wand2 size={12} className="text-[#ff5b9a]" />
+                      ) : (
+                        <Layout size={12} className="text-[#ff5b9a]" />
+                      )}
+                      <span>
+                        {activeSidebarMode === 'revise'
+                          ? tx('AI 改版助手', 'AI Revision Agent', 'AI 修正アシスタント')
+                          : t('design_thinking')}
+                      </span>
+                    </div>
+                    <p className="truncate text-[10px] font-semibold text-slate-400">
+                      {revising
+                        ? tx('Agent 正在调整幻灯片与配图...', 'Agent is revising slides & visuals...', '編集中...')
+                        : activeStep?.status === 'running'
+                          ? tx('Saki 正在实时推敲版式...', 'Saki is thinking live...', 'リアルタイムで構想中...')
+                          : tx(`当前 P${activeStepIndex + 1} · ${activeStep?.title || ''}`, `Slide ${activeStepIndex + 1} · ${activeStep?.title || ''}`)}
+                    </p>
                   </div>
                 </div>
-                <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center bg-gray-200/30" ref={previewContainerRef}>
-                  {activeStep?.content ? (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <div
-                        className="shadow-2xl bg-white origin-center"
-                        style={{
-                          width: '960px',
-                          height: '540px',
-                          transform: `scale(${scale})`,
-                          flexShrink: 0
+
+                {canReviseInSidebar && (
+                  <div className="grid grid-cols-2 gap-1 rounded-xl border border-pink-100/80 bg-slate-100/80 p-0.5 dark:border-white/10 dark:bg-white/5">
+                    <button
+                      type="button"
+                      onClick={() => setSidebarTab('revise')}
+                      className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold transition ${
+                        activeSidebarMode === 'revise'
+                          ? 'bg-white text-[#d43678] shadow-sm dark:bg-[#ff5b9a]/25 dark:text-pink-200'
+                          : 'text-slate-500 hover:text-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      <Wand2 size={11} />
+                      <span>{tx('AI 改版', 'AI Revise', 'AI 修正')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSidebarTab('thinking')}
+                      className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold transition ${
+                        activeSidebarMode === 'thinking'
+                          ? 'bg-white text-[#d43678] shadow-sm dark:bg-[#ff5b9a]/25 dark:text-pink-200'
+                          : 'text-slate-500 hover:text-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      <Layout size={11} />
+                      <span>{t('design_thinking')}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {activeSidebarMode === 'revise' && canReviseInSidebar ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex items-center justify-between gap-2 border-b border-pink-100/60 bg-rose-50/30 px-3.5 py-1.5 dark:border-white/10 dark:bg-white/[0.02]">
+                    <span className="truncate text-[11px] font-semibold text-slate-500 dark:text-slate-300">
+                      {tx('默认修改当前页，也可指定页码/整套', 'Targets current slide or mentioned pages', '現在のページまたは指定ページを修正')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => reviseSlide(true)}
+                      disabled={revising || editingDisabled || !activeStep?.revisions?.length}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-pink-200/80 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-700 transition hover:bg-pink-50 disabled:opacity-40 dark:border-white/15 dark:bg-white/10 dark:text-slate-200"
+                    >
+                      <Undo2 size={10} />
+                      <span>{tx('恢复上一版', 'Undo', '元に戻す')}</span>
+                    </button>
+                  </div>
+
+                  <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
+                    {revisionHistoryLog.length === 0 ? (
+                      <div className="rounded-xl border border-pink-100/90 bg-white/80 p-3 text-xs leading-relaxed text-slate-600 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
+                        <div className="mb-1 flex items-center gap-1.5 font-bold text-[#d43678] dark:text-pink-300">
+                          <Sparkles size={12} />
+                          <span>{tx('直接告诉 Saki 想怎么改', 'Tell Saki what to refine')}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {tx(
+                            '只需在下方对话框输入要求，也可点击左下角插入图片或参考文件。Saki 会自主判断改版范围，并自动决定插入你的素材、联网搜图或 AI 绘图。',
+                            'Describe changes or attach images/docs below. Agent decides layout and visuals automatically.'
+                          )}
+                        </p>
+                      </div>
+                    ) : (
+                      revisionHistoryLog.map((entry) => (
+                        <div key={entry.id} className="space-y-1.5">
+                          <div className="ml-4 rounded-xl bg-gradient-to-r from-[#ff5b9a] to-orange-500 px-3 py-2 text-xs text-white shadow-sm">
+                            <p className="whitespace-pre-wrap break-words font-medium">{entry.userText}</p>
+                            {entry.attachments?.length > 0 && (
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                {entry.attachments.map((att, attIdx) => (
+                                  <span key={attIdx} className="inline-flex items-center gap-1 rounded-md bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold">
+                                    {att.isImage ? <ImageIcon size={10} /> : <FileText size={10} />}
+                                    {att.name}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="mr-3 rounded-xl border border-pink-100 bg-white px-3 py-2 text-[11px] leading-relaxed text-slate-700 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.summary}</ReactMarkdown>
+                          </div>
+                        </div>
+                      ))
+                    )}
+
+                    {revising && (
+                      <div className="mr-3 flex items-center gap-2 rounded-xl border border-pink-200/80 bg-pink-50/70 px-3 py-2 text-xs font-semibold text-[#d43678] dark:border-pink-500/30 dark:bg-pink-500/15 dark:text-pink-200">
+                        <Loader2 size={13} className="animate-spin shrink-0" />
+                        <span>{tx('Agent 正在执行改版与配图...', 'Agent is working on your revision...')}</span>
+                      </div>
+                    )}
+
+                    {revisionError && (
+                      <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-200">
+                        {revisionError}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="shrink-0 border-t border-pink-100/80 bg-white/90 p-3 dark:border-white/10 dark:bg-[#141622]">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.json,.xlsx"
+                      className="hidden"
+                      onChange={(e) => handleAttachFiles(e.target.files)}
+                    />
+                    {attachments.length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {attachments.map((att) => (
+                          <div
+                            key={att.id}
+                            className="group relative inline-flex max-w-[140px] items-center gap-1.5 rounded-lg border border-pink-200/80 bg-rose-50/60 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:border-white/15 dark:bg-white/10 dark:text-slate-200"
+                          >
+                            {att.isImage && att.previewUrl ? (
+                              <img src={att.previewUrl} alt={att.name} className="h-5 w-5 rounded object-cover shrink-0" />
+                            ) : (
+                              <FileText size={12} className="shrink-0 text-pink-500" />
+                            )}
+                            <span className="truncate">{att.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeAttachment(att.id)}
+                              className="ml-0.5 rounded-full p-0.5 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:hover:bg-white/20"
+                              aria-label={tx('移除附件', 'Remove attachment')}
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="rounded-xl border border-pink-200/90 bg-white p-2 shadow-sm focus-within:border-[#ff5b9a] focus-within:ring-2 focus-within:ring-pink-200/50 dark:border-white/15 dark:bg-[#1a1c28]">
+                      <textarea
+                        value={revisionInstruction}
+                        onChange={(e) => setRevisionInstruction(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
+                            e.preventDefault();
+                            reviseSlide(false);
+                          }
                         }}
-                        dangerouslySetInnerHTML={{ __html: activeStep.content }}
+                        maxLength={4000}
+                        rows={2}
+                        disabled={revising || editingDisabled}
+                        placeholder={tx('例如：给这页配张合适图片 / 结合上传文档提炼重点...', 'Ask Saki to revise, illustrate, or use attached files...')}
+                        className="w-full resize-none bg-transparent text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 focus:outline-none dark:text-slate-100"
                       />
+                      <div className="mt-1.5 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={revising || editingDisabled || uploadingAttachment}
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-[#d43678] disabled:opacity-50 dark:text-slate-300 dark:hover:bg-white/10"
+                          title={tx('插入图片或参考文件让 Agent 查看', 'Attach images or files for the Agent')}
+                        >
+                          {uploadingAttachment ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+                          <span>{uploadingAttachment ? tx('上传中...', 'Uploading...') : tx('图片 / 文件', 'Image / File')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => reviseSlide(false)}
+                          disabled={revising || editingDisabled || uploadingAttachment || (!revisionInstruction.trim() && attachments.length === 0)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-r from-[#ff5b9a] to-orange-500 text-white shadow-sm transition hover:brightness-105 disabled:opacity-40"
+                          aria-label={tx('发送修改指令', 'Send revision instruction')}
+                        >
+                          {revising ? <Loader2 size={13} className="animate-spin" /> : <ArrowUp size={14} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Thinking Content */
+                <div className="flex-1 overflow-y-auto p-3.5">
+                  {activeStep?.designHint && (
+                    <div className="mb-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-2.5 text-[11px] leading-relaxed text-indigo-800 dark:border-indigo-500/25 dark:bg-indigo-500/10 dark:text-indigo-200">
+                      <div className="mb-0.5 flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-300">
+                        <Sparkles size={10} />
+                        <span>{tx('版式建议', 'Layout Hint', 'レイアウト案')}</span>
+                      </div>
+                      {activeStep.designHint}
+                    </div>
+                  )}
+
+                  {activeStep?.thinking ? (
+                    <div className="prose prose-sm max-w-none text-xs leading-relaxed text-slate-700 dark:prose-invert dark:text-slate-200">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {sanitizeThinkingText(activeStep.thinking || '')}
+                      </ReactMarkdown>
+                      {activeStep?.status === 'running' && !activeStep?.content && (
+                        <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-[#ff5b9a] align-middle" />
+                      )}
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center text-gray-400 gap-3">
-                      <Loader2 size={32} className="animate-spin text-gray-200" />
-                      <span className="text-xs font-medium">{t('ppt_generating_content')}</span>
+                    <div className="space-y-2.5 py-2">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-[#ff5b9a]">
+                        <Loader2 size={13} className="animate-spin" />
+                        <span>{tx('Saki 正在组织设计思路...', 'Saki is drafting design thoughts...', '設計アイデアを整理中...')}</span>
+                      </div>
+                      <div className="h-3 w-11/12 rounded saki-ppt-shimmer" />
+                      <div className="h-3 w-4/5 rounded saki-ppt-shimmer" />
+                      <div className="h-3 w-3/4 rounded saki-ppt-shimmer" />
                     </div>
                   )}
                 </div>
-              </div>
-            </>
+              )}
+            </div>
           )}
+
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-inner dark:border-white/10 dark:bg-[#10121c]">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-slate-50/80 px-3.5 py-2 dark:border-white/10 dark:bg-white/5">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="flex shrink-0 gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-rose-300/90" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-amber-300/90" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-300/90" />
+                </div>
+                <span className="truncate whitespace-nowrap text-[11px] font-bold text-slate-500 dark:text-slate-300">
+                  {t('slide_preview', { page: activeStepIndex + 1 })}
+                </span>
+                {activeStep?.imageStatus === 'completed' && (
+                  <span className="hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-pink-50 px-2 py-0.5 text-[10px] font-bold text-pink-600 ring-1 ring-pink-200/80 sm:inline-flex dark:bg-pink-500/15 dark:text-pink-300 dark:ring-pink-500/30">
+                    <ImageIcon size={10} />
+                    {activeStep?.imageMode === 'draw'
+                      ? tx('AI 绘图已插入', 'AI Art Inserted', 'AI画像挿入済み')
+                      : tx('搜索配图已插入', 'Web Image Inserted', '検索画像挿入済み')}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {activeStep?.content && (
+                  <div className="mr-1 hidden items-center gap-0.5 rounded-lg border border-slate-200/80 bg-white px-1 py-0.5 sm:flex dark:border-white/10 dark:bg-white/5">
+                    <button
+                      type="button"
+                      onClick={() => setZoomFactor((prev) => clamp(Number((prev - 0.12).toFixed(2)), 0.5, 1.5))}
+                      className="rounded p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/10"
+                      title={tx('缩小', 'Zoom out', '縮小')}
+                    >
+                      <ZoomOut size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setZoomFactor(1)}
+                      className="px-1.5 text-[10px] font-bold text-slate-600 hover:text-[#ff5b9a] dark:text-slate-200"
+                      title={tx('自适应画布大小', 'Fit to stage', '画面に合わせる')}
+                    >
+                      {Math.round(effectiveScale * 100)}%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setZoomFactor((prev) => clamp(Number((prev + 0.12).toFixed(2)), 0.5, 1.5))}
+                      className="rounded p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/10"
+                      title={tx('放大', 'Zoom in', '拡大')}
+                    >
+                      <ZoomIn size={12} />
+                    </button>
+                    {zoomFactor !== 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setZoomFactor(1)}
+                        className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/10"
+                        title={tx('重置缩放', 'Reset zoom', 'リセット')}
+                      >
+                        <RotateCcw size={11} />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={activeStepIndex <= 0}
+                    onClick={() => setActiveStepIndex((prev) => Math.max(0, prev - 1))}
+                    className="rounded-lg border border-slate-200/80 bg-white p-1 text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-slate-200"
+                    title={tx('上一页', 'Previous slide', '前のページ')}
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={activeStepIndex >= steps.length - 1}
+                    onClick={() => setActiveStepIndex((prev) => Math.min(steps.length - 1, prev + 1))}
+                    className="rounded-lg border border-slate-200/80 bg-white p-1 text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-slate-200"
+                    title={tx('下一页', 'Next slide', '次のページ')}
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              ref={previewContainerRef}
+              className="relative flex flex-1 items-center justify-center overflow-auto bg-gradient-to-br from-slate-100/90 via-slate-100/70 to-rose-50/40 p-2 md:p-4 dark:from-[#0d0f17] dark:via-[#11131e] dark:to-[#18121f]"
+            >
+              {activeStep?.content ? (
+                <div
+                  className="relative shrink-0 overflow-hidden rounded-xl bg-white shadow-[0_24px_60px_rgba(15,23,42,0.16)] ring-1 ring-black/5 transition-[width,height] duration-200 ease-out"
+                  style={{
+                    width: `${Math.round(960 * effectiveScale)}px`,
+                    height: `${Math.round(540 * effectiveScale)}px`,
+                  }}
+                >
+                  <div
+                    className="bg-white"
+                    style={{
+                      width: '960px',
+                      height: '540px',
+                      transform: `scale(${effectiveScale})`,
+                      transformOrigin: 'top left',
+                    }}
+                    dangerouslySetInnerHTML={{ __html: activeStep.content }}
+                  />
+                  {(activeStep?.subStage === 'searching-image' || activeStep?.subStage === 'drawing-image') && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/55 backdrop-blur-[2px] dark:bg-slate-950/45">
+                      <div className="flex items-center gap-2.5 rounded-2xl border border-pink-200/80 bg-white/95 px-4 py-2.5 text-xs font-bold text-slate-700 shadow-lg dark:border-pink-400/30 dark:bg-[#1c1e2e]/95 dark:text-slate-100">
+                        <Loader2 size={14} className="animate-spin text-[#ff5b9a]" />
+                        <span>
+                          {activeStep?.subStage === 'drawing-image'
+                            ? tx('🎨 Saki 正在调用绘图工具生成配图...', '🎨 Saki is drawing a custom visual...', '🎨 AIイラスト生成中...')
+                            : tx('🔍 Saki 正在智能检索并嵌入高清配图...', '🔍 Saki is searching & embedding a photo...', '🔍 高解像度画像を検索中...')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="h-full w-full overflow-hidden rounded-xl border border-white/70 shadow-sm dark:border-white/10">
+                  <SakiStudioStage
+                    stageKind={stageKind}
+                    step={activeStep}
+                    stepIndex={activeStepIndex}
+                    totalContentSlides={contentSlides.length}
+                    elapsedSeconds={elapsedSeconds}
+                    tx={tx}
+                    onBrowseFirst={() => {
+                      const firstIdx = steps.findIndex((s) => Boolean(s.content));
+                      setActiveStepIndex(firstIdx >= 0 ? firstIdx : 0);
+                    }}
+                    onOpenPreview={() => setIsPreviewMode(true)}
+                    onDownloadEditable={downloadEditablePptx}
+                    onDownloadSnapshot={downloadPptx}
+                    downloading={downloading}
+                    editableDownloading={editableDownloading}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1312,17 +2406,10 @@ export default function PPTView({ data, isEmbedded = true, onRevise, editingDisa
 
   return (
     <>
-      {mainView}
+      {!isEmbedded && renderMainView(false)}
       {isFocusMode && ReactDOM.createPortal(
-        <div className="fixed inset-0 z-[170] bg-slate-950/55 p-3 backdrop-blur-md md:p-6">
-          <button
-            onClick={() => setIsFocusMode(false)}
-            className="absolute right-6 top-6 z-20 flex items-center gap-1.5 rounded-xl border border-white/20 bg-white/90 px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm transition hover:bg-white"
-          >
-            <Minimize2 size={14} />
-            {tx('退出专注', 'Exit Focus', 'フォーカスを終了')}
-          </button>
-          {mainView}
+        <div className="fixed inset-0 z-[170] flex bg-slate-950/60 p-0 backdrop-blur-md sm:p-3 md:p-5">
+          {renderMainView(true)}
         </div>,
         document.body
       )}

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   createEpochGuard, loadChatSnapshot, getDispatchConfig,
   readCachedConfig, cacheConfig, persistConfig, applyStreamingActions,
+  sanitizeLoadedPendingRequest, reconcileCompletedBackgroundSnapshot,
 } from '../src/utils/chatRuntime.js';
 import { migrateApiProviderConfig, API_PROVIDER_DEFAULTS } from '../src/utils/chatProviderConfig.js';
 
@@ -139,4 +140,53 @@ test('App wires helpers into active dispatch, load, persistence and stream paths
   assert.match(app, /return loadChatSnapshot\(/);
   assert.match(app, /chatEpochRef\.current\.invalidate\(\)/);
   assert.match(app, /persistConfig\(config, CONFIG_CACHE/);
+  assert.match(app, /sanitizeLoadedPendingRequest\(/);
+  assert.match(app, /reconcileCompletedBackgroundSnapshot\(/);
+  assert.match(stream, /const finalPendingRequest = awaitingApproval \? nextPendingRequest : null;/);
+});
+
+test('sanitizeLoadedPendingRequest drops stale pendingRequest on finalized or completed text replies', () => {
+  const pending = { type: 'chat', message: 'hi', assistantMsgId: 1794585987390 };
+  const finishedPlainText = [
+    { role: 'user', id: 'u1', content: 'hi' },
+    { role: 'assistant', id: 1794585987390, parts: [{ type: 'text', content: '说出来嘛，我慢慢帮你找！~💕' }] },
+  ];
+  assert.equal(sanitizeLoadedPendingRequest({ messages: finishedPlainText, pendingRequest: pending, isRunning: false }), null);
+  assert.deepEqual(sanitizeLoadedPendingRequest({ messages: finishedPlainText, pendingRequest: pending, isRunning: true }), pending);
+  assert.equal(sanitizeLoadedPendingRequest({
+    messages: [{ role: 'assistant', id: 1794585987390, status: 'done', parts: [] }],
+    pendingRequest: pending,
+    isRunning: false,
+  }), null);
+  const approvalPending = { ...pending, approvalRequest: { toolName: 'terminal' } };
+  assert.deepEqual(sanitizeLoadedPendingRequest({ messages: finishedPlainText, pendingRequest: approvalPending, isRunning: false }), approvalPending);
+});
+
+test('reconcileCompletedBackgroundSnapshot clears stale pendingRequest and finalizes assistant status', () => {
+  const result = reconcileCompletedBackgroundSnapshot({
+    assistantMsgId: 'a1',
+    pendingRequest: { type: 'chat', assistantMsgId: 'a1' },
+    messages: [
+      { role: 'user', id: 'u1', content: 'hi' },
+      {
+        role: 'assistant',
+        id: 'a1',
+        status: 'streaming',
+        streamingActions: [{ tool: 'search' }],
+        parts: [{ type: 'text', content: 'completed answer' }],
+      },
+    ],
+  });
+  assert.equal(result.pendingRequest, null);
+  assert.equal(result.messages[1].status, 'done');
+  assert.equal(result.messages[1].runOutcome, 'completed');
+  assert.deepEqual(result.messages[1].streamingActions, []);
+
+  const approvalSnapshot = reconcileCompletedBackgroundSnapshot({
+    assistantMsgId: 'a2',
+    pendingRequest: { type: 'chat', assistantMsgId: 'a2', approvalRequest: { toolName: 'terminal' } },
+    messages: [{ role: 'assistant', id: 'a2', status: 'streaming', streamingActions: [{ tool: 'terminal' }], parts: [] }],
+  });
+  assert.ok(approvalSnapshot.pendingRequest?.approvalRequest);
+  assert.deepEqual(approvalSnapshot.messages[0].streamingActions, []);
 });

@@ -170,7 +170,23 @@
 .saki-background-choice svg { position: absolute; top: 8px; right: 8px; color: #fff; background: #d44b83; border-radius: 50%; padding: 2px; }
 
 @media (max-width: 767px) {
-  .saki-popup[data-saki-popup='features'], .saki-popup[data-saki-popup='permissions'] { position: fixed; left: 12px; right: 12px; width: auto; bottom: calc(145px + env(safe-area-inset-bottom)); max-height: min(60dvh, 28rem); }
+  .saki-chat-messages {
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 3.5rem), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 3.5rem), transparent 100%);
+  }
+  .saki-popup[data-saki-popup='models'],
+  .saki-popup[data-saki-popup='features'],
+  .saki-popup[data-saki-popup='permissions'] {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    bottom: var(--saki-composer-popup-bottom, calc(155px + env(safe-area-inset-bottom)));
+    max-height: min(58dvh, 28rem);
+  }
+}
+@media (max-width: 420px) {
+  .saki-background-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) {
   .saki-navigation, .saki-navigation *, .saki-input-shell, .saki-topbar *, [data-saki-dialog] * { transition-duration: .01ms !important; animation-duration: .01ms !important; }

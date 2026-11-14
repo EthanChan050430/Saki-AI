@@ -9,7 +9,6 @@ import {
   FolderOpen,
   Brain,
   Clock,
-  Wrench,
   Boxes,
   MessageCircle,
   Search,
@@ -38,8 +37,7 @@ export default function Sidebar({
   onToggleSettings,
   onToggleFileManager,
   onToggleMemoryManager,
-  onToggleSkillManager,
-  onTogglePluginMarketplace,
+  onToggleExtensionHub,
   onToggleHostedTasks,
   onToggleThirdPartyChats,
   activeUtilityKeys = [],
@@ -111,7 +109,8 @@ export default function Sidebar({
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredHistory = history.filter((item) => {
     if (!normalizedQuery) return true;
-    return `${item.title || ''} ${item.source || ''} ${formatTimestamp(item.updatedAt)}`.toLowerCase().includes(normalizedQuery);
+    const sourceLabel = item.source === 'hosted' ? getLocalText('托管', 'Hosted', 'ホスト') : '';
+    return `${item.title || ''} ${item.source || ''} ${sourceLabel} ${formatTimestamp(item.updatedAt)}`.toLowerCase().includes(normalizedQuery);
   });
 
   const utilityActions = [
@@ -125,20 +124,11 @@ export default function Sidebar({
       },
     },
     {
-      key: 'skill',
-      label: ui.sidebar.skillSystem,
-      icon: Wrench,
-      onClick: () => {
-        onToggleSkillManager?.();
-        handleMobileClose();
-      },
-    },
-    {
-      key: 'plugins',
-      label: getLocalText('插件市场', 'Marketplace'),
+      key: 'extensions',
+      label: getLocalText('扩展中心', 'Extensions', '拡張'),
       icon: Boxes,
       onClick: () => {
-        onTogglePluginMarketplace?.();
+        onToggleExtensionHub?.();
         handleMobileClose();
       },
     },
@@ -247,11 +237,11 @@ export default function Sidebar({
       )}
 
       <aside
-        className={`saki-navigation fixed inset-y-0 left-0 z-40 flex h-full w-[18rem] max-w-[88vw] flex-col overflow-hidden border-[var(--nav-border)] bg-[var(--nav-bg)] text-[var(--nav-text)] shadow-2xl backdrop-blur-2xl transition-all duration-300 ${
+        className={`saki-navigation fixed inset-y-0 left-0 z-40 flex h-[100dvh] w-[18rem] max-w-[88vw] flex-col overflow-hidden border-[var(--nav-border)] bg-[var(--nav-bg)] text-[var(--nav-text)] shadow-2xl backdrop-blur-2xl transition-all duration-300 ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
-        } ${desktopWidthClass} md:relative md:translate-x-0 md:shadow-none`}
+        } ${desktopWidthClass} md:relative md:h-full md:translate-x-0 md:shadow-none`}
       >
-        <div className="flex h-full flex-col overflow-hidden bg-transparent px-4 py-4">
+        <div className="flex h-full flex-col overflow-hidden bg-transparent px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
           <button
             onClick={handleNewChat}
             className="saki-new-conversation mb-4 flex w-full items-center gap-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-surface)] px-3 py-3 text-left text-sm font-semibold text-[var(--nav-text)] transition-colors hover:border-[#ff75ac]/40 hover:bg-[#ff75ac]/20 hover:shadow-[0_4px_16px_rgba(255,117,172,0.2)]"
@@ -268,7 +258,7 @@ export default function Sidebar({
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={getLocalText('实时搜索历史...', 'Filter history...')}
                 aria-label={getLocalText('搜索历史对话', 'Search chat history')}
-                className="w-full bg-transparent text-sm text-[var(--nav-text)] outline-none placeholder:text-[var(--nav-tertiary)]"
+                className="w-full bg-transparent text-base md:text-sm text-[var(--nav-text)] outline-none placeholder:text-[var(--nav-tertiary)]"
               />
             </div>
           </div>
@@ -288,7 +278,7 @@ export default function Sidebar({
                   onClick={() => handleSelectChat(item.id)}
                 >
                   <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${currentChatId === item.id ? 'bg-[#ff75ac]/25 text-[var(--accent-text)]' : 'bg-[var(--nav-surface)] text-[var(--nav-text)]'}`}>
-                    <MessageSquare size={16} />
+                    {item.source === 'hosted' ? <Clock size={16} /> : <MessageSquare size={16} />}
                   </div>
                   <div className="min-w-0 flex-1 pr-8">
                     <div className={`truncate leading-5 ${currentChatId === item.id ? 'font-semibold' : 'font-medium'}`}>
@@ -297,6 +287,11 @@ export default function Sidebar({
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[var(--nav-tertiary)]">
                       <span>{formatTimestamp(item.updatedAt)}</span>
                       {item.source === 'qqbot' && <span>QQ</span>}
+                      {item.source === 'hosted' && (
+                        <span className="rounded-full bg-[#ff75ac]/12 px-1.5 py-0.5 text-[9px] font-semibold text-[var(--accent-text)]">
+                          {getLocalText('托管', 'Hosted', 'ホスト')}
+                        </span>
+                      )}
                     </div>
                     {item.isPending && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -328,7 +323,7 @@ export default function Sidebar({
                   </div>
                   <button
                     onClick={(event) => onDeleteChat(event, item.id)}
-                    className="absolute right-3 top-3 rounded-full p-1 text-[var(--nav-text)] transition-all hover:bg-[var(--nav-hover)] hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
+                    className="saki-touch-visible absolute right-3 top-3 rounded-full p-1 text-[var(--nav-text)] transition-all hover:bg-[var(--nav-hover)] hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                     title={t('delete')}
                   >
                     <Trash2 size={14} />

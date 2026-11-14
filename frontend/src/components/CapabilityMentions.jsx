@@ -73,11 +73,11 @@ export default function CapabilityMentions({ input, setInput, backendUrl, config
     return () => textarea.removeEventListener('keydown', keydown);
   });
   if (!open) return null;
-  return <div className="saki-popup absolute bottom-full left-3 right-3 mb-3 max-h-64 overflow-y-auto rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-2 z-[120]" role="listbox" aria-label="MCP / Skills">
+  return <div className="saki-popup absolute bottom-full left-0 right-0 sm:left-3 sm:right-3 mb-3 max-h-[min(45dvh,16rem)] overflow-y-auto rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-2 z-[120]" role="listbox" aria-label="MCP / Skills">
     <p className="p-2 text-xs">{getLocalText('选择本条消息使用的 MCP / Skills（可多选）', 'Select MCP / Skills for this message (multiple allowed)')}</p>
     {loading && <p role="status">{getLocalText('加载中…', 'Loading…')}</p>}
     {error && <p role="alert">{getLocalText('加载失败：', 'Loading failed: ')}{error}</p>}
-    {!loading && !error && !suggestions.length && <p>{getLocalText('没有匹配项，请先在设置中配置 MCP 或启用 Skill。', 'No matches. Configure MCP or enable a Skill in Settings.')}</p>}
+    {!loading && !error && !suggestions.length && <p>{getLocalText('没有匹配项，请先在扩展中心配置 MCP 或启用 Skill。', 'No matches. Configure MCP or enable a Skill in Extensions.')}</p>}
     {suggestions.map((item, i) => <button type="button" role="option" aria-selected={i === index} key={item.token} onMouseDown={event => event.preventDefault()} onClick={() => choose(item)} className={`block w-full rounded-xl p-2 text-left ${i === index ? 'bg-pink-500/15' : ''}`}>{item.label}</button>)}
   </div>;
 }

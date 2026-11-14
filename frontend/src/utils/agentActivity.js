@@ -10,6 +10,7 @@ export function actionCategory(part) {
   if (['writefile', 'editfile', 'replaceinfile', 'replaceblocks', 'deletefile', 'deletedirectory', 'ensuredir', 'createprojectfolder'].includes(kind)) return 'edit';
   if (kind === 'terminal') return 'command';
   if (['search', 'browse'].includes(kind)) return 'search';
+  if (kind === 'verifyclaim') return 'verify';
   if (['listdir', 'getrepomap', 'searchskills', 'listskills', 'searchopenhubskills', 'searchmemories', 'listmemories'].includes(kind)) return 'explore';
   return 'tool';
 }
@@ -78,7 +79,7 @@ export function activityBatches(parts) {
 }
 
 export function activitySummary(parts) {
-  const counts = { read: 0, edit: 0, command: 0, search: 0, explore: 0, tool: 0, reasoning: 0 };
+  const counts = { read: 0, edit: 0, command: 0, search: 0, verify: 0, explore: 0, tool: 0, reasoning: 0 };
   const files = { read: new Set(), edit: new Set() };
   const stats = { added: 0, removed: 0 };
   let errors = 0, interrupted = 0, approvals = 0;

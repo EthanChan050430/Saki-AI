@@ -1,7 +1,8 @@
 import React, { memo } from 'react';
-import { Paperclip, FileText, Download } from 'lucide-react';
+import { Paperclip, FileText, Download, Presentation, Maximize2, ArrowUpRight } from 'lucide-react';
 import AgentMessageParts from './AgentActivity';
 import CheckpointRestoreBar from './CheckpointRestoreBar';
+import CollapsibleImageGallery, { extractMarkdownImages, splitMarkdownImageGroups } from './CollapsibleImageGallery';
 const DeepReadingView = React.lazy(() => import('./DeepReadingView'));
 const PPTView = React.lazy(() => import('./PPTView'));
 const CredibilityCheckView = React.lazy(() => import('./CredibilityCheckView'));
@@ -21,6 +22,10 @@ export const ChatMessageItem = memo(function ChatMessageItem({
   setEditingMsgText,
   onUpdateMessageText,
   onRevisePpt,
+  fullscreenPptMessageId,
+  onOpenPptFullscreen,
+  onClosePptFullscreen,
+  backendUrl = '',
   onEditMessage,
   onDeleteMessage,
   onRestoreCheckpoint,
@@ -84,6 +89,25 @@ export const ChatMessageItem = memo(function ChatMessageItem({
   const visibleGeneratedFiles = Array.isArray(m.generatedFiles)
     ? m.generatedFiles.filter((file) => !(file?.kind === 'story-glass-illustration' && m.storyGlassData?.coverImageUrl))
     : [];
+
+  const drawActionImages = Array.isArray(m.parts)
+    ? m.parts
+        .filter((part) => part.type === 'action' && String(part.data?.type || '').toLowerCase() === 'draw')
+        .flatMap((part) => extractMarkdownImages(part.observation))
+    : [];
+  const generatedImageFiles = visibleGeneratedFiles.filter(
+    (file) => file?.downloadUrl && /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.filePath || '')
+  );
+  const drawnImages = drawActionImages.length >= 2
+    ? drawActionImages
+    : generatedImageFiles.map((file) => ({ src: file.downloadUrl, alt: file.name || 'Generated Image' }));
+  const hasMarkdownGalleryInText = Array.isArray(m.parts) && m.parts.some(
+    (part) => part.type === 'text' && splitMarkdownImageGroups(part.content).some((seg) => seg.type === 'gallery')
+  );
+  const showDrawnGallery = isAssistant && drawnImages.length >= 2 && !hasMarkdownGalleryInText;
+  const displayedGeneratedFiles = drawnImages.length >= 2
+    ? visibleGeneratedFiles.filter((file) => !/\.(png|jpe?g|webp|gif)$/i.test(file.name || file.filePath || ''))
+    : visibleGeneratedFiles;
   const hasAssistantText = Array.isArray(m.parts) && m.parts.some(
     part => (part.type === 'text' || part.type === 'reasoning') && part.content.replace(/\[expression[:=].*?\.png\]/g, '').trim()
   );
@@ -91,6 +115,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
     || (Array.isArray(m.parts) && m.parts.some(part => part.type === 'action'))
     || Boolean(m.deepReadingData)
     || Boolean(m.pptData)
+    || Boolean(m.pptEntryRef)
     || Boolean(m.credibilityCheckData)
     || Boolean(m.storyGlassData)
     || visibleGeneratedFiles.length > 0;
@@ -122,19 +147,19 @@ export const ChatMessageItem = memo(function ChatMessageItem({
           onRestore={onRestoreCheckpoint}
         />
       )}
-      <div className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : ''}`}>
+      <div className={`flex gap-2 sm:gap-4 ${m.role === 'user' ? 'justify-end' : ''}`}>
         {isAssistant && (
           <button
             type="button"
             onClick={() => setIsAiCustomizationOpen(true)}
-            className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-white/60 dark:border-white/10 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white/70 dark:bg-white/10"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full overflow-hidden shrink-0 border border-white/60 dark:border-white/10 cursor-pointer hover:opacity-80 transition-all hover:scale-105 active:scale-95 shadow-sm flex items-center justify-center bg-white/70 dark:bg-white/10"
             title={t('edit_ai_settings', '编辑 AI 设定')}
             aria-label={t('edit_ai_settings', '编辑 AI 设定')}
           >
             <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
           </button>
         )}
-        <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : 'max-w-[85%]'} group/message ${m.role === 'user' ? 'order-1' : ''}`}>
+        <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : (m.pptData || m.deepReadingData || m.storyGlassData || m.credibilityCheckData ? 'w-full max-w-[calc(100%-2.25rem)] sm:max-w-[92%] xl:max-w-[88%]' : m.role === 'user' ? 'max-w-[92%] sm:max-w-[85%]' : 'max-w-[calc(100%-2.25rem)] sm:max-w-[85%]')} group/message ${!(hideToolbar || editingMsgIdx === idx) && MessageBubbleToolbar ? 'pt-5 md:pt-0' : ''} ${m.role === 'user' ? 'order-1' : ''}`}>
           {isAssistant && m.steeringMessages?.length > 0 && (
             <div className="mb-2 space-y-1 text-xs" aria-label={getLocalText('运行引导', 'Run steering')}>
               {m.steeringMessages.map(item => <div key={item.id} className="rounded-xl border border-[var(--control-border)] bg-[var(--control-bg)] px-3 py-2">
@@ -187,12 +212,12 @@ export const ChatMessageItem = memo(function ChatMessageItem({
             />
           )}
 
-          <div className={`rounded-2xl p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
+          <div className={`rounded-2xl p-3 sm:p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
             m.role === 'user'
-              ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_8px_24px_rgba(255,117,172,0.3)] rounded-tr-none rounded-2xl p-4'
+              ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_8px_24px_rgba(255,117,172,0.3)] rounded-tr-none rounded-2xl p-3 sm:p-4'
               : showPendingState
                 ? ''
-                : 'bg-white/85 dark:bg-[#181922]/85 border border-white/65 dark:border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)] backdrop-blur-xl rounded-tl-none rounded-2xl p-4 text-gray-800 dark:text-[#f5f5f7]'
+                : 'bg-white/85 dark:bg-[#181922]/85 border border-white/65 dark:border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)] backdrop-blur-xl rounded-tl-none rounded-2xl p-3 sm:p-4 text-gray-800 dark:text-[#f5f5f7]'
           }`}>
             {editingMsgIdx === idx ? (
               <div className="flex flex-col gap-4 pointer-events-auto w-full animate-in fade-in duration-200">
@@ -270,6 +295,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                           onRollback={handleRollback}
                           onSkipAction={onSkipAction}
                         />
+                        {showDrawnGallery && <CollapsibleImageGallery images={drawnImages} />}
                         {m.deepReadingData && (
                           <React.Suspense fallback={null}>
                             <div className="mt-4 w-full">
@@ -280,9 +306,50 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                         {m.pptData && (
                           <React.Suspense fallback={null}>
                             <div className="mt-4 w-full">
-                              <PPTView data={m.pptData} isEmbedded={true} onRevise={onRevisePpt ? (slideId, instruction, restore, imageRequest) => onRevisePpt(m.id, slideId, instruction, restore, imageRequest) : undefined} editingDisabled={isGenerating} />
+                              <PPTView
+                                data={m.pptData}
+                                isEmbedded={true}
+                                isFocusMode={fullscreenPptMessageId != null && String(fullscreenPptMessageId) === String(m.id)}
+                                onFocusModeChange={(nextOpen) => nextOpen ? onOpenPptFullscreen?.(m.id) : onClosePptFullscreen?.()}
+                                backendUrl={backendUrl}
+                                onRevise={onRevisePpt ? (slideId, instruction, restore, imageRequest, options) => onRevisePpt(m.id, slideId, instruction, restore, imageRequest, options) : undefined}
+                                editingDisabled={isGenerating}
+                              />
                             </div>
                           </React.Suspense>
+                        )}
+                        {!m.pptData && m.pptEntryRef?.messageId != null && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenPptFullscreen?.(m.pptEntryRef.messageId)}
+                            className="mt-3 flex w-full flex-col items-stretch sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-pink-200/80 bg-gradient-to-r from-rose-50/90 via-white to-orange-50/80 px-3.5 sm:px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-pink-300 hover:shadow-md dark:border-pink-500/30 dark:from-[#211b2a] dark:via-[#181924] dark:to-[#221c1a]"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#ff75ac] to-orange-500 text-white shadow-sm">
+                                <Presentation size={18} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="truncate text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                                    {m.pptEntryRef.pptTitle || getLocalText('演示文稿', 'Presentation')}
+                                  </span>
+                                  <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200/80 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                    {getLocalText('已更新', 'Updated')}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 line-clamp-2 sm:truncate text-xs text-slate-500 dark:text-slate-400">
+                                  {Array.isArray(m.pptEntryRef.changedSlides) && m.pptEntryRef.changedSlides.length > 0
+                                    ? getLocalText(`已修改 ${m.pptEntryRef.changedSlides.map(n => `P${n}`).join('、')} · 点击全屏打开 PPT 工作台`, `Updated ${m.pptEntryRef.changedSlides.map(n => `P${n}`).join(', ')} · Open fullscreen PPT studio`)
+                                    : getLocalText('点击全屏打开已更新的 PPT 工作台', 'Open updated PPT studio in fullscreen')}
+                                </p>
+                              </div>
+                            </div>
+                            <span className="inline-flex shrink-0 self-end sm:self-center items-center gap-1 rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-bold text-white shadow-sm dark:bg-[#ff5b9a]">
+                              <Maximize2 size={12} />
+                              <span>{getLocalText('打开 PPT', 'Open PPT')}</span>
+                              <ArrowUpRight size={13} />
+                            </span>
+                          </button>
                         )}
                         {m.credibilityCheckData && (
                           <React.Suspense fallback={null}>
@@ -303,9 +370,9 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                             </div>
                           </React.Suspense>
                         )}
-                        {visibleGeneratedFiles.length > 0 && (
+                        {displayedGeneratedFiles.length > 0 && (
                           <div className="mt-4 flex flex-col gap-2">
-                            {visibleGeneratedFiles.map((file, fileIdx) => (
+                            {displayedGeneratedFiles.map((file, fileIdx) => (
                               file.kind === 'music-composition' && MusicFileCard ? (
                                 <MusicFileCard
                                   key={`${file.filePath || file.name || 'generated'}-${fileIdx}`}

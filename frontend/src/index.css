@@ -74,10 +74,18 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow-x: hidden;
+  }
+
   body {
     @apply antialiased transition-colors duration-300;
     color: var(--text-dark);
     background-color: var(--background, transparent);
+    overscroll-behavior-y: none;
   }
 
   ::selection {
@@ -361,4 +369,18 @@
 
 [data-theme="dark"] .saki-message-highlight {
   animation-name: sakiMessageHighlightDark !important;
+}
+
+/* Mobile & Touch Device Adaptation Utilities */
+@media (hover: none), (pointer: coarse) {
+  .saki-touch-visible {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: none !important;
+  }
+}
+
+.saki-scroll-touch {
+  -webkit-overflow-scrolling: touch;
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { AlertCircle, Bot, CheckCircle2, MessageCircle, RefreshCw, X } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -7,7 +7,14 @@ import { getFeatureLocale } from '../utils/featureLocale';
 import { localizeWith } from '../utils/localize';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 
-function buildDraft(config) {
+function buildDraft(config, platform = 'qqbot') {
+  if (platform !== 'qqbot') {
+    const channel = config?.thirdPartyChats?.[platform] || {};
+    return { ...channel, enabled: Boolean(channel.enabled), botToken: channel.botToken || '',
+      appId: channel.appId || '', appSecret: channel.appSecret || '',
+      verificationToken: channel.verificationToken || '', botOpenId: channel.botOpenId || '',
+      allowFromText: (channel.allowFrom || []).join(', ') };
+  }
   const qqbot = config?.thirdPartyChats?.qqbot || {};
   const stt = qqbot.stt || {};
   return {
@@ -60,6 +67,8 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
   const [status, setStatus] = useState(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const statusRequest = useRef(0);
 
   const apps = useMemo(() => ([
     {
@@ -67,35 +76,42 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
       name: ui.qqName,
       description: ui.qqDesc,
     },
-  ]), [ui.qqDesc, ui.qqName]);
+    { id: 'feishu', name: tx('飞书', 'Feishu', 'Feishu'), description: tx('飞书应用机器人 · 事件回调', 'Application bot · Event webhook', 'アプリボット · Webhook') },
+    { id: 'telegram', name: 'Telegram', description: tx('Bot API · 长轮询', 'Bot API · Long polling', 'Bot API · ロングポーリング') },
+  ]), [ui.qqDesc, ui.qqName, i18n.resolvedLanguage, i18n.language]);
 
   const refreshStatus = async () => {
+    const platform = selectedApp;
+    const requestId = ++statusRequest.current;
     setIsChecking(true);
     try {
-      const res = await axios.get(`${backendUrl}/api/integrations/chat/qqbot/status`);
-      setStatus(res.data);
+      const res = await axios.get(`${backendUrl}/api/integrations/chat/${platform}/status`);
+      if (requestId === statusRequest.current) setStatus(res.data);
     } catch (error) {
-      setStatus({
+      if (requestId === statusRequest.current) setStatus({
         ok: false,
         error: error.response?.data?.error || error.message,
         configured: false,
       });
     } finally {
-      setIsChecking(false);
+      if (requestId === statusRequest.current) setIsChecking(false);
     }
   };
 
   useEffect(() => {
     if (!isOpen) return;
-    setDraft(buildDraft(config));
+    setDraft(buildDraft(config, selectedApp));
+    setStatus(null);
+    setSaveError('');
     refreshStatus();
-  }, [isOpen, config]);
+    return () => { statusRequest.current += 1; };
+  }, [isOpen, config, selectedApp, backendUrl]);
 
   useEffect(() => {
     if (!isOpen) return;
     const timer = setInterval(refreshStatus, 10000);
     return () => clearInterval(timer);
-  }, [isOpen]);
+  }, [isOpen, selectedApp, backendUrl]);
 
   if (!isOpen) return null;
 
@@ -104,6 +120,28 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
   };
 
   const handleSave = async () => {
+    setSaveError('');
+    if (selectedApp !== 'qqbot') {
+      const { allowFromText, ...channel } = draft;
+      const fields = selectedApp === 'telegram' ? ['botToken'] : ['appId', 'appSecret', 'verificationToken'];
+      if (channel.enabled && fields.some(field => !String(channel[field] || '').trim())) {
+        setSaveError(tx('启用前请填写全部凭据。', 'Fill in all credentials before enabling.', '有効にする前に認証情報を入力してください。'));
+        return;
+      }
+      const merged = { ...config, thirdPartyChats: { ...config.thirdPartyChats,
+        [selectedApp]: { ...channel, allowFrom: allowFromText.split(',').map(value => value.trim()).filter(Boolean) } } };
+      setIsSaving(true);
+      try {
+        await axios.post(`${backendUrl}/api/config`, merged);
+        setConfig(merged);
+        await refreshStatus();
+      } catch (error) {
+        setSaveError(error.response?.data?.error || error.message);
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
     const existingQqbot = config.thirdPartyChats?.qqbot || {};
     const existingStt = existingQqbot.stt || {};
     const sttBaseUrl = draft.sttBaseUrl.trim();
@@ -146,6 +184,8 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
       await axios.post(`${backendUrl}/api/config`, mergedConfig);
       setConfig(mergedConfig);
       await refreshStatus();
+    } catch (error) {
+      setSaveError(error.response?.data?.error || error.message);
     } finally {
       setIsSaving(false);
     }
@@ -162,7 +202,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="flex items-center justify-between border-b bg-[var(--surface-bg-light)] px-4 py-2.5 shrink-0">
+        <div className="flex items-center justify-between border-b bg-[var(--surface-bg-light)] px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 shrink-0">
           <div className="min-w-0">
             <div className="text-sm sm:text-base font-semibold text-[var(--text-dark)] leading-tight truncate">{ui.title}</div>
             <div className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-tight truncate">{ui.subtitle}</div>
@@ -173,8 +213,8 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <div className="border-b bg-[var(--surface-bg-light)] p-4 md:w-72 md:border-b-0 md:border-r">
-            <div className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--text-tertiary)]">{ui.availableApps}</div>
+          <div className="max-h-[34dvh] md:max-h-none overflow-y-auto border-b bg-[var(--surface-bg-light)] p-3 sm:p-4 md:w-72 md:border-b-0 md:border-r shrink-0">
+            <div className="mb-2 sm:mb-3 text-xs font-bold uppercase tracking-wider text-[var(--text-tertiary)]">{ui.availableApps}</div>
             <div className="space-y-2">
               {apps.map(app => (
                 <button
@@ -196,7 +236,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
             <div className="mx-auto max-w-2xl space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -204,8 +244,8 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                     <Bot size={22} />
                   </div>
                   <div>
-                    <div className="text-base font-semibold text-[var(--text-dark)]">{ui.qqName}</div>
-                    <div className="text-sm text-[var(--text-secondary)]">{ui.panelDesc}</div>
+                    <div className="text-base font-semibold text-[var(--text-dark)]">{apps.find(app => app.id === selectedApp)?.name}</div>
+                    <div className="text-sm text-[var(--text-secondary)]">{selectedApp === 'qqbot' ? ui.panelDesc : tx('文字消息与网页端会话同步。', 'Text messages sync with web conversations.', 'テキストメッセージを Web の会話と同期。')}</div>
                   </div>
                 </div>
                 <StatusPill status={status} ui={ui} />
@@ -226,7 +266,36 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] p-5 space-y-5">
+              {selectedApp !== 'qqbot' ? (
+                <div className="rounded-3xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] p-5 space-y-5">
+                  <label className="flex items-center gap-3 text-sm font-semibold">
+                    <input type="checkbox" checked={draft.enabled} onChange={event => handleChange('enabled', event.target.checked)} />
+                    {tx('启用', 'Enable', '有効にする')} {apps.find(app => app.id === selectedApp)?.name}
+                  </label>
+                  {(selectedApp === 'telegram'
+                    ? [['botToken', 'Bot Token', true]]
+                    : [['appId', 'App ID'], ['appSecret', 'App Secret', true], ['verificationToken', 'Verification Token', true], ['botOpenId', tx('机器人 Open ID（群聊 @ 识别）', 'Bot Open ID (group mentions)', 'ボット Open ID（グループメンション）')]]
+                  ).map(([key, label, secret]) => (
+                    <label key={key} className="block text-xs font-medium text-[var(--text-secondary)]">
+                      {label}
+                      <input type={secret ? 'password' : 'text'} value={draft[key] || ''} autoComplete="off"
+                        onChange={event => handleChange(key, event.target.value)}
+                        className="mt-1.5 w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none focus:border-saki-pink" />
+                    </label>
+                  ))}
+                  <label className="block text-xs font-medium text-[var(--text-secondary)]">
+                    {tx('允许的用户 ID（逗号分隔，留空允许所有人）', 'Allowed user IDs (comma separated; empty allows everyone)', '許可するユーザー ID（カンマ区切り・空欄は全員）')}
+                    <input value={draft.allowFromText || ''} onChange={event => handleChange('allowFromText', event.target.value)}
+                      className="mt-1.5 w-full rounded-xl border bg-[var(--surface-bg)] px-3 py-2 text-sm outline-none focus:border-saki-pink" />
+                  </label>
+                  <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+                    {selectedApp === 'telegram'
+                      ? tx('通过 @BotFather 创建机器人并填写 Token。无需公网回调；已有 Webhook 需先移除。群聊需 @机器人。支持文字；图片、语音及文件暂不处理。', 'Create a bot with @BotFather and enter its token. No public callback is needed; remove any existing webhook first. Mention the bot in groups. Text only; images, audio and files are not processed.', '@BotFather でボットを作成して Token を入力。既存の Webhook は削除してください。グループでは @メンションが必要です。テキストのみ対応。')
+                      : tx('在飞书开放平台创建企业自建应用并启用机器人，开通消息接收及发送权限，订阅 im.message.receive_v1。使用下方公网 HTTPS 回调地址；填写 Verification Token，关闭 Encrypt Key。发布应用后私聊机器人，或在群聊中 @机器人（需填写 Bot Open ID）。仅支持文字。', 'Create an internal Feishu app, enable its bot and message receive/send permissions, and subscribe to im.message.receive_v1. Use a public HTTPS URL for the callback below. Set the Verification Token and disable Encrypt Key. Publish the app, then message the bot or mention it in groups (requires Bot Open ID). Text only.', 'Feishu の社内アプリでボットとメッセージ権限を有効にし、im.message.receive_v1 を購読。公開 HTTPS URL と Verification Token を設定し、Encrypt Key は無効にしてください。アプリを公開。グループのメンションには Bot Open ID が必要です。テキストのみ対応。')}
+                  </p>
+                  {selectedApp === 'feishu' && <code className="block break-all text-xs">{backendUrl}/api/integrations/chat/feishu/events</code>}
+                </div>
+              ) : <div className="rounded-3xl border border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] p-5 space-y-5">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.enableTitle}</div>
@@ -332,7 +401,7 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                     </div>
                   </div>
                 </div>
-              </div>
+              </div>}
 
               <div className="rounded-3xl border border-dashed border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] p-5">
                 <div className="text-sm font-semibold text-[var(--text-dark)]">{ui.usageTitle}</div>
@@ -344,9 +413,9 @@ export default function ThirdPartyChatModal({ isOpen, onClose, config, setConfig
                 </div>
               </div>
 
-              {status?.error && (
+              {(saveError || status?.error) && (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {ui.connectionCheckFailed}{status.error}
+                  {ui.connectionCheckFailed}{saveError || status.error}
                 </div>
               )}
             </div>

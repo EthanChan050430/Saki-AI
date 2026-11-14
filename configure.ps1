@@ -380,46 +380,8 @@ function Configure-Provider([System.Collections.IDictionary]$Config) {
     }
 }
 
-function Configure-Search([System.Collections.IDictionary]$Config) {
-    Write-Section 'Step 2 - Web Search'
-
-    $choice = Select-Option -Title 'Choose the default search provider for web-enabled tasks.' -DefaultValue 'skip' -Options @(
-        @{ Value = 'skip'; Label = 'Skip'; Description = ('Keep current engine: {0}' -f (Format-CurrentValue $Config['searchEngine'])) },
-        @{ Value = 'off'; Label = 'Disable web search'; Description = 'Search tools stay off by default.' },
-        @{ Value = 'searxng'; Label = 'SearxNG'; Description = 'Self-hosted metasearch endpoint.' },
-        @{ Value = 'google'; Label = 'Google Custom Search'; Description = 'Requires API key and CX ID.' },
-        @{ Value = 'bing'; Label = 'Bing'; Description = 'Requires a Bing/Azure API key.' },
-        @{ Value = 'duckduckgo'; Label = 'DuckDuckGo'; Description = 'Unauthenticated basic search.' }
-    )
-
-    if ($choice -eq 'skip') {
-        return
-    }
-
-    $Config['searchEngine'] = $choice
-    if ($choice -eq 'off') {
-        $Config['searchEnabled'] = $false
-        return
-    }
-
-    $Config['searchEnabled'] = Prompt-Bool -Label 'Turn on the search toggle by default?' -CurrentValue ([bool](Get-NestedValue $Config @('searchEnabled') $false))
-
-    switch ($choice) {
-        'searxng' {
-            $Config['searxngUrl'] = Prompt-Text -Label 'SearxNG URL' -CurrentValue ([string](Get-NestedValue $Config @('searxngUrl') 'http://127.0.0.1:8080'))
-        }
-        'google' {
-            $Config['googleApiKey'] = Prompt-Text -Label 'Google API key' -CurrentValue ([string](Get-NestedValue $Config @('googleApiKey') '')) -Secret
-            $Config['googleCxId'] = Prompt-Text -Label 'Google CX ID' -CurrentValue ([string](Get-NestedValue $Config @('googleCxId') ''))
-        }
-        'bing' {
-            $Config['bingApiKey'] = Prompt-Text -Label 'Bing API key' -CurrentValue ([string](Get-NestedValue $Config @('bingApiKey') '')) -Secret
-        }
-    }
-}
-
 function Configure-Drawing([System.Collections.IDictionary]$Config) {
-    Write-Section 'Step 3 - Image Generation'
+    Write-Section 'Step 2 - Image Generation'
 
     $choice = Select-Option -Title 'Choose how image generation should work.' -DefaultValue 'skip' -Options @(
         @{ Value = 'skip'; Label = 'Skip'; Description = ('Keep current drawing provider: {0}' -f (Format-CurrentValue $Config['drawingProvider'])) },
@@ -450,7 +412,7 @@ function Configure-Drawing([System.Collections.IDictionary]$Config) {
 }
 
 function Configure-Tts([System.Collections.IDictionary]$Config) {
-    Write-Section 'Step 4 - Voice Output'
+    Write-Section 'Step 3 - Voice Output'
 
     $choice = Select-Option -Title 'Choose the default text-to-speech mode.' -DefaultValue 'skip' -Options @(
         @{ Value = 'skip'; Label = 'Skip'; Description = ('Keep current TTS provider: {0}' -f (Format-CurrentValue $Config['ttsProvider'])) },
@@ -474,7 +436,7 @@ function Configure-Tts([System.Collections.IDictionary]$Config) {
 }
 
 function Configure-QQBot([System.Collections.IDictionary]$Config) {
-    Write-Section 'Step 5 - QQ Bot'
+    Write-Section 'Step 4 - QQ Bot'
 
     $qqbot = Ensure-NestedHashtable -Root (Ensure-NestedHashtable -Root $Config -Path @('thirdPartyChats')) -Path @('qqbot')
     $choice = Select-Option -Title 'Configure QQ Bot integration.' -DefaultValue 'skip' -Options @(
@@ -521,7 +483,7 @@ function Configure-QQBot([System.Collections.IDictionary]$Config) {
 }
 
 function Configure-Permissions([System.Collections.IDictionary]$Config) {
-    Write-Section 'Step 6 - Agent Permissions'
+    Write-Section 'Step 5 - Agent Permissions'
 
     $choice = Select-Option -Title 'Choose the default agent permission mode.' -DefaultValue 'skip' -Options @(
         @{ Value = 'skip'; Label = 'Skip'; Description = ('Keep current mode: {0}' -f (Format-CurrentValue $Config['agentPermissionMode'])) },
@@ -535,7 +497,7 @@ function Configure-Permissions([System.Collections.IDictionary]$Config) {
 }
 
 function Configure-Autostart {
-    Write-Section 'Step 7 - Autostart Strategy'
+    Write-Section 'Step 6 - Autostart Strategy'
 
     $currentMode = Get-AutostartMode
     return Select-Option -Title 'Choose how Saki AI should start automatically on Windows login.' -DefaultValue 'skip' -Options @(
@@ -570,7 +532,6 @@ if ($script:WizardWarnings.Count -gt 0) {
 }
 
 Configure-Provider -Config $config
-Configure-Search -Config $config
 Configure-Drawing -Config $config
 Configure-Tts -Config $config
 Configure-QQBot -Config $config
@@ -580,7 +541,7 @@ $autostartChoice = Configure-Autostart
 Write-Section 'Summary'
 Write-Host ("Provider: {0}" -f (Format-CurrentValue $config['provider']))
 Write-Host ("Model: {0}" -f (Format-CurrentValue $config['model']))
-Write-Host ("Search Engine: {0}" -f (Format-CurrentValue $config['searchEngine']))
+Write-Host 'Web Search: built-in hosted retrieval (no search-engine configuration required)'
 Write-Host ("Drawing Provider: {0}" -f (Format-CurrentValue $config['drawingProvider']))
 Write-Host ("TTS Provider: {0}" -f (Format-CurrentValue $config['ttsProvider']))
 Write-Host ("QQ Bot Enabled: {0}" -f (Format-CurrentValue ([bool](Get-NestedValue $config @('thirdPartyChats', 'qqbot', 'enabled') $false))))

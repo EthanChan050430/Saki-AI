@@ -31,7 +31,7 @@ For folder deletion, inspect with listDir and use deleteDirectory(path), which r
 Use narrow readFile ranges or planFileRead/readFileChunk for large files. Consider searchSkills/readSkill for relevant workflows; never silently install a skill.
 
 ## Output
-Use the native function channel when enabled by the protocol below. Otherwise emit one Tool: name(...) line with positional arguments, quoted strings, and escaped newlines; no Markdown fences. XML is also supported for multiline bodies.
+Use the native function channel when enabled by the protocol below. Otherwise emit one Tool: name(...) line with positional arguments, quoted strings, and escaped newlines; no Markdown fences.
 Only respond(text) finishes the task. Reply in the user's language. No required Thought section or lengthy narration; take the next action directly.
 
 ## Available tools:

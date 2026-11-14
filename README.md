@@ -33,6 +33,17 @@ Saki takes the task-driven collaboration of coding agents like **Codex and Claud
 
 https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
 
+## Feishu and Telegram
+
+Open **Third-party Chat**, select Feishu or Telegram, enter credentials, and save with the channel enabled. Both support text in direct messages and group mentions, use the current web model, and save conversations in web history. Commands: `/new`, `/deep question`, `/ppt topic`, and `/model` (shows the current model; change it in web settings). Images, audio and file inputs are not supported yet; generated files are available in the web app.
+
+- **Telegram**: Create a bot with `@BotFather` and enter its Bot Token. Long polling needs access to `api.telegram.org`, without a public callback. Remove any existing webhook first, and run only one polling instance per bot. Mention the bot in groups or use `/new@bot_username`. Forum topics have separate conversations.
+- **Feishu**: Create an internal application, enable its bot, grant `im:message:send_as_bot` and the required receive permissions (for example `im:message.p2p_msg:readonly` and `im:message.group_at_msg:readonly`), subscribe to `im.message.receive_v1`, and publish the app. Enter App ID, App Secret and Verification Token. Use a Webhook callback at `https://your-domain/api/integrations/chat/feishu/events` with Encrypt Key disabled. Group mentions also require the bot's Open ID in settings.
+
+Allowed user IDs are comma separated; empty allows everyone. Telegram uses numeric user IDs and Feishu uses user Open IDs. Enabled channels start after saving and restart with the server; QQ keeps its existing connection behavior. Feishu connection status validates credentials; delivery also depends on permissions, publishing and callback setup. Events are acknowledged immediately and processed in the background, with in-memory deduplication for ten minutes. Processing is not guaranteed exactly once across restarts or crashes.
+
+See [the example configuration](data/global_config.example.json). Expose only the Feishu event route through your public reverse proxy; keep configuration and file-management APIs protected. External users can trigger Agent workflows, so restrict allowed users as appropriate.
+
 ## A closer look at Saki
 
 Your ideas, models and tools, together in a personal workspace.
@@ -70,6 +81,9 @@ Add new abilities to your AI workflow and take it all the way to your servers. T
 - **Steer while it runs**: add instructions mid-task, queue follow-ups, edit or cancel them.
 - **Long-term memory**: preferences and project rules carry across sessions.
 - **Beyond code**: PDF / Office Q&A, multi-source deep research, PPT generation and export, claim checking.
+- **Web retrieval**: choose Default (Exa hosted search) or SearxNG in Settings > Search Engine. Default needs no search API key and sends queries to Exa, subject to its availability and quotas. SearxNG uses your configured instance URL (reachable by the backend); enable `json` in `search.formats` in the instance's `settings.yml`. The chosen provider is used for Agent search and deep research, with no automatic fallback. Retrieval failures are reported separately from empty results; complex queries retain relevance ranking, URL deduplication and source provenance.
+  - SearxNG fetches up to three pages per query only when more direct matches are needed, preserving site/exclusion constraints and domain diversity. Pagination shares the query timeout and the Agent report's overall time budget, and stops on empty or repeated pages.
+  - Snippets are converted to plain text with HTML entities decoded; results retain publication dates, upstream engine names and provider scores as metadata. Provider scores do not override textual relevance. Partial upstream failures or later-page failures retain available candidates, report incomplete coverage and stop further searches. Agent reports include warnings and per-query HTTP request counts; array-based search callers receive warnings in server logs.
 - **Story Glass**: tell Saki a story and she mixes a cocktail for it, served as a shareable card.
 - **Extensible**: MCP, Skills, and a plugin marketplace. Optional QQ bot, Stable Diffusion and GPT-SoVITS voice.
 - **Lightweight**: one process, one port in production. Data lives in local JSON files, no database needed.

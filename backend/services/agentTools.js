@@ -1,6 +1,6 @@
 // One catalog drives both prompt discovery and executable tool parsing.
 const BUILTIN_TOOLS = [
-    ['search', ['query'], 'Search the web when current information, external sources, or uncertain facts are needed. Do not search for greetings or tasks answerable from the provided context. Never submit private content.', 'query'],
+    ['search', ['query'], 'Search the web for current information, external pages, or factual lookup. Include the key entities and relationships; quote exact names when useful. Supports space-separated multi-tag keyword queries (for covering multiple independent tags), site:host, -site:host and excluded terms. Reports match levels (direct, background, weak), missing terms, page-read status and retrieval warnings. Domain filters remain enforced, so omit them when broader coverage is intended. Refine or simplify keywords if results are incomplete. For verifying a disputed or uncertain factual claim across multiple sources, use verifyClaim. Do not search for greetings or tasks answerable from provided context. Never submit private content.', 'query'],
     ['verifyClaim', ['claim'], 'Gather multi-source evidence for a specific public factual claim when verification is requested or needed. Compare supporting and contradicting evidence, cite source URLs, distinguish snippets from full text, and explain uncertainty. No evidence is not proof of falsehood. Never submit private content.', 'claim'],
     ['browse', ['url'], 'Fetch and read webpage content.'],
     ['presentStoryGlass', ['json'], 'Present a drink story card ONLY when the user asks for one or a remix, never for ordinary emotional conversation. Compose the content yourself in the current conversation. Pass a JSON string with cocktailName, storySummary, flavorDescription, sakiComment and recipeList (ingredient strings with amounts). Optional: language (zh/en), recipeMode (night-bar/comfort-home/zero-proof), cocktailNameEn, cocktailSubtitle, featuredQuote, storyTags, tastingNotes, pairingSuggestions, glassware, garnish, servingMoment, request. Honor non-alcoholic and home-ingredient requests; zero-proof must contain no alcohol. Use draw separately only if an illustration is requested. Continue the conversation after presenting the card.', 'json'],
@@ -9,6 +9,9 @@ const BUILTIN_TOOLS = [
     ['planFileRead', ['path', 'chunkLines'], 'Plan reading a large file in chunks.'],
     ['readFileChunk', ['path', 'chunkIndex', 'chunkLines'], 'Read a planned file chunk.'],
     ['writeFile', ['path', 'content', 'expectedHash'], 'Create or overwrite a text file. Pass the latest SHA256 when overwriting.', 'content'],
+    ['createWordDocument', ['path', 'spec', 'expectedHash'], 'Create a native .docx document from JSON. spec supports title and blocks of paragraph, heading, and table items.', 'spec'],
+    ['createSpreadsheet', ['path', 'spec', 'expectedHash'], 'Create a native .xlsx workbook from JSON. spec supports sheets with name, headers, and rows.', 'spec'],
+    ['readSpreadsheet', ['path'], 'Read workbook sheet names, dimensions, headers, and a small row preview as structured JSON.'],
     ['editFile', ['path', 'startLine', 'endLine', 'content', 'expectedHash'], 'Replace inclusive 1-based lines. expectedHash from the latest readFile is required.', 'content'],
     ['replaceInFile', ['path', 'oldText', 'newText', 'expectedHash', 'occurrence'], 'Replace exact text. expectedHash is required; occurrence disambiguates repeated matches.'],
     ['replaceBlocks', ['path', 'blocks', 'expectedHash'], 'Apply unique SEARCH/REPLACE blocks. Preferred for code edits. expectedHash is required.', 'blocks'],
@@ -66,14 +69,71 @@ function renderToolCatalog(registry) {
     }).join('\n');
 }
 
+const ESCAPED_WINDOWS_OR_UNC_PATH_RE = /^(?:[a-zA-Z]:\\|\\\\)/;
+const REAL_FENCED_BLOCK_RE = /(?:^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?=\n|$)/g;
+const INLINE_CODE_SPAN_RE = /(?<!`)(`{1,2})(?!`)([^`\n]+?)\1(?!`)/g;
+const WINDOWS_OR_UNC_PATH_RE = /(?:[A-Za-z]:\\|\\\\)(?:(?!(?:\\r)?\\n(?=$|[\s"'`<>()[\]\u4e00-\u9fff#*]))[^\s"'`<>()[\]])*/g;
+const ESCAPED_BLOCK_RE = /(?:^|[^\\])(?:\\r)?\\n[ \t]*(?:#{1,6}[ \t]|[-*+][ \t]|\d+\.[ \t]|>[ \t]|```|~~~|\|[^|\n]+\|)/;
+const ESCAPED_PARAGRAPH_RE = /(?:^|[^\\])(?:\\r)?\\n(?:\\r)?\\n/;
+const ESCAPED_EDGE_RE = /^(?:\[expression:[^\]]+\])?(?:\\r)?\\n|(?:^|[^\\])(?:\\r)?\\n(?:\[expression:[^\]]+\])?$/;
+const UNESCAPED_NEWLINE_TOKEN_RE = /(\\*)(?:\\r)?\\n/g;
+
+function countUnescapedNewlines(text) {
+    let count = 0;
+    for (const match of text.matchAll(UNESCAPED_NEWLINE_TOKEN_RE)) {
+        if ((match[1] || '').length % 2 === 0) count += 1;
+    }
+    return count;
+}
+
+// Recover respond(...) payloads when models/proxies double-escape newlines inside tool JSON or string args.
+function normalizeRespondText(content) {
+    if (typeof content !== 'string' || !content.includes('\\n')) return content;
+    const placeholders = [];
+    const stash = (match) => {
+        const token = `\u0000MD_KEEP_${placeholders.length}\u0000`;
+        placeholders.push(match);
+        return token;
+    };
+    const masked = content
+        .replace(REAL_FENCED_BLOCK_RE, stash)
+        .replace(INLINE_CODE_SPAN_RE, stash)
+        .replace(WINDOWS_OR_UNC_PATH_RE, stash);
+
+    const trimmed = content.trim();
+    const shouldUnescape =
+        ESCAPED_PARAGRAPH_RE.test(masked) ||
+        ESCAPED_BLOCK_RE.test(masked) ||
+        ESCAPED_EDGE_RE.test(trimmed) ||
+        (!content.includes('\n') && countUnescapedNewlines(masked) >= 1);
+
+    if (!shouldUnescape) return content;
+
+    const unescaped = masked.replace(UNESCAPED_NEWLINE_TOKEN_RE, (match, slashes) => (
+        slashes.length % 2 === 0 ? `${slashes}\n` : match
+    ));
+    return unescaped.replace(/\u0000MD_KEEP_(\d+)\u0000/g, (_, idx) => placeholders[Number(idx)]);
+}
+
 function decodeArgument(raw) {
     const text = raw.trim();
     if (text.startsWith('"') && text.endsWith('"')) {
-        try { return JSON.parse(text); } catch { /* Accept legacy unescaped Windows paths below. */ }
+        try { return JSON.parse(text); } catch { /* Accept single quotes or legacy unescaped strings below. */ }
     }
     if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
         const quote = text[0];
-        return text.slice(1, -1).replace(/\\([\\"'])/g, (match, char) => char === quote || char === '\\' ? char : match);
+        const inner = text.slice(1, -1);
+        if (ESCAPED_WINDOWS_OR_UNC_PATH_RE.test(inner)) {
+            return inner.replace(/\\([\\"'])/g, (match, char) => char === quote || char === '\\' ? char : match);
+        }
+        return inner.replace(/\\(n|r|t|\\|"|')/g, (match, char) => {
+            if (char === 'n') return '\n';
+            if (char === 'r') return '\r';
+            if (char === 't') return '\t';
+            if (char === '\\') return '\\';
+            if (char === quote || char === '"' || char === "'") return char;
+            return match;
+        });
     }
     return text;
 }
@@ -232,4 +292,4 @@ function parseMcpArguments(args, tool) {
     return result;
 }
 
-module.exports = { createToolRegistry, renderToolCatalog, parseToolCalls, parseMcpArguments };
+module.exports = { createToolRegistry, renderToolCatalog, parseToolCalls, parseMcpArguments, normalizeRespondText };

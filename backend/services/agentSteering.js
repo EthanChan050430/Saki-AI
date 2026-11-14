@@ -136,6 +136,7 @@ function createSteeringHandler({ runs, uploadsDir }) {
 function emitRunOutcome(res, outcome, details = {}) {
     if (res._runOutcome || res.writableEnded || res.destroyed) return;
     res._runOutcome = outcome;
+    res._runOutcomeDetails = details;
     res.steering?.close();
     res.write(`data: ${JSON.stringify({ type: 'runOutcome', ...details, outcome, chatId: res.chatId, assistantMsgId: res.assistantMsgId })}\n\n`);
 }

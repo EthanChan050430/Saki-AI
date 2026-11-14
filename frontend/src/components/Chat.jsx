@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo, Suspense } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactDOM from 'react-dom';
 import ReactMarkdown from 'react-markdown';
@@ -12,10 +12,12 @@ import CodeChangesSummary from './CodeChangesSummary';
 import CheckpointRestoreBar from './CheckpointRestoreBar';
 import { checkpointOwners } from '../utils/checkpoints';
 import { localize, localizeWith, isChineseLanguage, isJapaneseLanguage } from '../utils/localize';
+import { normalizeEscapedMarkdown } from '../utils/markdownText';
 import ErrorBoundary from './ErrorBoundary';
 import ChatMessageItem from './ChatMessageItem';
 import ChatTurnNavigator from './ChatTurnNavigator';
 import CapabilityMentions from './CapabilityMentions';
+import CollapsibleImageGallery, { splitMarkdownImageGroups } from './CollapsibleImageGallery';
 
 const CredibilityCheckView = React.lazy(() => import('./CredibilityCheckView'));
 const DeepReadingView = React.lazy(() => import('./DeepReadingView'));
@@ -27,6 +29,12 @@ const DiffModal = React.lazy(() => import('./DiffModal'));
 const AiCustomizationModal = React.lazy(() => import('./AiCustomizationModal'));
 import botAvatar from '../head.png';
 import { getChatProviderName, MODEL_PROVIDER_ORDER } from '../utils/chatProviderConfig';
+import {
+  synthesizeLocalSentence,
+  playFloat32Audio,
+  stopLocalTtsPlayback,
+  splitTtsSentences,
+} from '../utils/localTtsEngine';
 
 const MODEL_PROVIDER_LOGOS = {
   ollama: 'https://cdn.simpleicons.org/ollama',
@@ -1026,6 +1034,7 @@ const FloatingPopover = ({
   width = 288,
   align = 'center',
   interactive = false,
+  toggleOnClick = false,
   disabled = false,
   onOpenChange
 }) => {
@@ -1085,13 +1094,24 @@ const FloatingPopover = ({
     if (!isOpen) return undefined;
     updatePosition();
     const handleViewportChange = () => updatePosition();
+    const handlePointerDown = (event) => {
+      if (toggleOnClick && !anchorRef.current?.contains(event.target)) {
+        setOpenState(false);
+      }
+    };
     window.addEventListener('resize', handleViewportChange);
     window.addEventListener('scroll', handleViewportChange, true);
+    if (toggleOnClick) {
+      document.addEventListener('pointerdown', handlePointerDown);
+    }
     return () => {
       window.removeEventListener('resize', handleViewportChange);
       window.removeEventListener('scroll', handleViewportChange, true);
+      if (toggleOnClick) {
+        document.removeEventListener('pointerdown', handlePointerDown);
+      }
     };
-  }, [isOpen, width, align]);
+  }, [isOpen, width, align, toggleOnClick]);
 
   return (
     <span
@@ -1101,6 +1121,16 @@ const FloatingPopover = ({
       onMouseLeave={scheduleClose}
       onFocus={openPopover}
       onBlur={scheduleClose}
+      onClick={toggleOnClick ? (event) => {
+        if (disabled) return;
+        event.stopPropagation();
+        window.clearTimeout(closeTimerRef.current);
+        setIsOpen((prev) => {
+          const next = !prev;
+          if (next) requestAnimationFrame(updatePosition);
+          return next;
+        });
+      } : undefined}
     >
       {children}
       {isOpen && !disabled && typeof document !== 'undefined' && ReactDOM.createPortal(
@@ -1659,7 +1689,9 @@ export default function Chat({
   onStoryGlassOverlayOpenChange,
   onAppendStoryGlassConversation,
   onEnsureChat,
-  models
+  models,
+  onDockHostMount,
+  onDockHostUnmount,
 }) {
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage || i18n.language || 'en-US';
@@ -1672,6 +1704,15 @@ export default function Chat({
   const messageCheckpointOwners = checkpointOwners(messages);
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
+  const dockHostNodeRef = useRef(null);
+  useLayoutEffect(() => {
+    const node = dockHostNodeRef.current;
+    if (!node) return undefined;
+    onDockHostMount?.(node);
+    return () => {
+      onDockHostUnmount?.(node);
+    };
+  }, [onDockHostMount, onDockHostUnmount]);
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [readingIdx, setReadingIdx] = useState(null);
   const [editingMsgIdx, setEditingMsgIdx] = useState(null);
@@ -1685,6 +1726,12 @@ export default function Chat({
   const [storyGlassPreferences, setStoryGlassPreferences] = useState(DEFAULT_STORY_GLASS_PREFERENCES);
   const [localStoryGlassOverlayOpen, setLocalStoryGlassOverlayOpen] = useState(false);
   const [storyGlassReviewMessageId, setStoryGlassReviewMessageId] = useState(null);
+  const [fullscreenPptMessageId, setFullscreenPptMessageId] = useState(null);
+  useEffect(() => {
+    if (fullscreenPptMessageId == null) return;
+    const stillExists = (messages || []).some(msg => String(msg?.id) === String(fullscreenPptMessageId) && msg?.pptData);
+    if (!stillExists) setFullscreenPptMessageId(null);
+  }, [messages, fullscreenPptMessageId]);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [showFeatureMenu, setShowFeatureMenu] = useState(false);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
@@ -1697,8 +1744,37 @@ export default function Chat({
   const featureMenuRef = useRef(null);
   const permissionMenuRef = useRef(null);
   const modelMenuRef = useRef(null);
+  const composerAreaRef = useRef(null);
+  const composerShellRef = useRef(null);
   const dragDepthRef = useRef(0);
   const textareaRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const areaEl = composerAreaRef.current;
+    const shellEl = composerShellRef.current;
+    if (!areaEl || !shellEl) return undefined;
+    const updatePopupBottom = () => {
+      const shellRect = shellEl.getBoundingClientRect();
+      const layoutHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const offsetBottom = Math.max(84, Math.ceil(layoutHeight - shellRect.top + 8));
+      areaEl.style.setProperty('--saki-composer-popup-bottom', `${offsetBottom}px`);
+    };
+    updatePopupBottom();
+    let observer = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updatePopupBottom);
+      observer.observe(shellEl);
+    }
+    window.addEventListener('resize', updatePopupBottom);
+    window.visualViewport?.addEventListener('resize', updatePopupBottom);
+    window.visualViewport?.addEventListener('scroll', updatePopupBottom);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updatePopupBottom);
+      window.visualViewport?.removeEventListener('resize', updatePopupBottom);
+      window.visualViewport?.removeEventListener('scroll', updatePopupBottom);
+    };
+  }, [showModelMenu, showPermissionMenu, showFeatureMenu, files.length, useStoryGlass, queue?.items?.length, input]);
   const composingRef = useRef(false);
   const restoredOptionsRef = useRef(null);
   const storyGlassModeChangeRef = useRef(onStoryGlassModeChange);
@@ -2383,15 +2459,40 @@ export default function Chat({
   const stopPlainSpeech = () => {
     window.__sakiTtsToken = null;
     window.__sakiTtsPending = false;
-    if (config.ttsProvider === 'gpt-sovits') {
-      if (window.currentSovitsAudio) {
-        window.currentSovitsAudio.pause();
-        window.currentSovitsAudio = null;
-      }
-    } else if (window.speechSynthesis) {
+    stopLocalTtsPlayback();
+    if (window.currentSovitsAudio) {
+      window.currentSovitsAudio.pause();
+      window.currentSovitsAudio = null;
+    }
+    if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setReadingIdx(null);
+  };
+
+  const speakWithBrowserTts = async (cleanText, speechToken, finishPlainSpeech) => {
+    if (!window.speechSynthesis) {
+      finishPlainSpeech();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    await new Promise((resolve) => {
+      let settled = false;
+      const finishUtterance = () => {
+        if (settled) return;
+        settled = true;
+        finishPlainSpeech();
+        resolve();
+      };
+      utterance.onend = finishUtterance;
+      utterance.onerror = finishUtterance;
+      if (window.__sakiTtsToken !== speechToken) {
+        finishUtterance();
+        return;
+      }
+      window.speechSynthesis.speak(utterance);
+    });
   };
 
   const speakPlainText = async (speechId, text, showErrors = true) => {
@@ -2403,9 +2504,12 @@ export default function Chat({
     const cleanText = String(text || '').trim();
     if (!cleanText) return;
 
+    stopPlainSpeech();
+
     const speechToken = `${speechId}-${Date.now()}`;
     window.__sakiTtsToken = speechToken;
     window.__sakiTtsPending = true;
+    const isCancelled = () => window.__sakiTtsToken !== speechToken;
     const finishPlainSpeech = () => {
       if (window.__sakiTtsToken === speechToken) {
         window.__sakiTtsToken = null;
@@ -2414,68 +2518,115 @@ export default function Chat({
       }
     };
 
+    if (config.ttsProvider === 'local-wasm') {
+      setReadingIdx(speechId);
+      const sentences = splitTtsSentences(cleanText);
+      const sid = Number(config.localTtsSid) || 0;
+      const speed = Number(config.localTtsSpeed) || 1.0;
+      try {
+        // Pipeline: synthesize sentence i+1 while sentence i is playing
+        let nextSynthPromise = sentences.length > 0
+          ? synthesizeLocalSentence(sentences[0], { sid, speed })
+          : null;
+
+        for (let i = 0; i < sentences.length; i += 1) {
+          if (isCancelled() || !nextSynthPromise) break;
+          const audio = await nextSynthPromise;
+          if (isCancelled()) break;
+
+          nextSynthPromise = i + 1 < sentences.length
+            ? synthesizeLocalSentence(sentences[i + 1], { sid, speed })
+            : null;
+
+          if (audio && audio.samples && audio.samples.length > 0) {
+            await playFloat32Audio(audio.samples, audio.sampleRate, isCancelled);
+          }
+        }
+        finishPlainSpeech();
+      } catch (err) {
+        console.error('Local WASM TTS Error, falling back to browser TTS:', err);
+        if (!isCancelled()) {
+          await speakWithBrowserTts(cleanText, speechToken, finishPlainSpeech);
+        } else {
+          finishPlainSpeech();
+        }
+      }
+      return;
+    }
+
     if (config.ttsProvider === 'gpt-sovits') {
       setReadingIdx(speechId);
       try {
         const langMap = { 'zh-CN': 'zh', 'en-US': 'en', 'ja': 'ja', 'fr': 'fr' };
         const lang = langMap[i18n.language] || 'zh';
+        const sentences = splitTtsSentences(cleanText);
 
-        const payload = {
-          text: cleanText,
-          text_lang: lang,
-          ref_audio_path: config.sovitsRefAudio,
-          prompt_text: config.sovitsRefText || '',
-          prompt_lang: lang,
-          media_type: 'wav',
-          streaming_mode: false,
-          sovits_url: config.sovitsUrl || 'http://127.0.0.1:9880'
+        const fetchSovitsBlob = async (sentenceText) => {
+          const payload = {
+            text: sentenceText,
+            text_lang: lang,
+            ref_audio_path: config.sovitsRefAudio,
+            prompt_text: config.sovitsRefText || '',
+            prompt_lang: lang,
+            media_type: 'wav',
+            streaming_mode: false,
+            sovits_url: config.sovitsUrl || 'http://127.0.0.1:9880'
+          };
+
+          const response = await fetch(`${backendUrl}/api/sovits/proxy/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || errData.message || 'TTS request failed');
+          }
+          return response.blob();
         };
 
-        const response = await fetch(`${backendUrl}/api/sovits/proxy/tts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+        let nextBlobPromise = sentences.length > 0 ? fetchSovitsBlob(sentences[0]) : null;
+        for (let i = 0; i < sentences.length; i += 1) {
+          if (isCancelled() || !nextBlobPromise) break;
+          const blob = await nextBlobPromise;
+          if (isCancelled()) break;
 
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || errData.message || 'TTS request failed');
-        }
+          nextBlobPromise = i + 1 < sentences.length ? fetchSovitsBlob(sentences[i + 1]) : null;
 
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          if (window.currentSovitsAudio) {
+            window.currentSovitsAudio.pause();
+          }
+          window.currentSovitsAudio = audio;
 
-        if (window.currentSovitsAudio) {
-          window.currentSovitsAudio.pause();
-        }
-        window.currentSovitsAudio = audio;
+          await new Promise((resolve) => {
+            let settled = false;
+            const finishAudio = () => {
+              if (settled) return;
+              settled = true;
+              URL.revokeObjectURL(url);
+              if (window.currentSovitsAudio === audio) {
+                window.currentSovitsAudio = null;
+              }
+              resolve();
+            };
 
-        await new Promise((resolve) => {
-          let settled = false;
-          const finishAudio = () => {
-            if (settled) return;
-            settled = true;
-            finishPlainSpeech();
-            URL.revokeObjectURL(url);
-            if (window.currentSovitsAudio === audio) {
-              window.currentSovitsAudio = null;
-            }
-            resolve();
-          };
+            audio.onended = finishAudio;
+            audio.onpause = finishAudio;
+            audio.onerror = (e) => {
+              console.error("Audio playback error", e);
+              finishAudio();
+            };
 
-          audio.onended = finishAudio;
-          audio.onpause = finishAudio;
-          audio.onerror = (e) => {
-            console.error("Audio playback error", e);
-            finishAudio();
-          };
-
-          audio.play().catch((error) => {
-            console.error("Audio playback error", error);
-            finishAudio();
+            audio.play().catch((error) => {
+              console.error("Audio playback error", error);
+              finishAudio();
+            });
           });
-        });
+        }
+        finishPlainSpeech();
       } catch (err) {
         console.error('SoVITS TTS Error:', err);
         finishPlainSpeech();
@@ -2488,39 +2639,26 @@ export default function Chat({
         }
       }
     } else {
-      if (!window.speechSynthesis) {
-        finishPlainSpeech();
-        return;
-      }
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(cleanText);
       setReadingIdx(speechId);
-      await new Promise((resolve) => {
-        let settled = false;
-        const finishUtterance = () => {
-          if (settled) return;
-          settled = true;
-          finishPlainSpeech();
-          resolve();
-        };
-        utterance.onend = finishUtterance;
-        utterance.onerror = finishUtterance;
-        window.speechSynthesis.speak(utterance);
-      });
+      await speakWithBrowserTts(cleanText, speechToken, finishPlainSpeech);
     }
   };
 
+  const wasGeneratingForTts = useRef(false);
+  useEffect(() => {
+    const replyCompleted = wasGeneratingForTts.current && !isGenerating;
+    wasGeneratingForTts.current = isGenerating;
+    if (!replyCompleted || config.autoTtsEnabled === false) return;
+    const index = messages.length - 1;
+    const message = messages[index];
+    if (message?.role !== 'assistant') return;
+    const text = getMessagePlainText(message);
+    if (text) void speakPlainText(index, text, true);
+  }, [isGenerating, messages, config.autoTtsEnabled]);
+
   const speakText = async (idx, message) => {
     if (readingIdx === idx) {
-      if (config.ttsProvider === 'gpt-sovits') {
-        if (window.currentSovitsAudio) {
-          window.currentSovitsAudio.pause();
-          window.currentSovitsAudio = null;
-        }
-      } else {
-        window.speechSynthesis.cancel();
-      }
-      setReadingIdx(null);
+      stopPlainSpeech();
       return;
     }
 
@@ -2608,7 +2746,7 @@ export default function Chat({
     <div className="flex-1 flex flex-col min-h-0 bg-transparent relative">
       {isDragOverlayVisible && (
         <div className="pointer-events-none fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-xl animate-in fade-in duration-200">
-          <div className="rounded-[2.5rem] border border-white/30 dark:border-white/15 bg-white/20 dark:bg-white/[0.08] p-8 sm:p-10 text-center text-white shadow-[0_24px_64px_rgba(0,0,0,0.35)] backdrop-blur-2xl max-w-sm mx-auto">
+          <div className="rounded-[2.5rem] border border-white/30 dark:border-white/15 bg-white/20 dark:bg-white/[0.08] p-6 sm:p-10 text-center text-white shadow-[0_24px_64px_rgba(0,0,0,0.35)] backdrop-blur-2xl max-w-sm mx-4 sm:mx-auto">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#ff75ac]/35 to-white/25 border border-white/30 shadow-lg shadow-[#ff75ac]/25">
               <Paperclip size={28} className="text-white drop-shadow" />
             </div>
@@ -2645,7 +2783,7 @@ export default function Chat({
         <div
           id="chat-messages-container"
           ref={containerRef}
-          className="saki-chat-messages flex-1 overflow-y-auto p-4 md:p-8 space-y-6 relative custom-scrollbar"
+          className="saki-chat-messages flex-1 overflow-y-auto p-2.5 sm:p-4 md:p-8 pb-6 sm:pb-8 space-y-5 sm:space-y-6 relative custom-scrollbar"
         >
         {messages.length === 0 && (
           <div className="min-h-full flex items-center justify-center relative py-6 sm:py-10 px-4 select-none">
@@ -2668,8 +2806,11 @@ export default function Chat({
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                       />
                     </div>
-                    <div className="absolute inset-0 rounded-[1.75rem] bg-black/30 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                    <div className="absolute inset-0 rounded-[1.75rem] bg-black/30 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex items-center justify-center text-white">
                       <PencilLine size={18} className="drop-shadow" />
+                    </div>
+                    <div className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border border-white/80 bg-white/90 text-gray-600 shadow-sm md:hidden dark:border-white/15 dark:bg-[#1e2030] dark:text-gray-200">
+                      <PencilLine size={11} />
                     </div>
                   </div>
                 </div>
@@ -2718,7 +2859,7 @@ export default function Chat({
                 })}
               </div>
 
-              <div className="mt-6 flex items-center justify-center gap-3 sm:gap-4 flex-wrap text-[11px] text-[var(--text-tertiary)] font-normal">
+              <div className="mt-6 hidden sm:flex items-center justify-center gap-3 sm:gap-4 flex-wrap text-[11px] text-[var(--text-tertiary)] font-normal">
                 <span className="inline-flex items-center gap-1">
                   <kbd className="px-1.5 py-0.5 rounded bg-black/[0.04] dark:bg-white/[0.06] border border-black/[0.06] dark:border-white/[0.08] font-mono text-[10px] text-[var(--text-secondary)]">↵ Enter</kbd>
                   <span>{getLocalText('发送', 'Send')}</span>
@@ -2757,6 +2898,10 @@ export default function Chat({
               setEditingMsgText={setEditingMsgText}
               onUpdateMessageText={onUpdateMessageText}
               onRevisePpt={onRevisePpt}
+              fullscreenPptMessageId={fullscreenPptMessageId}
+              onOpenPptFullscreen={setFullscreenPptMessageId}
+              onClosePptFullscreen={() => setFullscreenPptMessageId(null)}
+              backendUrl={backendUrl}
               onEditMessage={onEditMessage}
               onDeleteMessage={onDeleteMessage}
               onRestoreCheckpoint={onRestoreCheckpoint}
@@ -2801,15 +2946,15 @@ export default function Chat({
       />
     </div>
 
-      <div className="relative z-20 px-4 pb-4 pt-0 bg-transparent">
+      <div ref={composerAreaRef} className="relative z-20 px-2 sm:px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-4 pt-0 bg-transparent">
         <div className="max-w-4xl mx-auto">
           {files.length > 0 && (
-            <div className="flex gap-2 mb-2 px-1">
+            <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2 px-1">
               {files.map((f, i) => (
-                <div key={i} className="text-xs bg-[var(--control-bg)] backdrop-blur-md border border-[var(--control-border)] px-2 py-1 rounded-full flex items-center gap-1.5 text-[var(--text-dark)]">
-                  <Paperclip size={12} className="text-[var(--accent-text)]" />
-                  <span>{f.name}</span>
-                  <button onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))} className="hover:text-red-300">×</button>
+                <div key={i} className="max-w-full text-xs bg-[var(--control-bg)] backdrop-blur-md border border-[var(--control-border)] px-2.5 py-1 rounded-full flex items-center gap-1.5 text-[var(--text-dark)]">
+                  <Paperclip size={12} className="shrink-0 text-[var(--accent-text)]" />
+                  <span className="truncate max-w-[13rem] sm:max-w-xs">{f.name}</span>
+                  <button onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))} className="shrink-0 hover:text-red-300 px-0.5">×</button>
                 </div>
               ))}
             </div>
@@ -2825,7 +2970,7 @@ export default function Chat({
           <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
           {(queue?.items?.length > 0 || queueStorageError) && (
             <section aria-label={getLocalText('消息队列', 'Message queue')} className="mb-3 rounded-2xl border border-[var(--control-border)] bg-[var(--control-bg)] p-3 text-xs text-[var(--text-dark)]">
-              <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <strong>{getLocalText('待发送队列', 'Queued messages')} · {queue?.items?.length || 0} {queue?.paused ? getLocalText('（已暂停）', '(paused)') : ''}</strong>
                 {queue?.paused && <button type="button" onClick={onQueueResume} disabled={Boolean(currentPendingRequest?.assistantMsgId) || Boolean(restoringCheckpointId)} className="text-saki-pink disabled:opacity-40">{getLocalText('继续队列', 'Continue queue')}</button>}
               </div>
@@ -2835,13 +2980,13 @@ export default function Chat({
               <ol className="max-h-44 overflow-y-auto space-y-2">
                 {(queue?.items || []).map((item, index) => (
                   <li key={item.id} className="rounded-xl border border-[var(--control-border)] p-2">
-                    <div className="flex gap-2 items-start">
+                    <div className="flex flex-wrap sm:flex-nowrap gap-2 items-start">
                       <span className="opacity-50">{index + 1}.</span>
-                      <div className="min-w-0 flex-1"><p className="whitespace-pre-wrap break-words line-clamp-3">{item.text || getLocalText('附件消息', 'Attachments')}</p>
+                      <div className="min-w-[10rem] flex-1"><p className="whitespace-pre-wrap break-words line-clamp-3">{item.text || getLocalText('附件消息', 'Attachments')}</p>
                         {item.files?.length > 0 && <p className="opacity-60 break-words">{item.files.map(file => file.name || file.filename).join(', ')}</p>}
                         {item.error && <p role="alert" className="text-rose-500 mt-1">{item.error}</p>}
                       </div>
-                      <div className="flex gap-2 shrink-0">
+                      <div className="flex gap-2 shrink-0 ml-auto">
                         <button type="button" disabled={item.busy || !isGenerating || !currentPendingRequest?.assistantMsgId || Boolean(currentPendingRequest?.approvalRequest)} onClick={() => onQueueSteer?.(item.id)} className="text-saki-pink disabled:opacity-40">{item.busy ? getLocalText('处理中', 'Sending') : getLocalText('引导', 'Steer')}</button>
                         <button type="button" disabled={item.busy} onClick={() => onQueueRemove?.(item.id, true)} className="disabled:opacity-40">{getLocalText('编辑', 'Edit')}</button>
                         <button type="button" disabled={item.busy} onClick={() => onQueueRemove?.(item.id)} className="disabled:opacity-40">{getLocalText('撤回', 'Withdraw')}</button>
@@ -2853,12 +2998,19 @@ export default function Chat({
             </section>
           )}
           <div
-            className="saki-input-shell relative flex items-end gap-2 bg-[var(--control-bg)] dark:bg-[#161824]/65 backdrop-blur-2xl border border-[var(--control-border)]  rounded-2xl focus-within:border-[#ff75ac]/60 focus-within:ring-2 focus-within:ring-[#ff75ac]/20 transition-all p-2 flex-wrap shadow-lg dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]"
+            ref={dockHostNodeRef}
+            data-saki-dock-host="true"
+            className="pointer-events-none relative z-[18] h-0 w-full"
+            aria-hidden="true"
+          />
+          <div
+            ref={composerShellRef}
+            className="saki-input-shell relative z-[19] flex items-end gap-1.5 sm:gap-2 bg-[var(--control-bg)] dark:bg-[#161824]/65 backdrop-blur-2xl border border-[var(--control-border)] rounded-2xl focus-within:border-[#ff75ac]/60 focus-within:ring-2 focus-within:ring-[#ff75ac]/20 transition-all p-2 flex-wrap shadow-lg dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]"
             data-onboarding-id="chat-composer"
           >
             <CapabilityMentions input={input} setInput={setInput} backendUrl={backendUrl} config={config} textareaRef={textareaRef} getLocalText={getLocalText} />
             {slashSuggestions.length > 0 && (
-              <div className="saki-popup absolute bottom-full left-3 right-3 mb-3 rounded-[1.5rem] border border-[var(--control-border)]  bg-[var(--popup-bg)] dark:bg-[#181922]/95 p-2 shadow-2xl backdrop-blur-2xl z-[120]">
+              <div className="saki-popup absolute bottom-full left-0 right-0 sm:left-3 sm:right-3 mb-3 max-h-[min(45dvh,18rem)] overflow-y-auto rounded-[1.5rem] border border-[var(--control-border)]  bg-[var(--popup-bg)] dark:bg-[#181922]/95 p-2 shadow-2xl backdrop-blur-2xl z-[120]">
                 <div className="mb-2 flex items-center gap-2 px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">
                   <Sparkles size={12} />
                   {getLocalText('斜杠命令', 'Slash Commands')}
@@ -2930,7 +3082,7 @@ export default function Chat({
               </div>
             )}
             <div
-              className="flex w-full flex-wrap sm:flex-nowrap items-center gap-1.5 mb-1 px-1 shrink-0 overflow-visible pb-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap"
+              className="flex w-full flex-wrap md:flex-nowrap items-center gap-1.5 mb-1 px-1 shrink-0 overflow-visible pb-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap"
               data-onboarding-id="chat-mode-bar"
               onWheel={handleModeBarWheel}
             >
@@ -2938,6 +3090,7 @@ export default function Chat({
                 <FloatingPopover
                   width={256}
                   align="start"
+                  toggleOnClick
                   content={({ arrowLeft }) => (
                     <>
                       <div className="rounded-xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 text-xs text-[var(--text-dark)] shadow-xl backdrop-blur-xl">
@@ -3001,7 +3154,7 @@ export default function Chat({
                     setModelDetails(null);
                     setModelProviderFilter(config.provider || 'ollama');
                   }}
-                  className={`saki-chip-btn max-w-[15rem] ${showModelMenu ? 'is-active' : ''}`}
+                  className={`saki-chip-btn max-w-[10.5rem] sm:max-w-[15rem] ${showModelMenu ? 'is-active' : ''}`}
                   aria-expanded={showModelMenu}
                   aria-haspopup="dialog"
                 >
@@ -3015,7 +3168,7 @@ export default function Chat({
                   <div role="dialog" aria-label={getLocalText('选择模型', 'Select model')} data-saki-popup="models" className="saki-popup absolute bottom-full left-0 z-[110] mb-2 w-[min(92vw,26rem)] overflow-hidden rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] shadow-2xl">
                     {!modelDetails ? (
                       <>
-                        <div className="flex items-center gap-1 border-b border-[var(--control-border)] px-2 py-1.5">
+                        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar border-b border-[var(--control-border)] px-2 py-1.5">
                           {MODEL_PROVIDER_ORDER.map(provider => {
                             const providerModels = (models || []).filter(item => item.provider === provider);
                             if (!providerModels.length) return null;
@@ -3061,7 +3214,7 @@ export default function Chat({
                             <X size={15} />
                           </button>
                         </div>
-                        <div className="max-h-[min(60vh,24rem)] overflow-y-auto p-2">
+                        <div className="max-h-[min(50dvh,24rem)] overflow-y-auto p-2">
                           {(models || [])
                             .filter(item => item.provider === modelProviderFilter)
                             .filter(item => !(item.name === config.drawingModel && item.provider === config.drawingProvider))
@@ -3087,7 +3240,7 @@ export default function Chat({
                                   <button
                                     type="button"
                                     onClick={() => setModelDetails(model)}
-                                    className="invisible flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px] text-[var(--text-secondary)] opacity-0 transition-all hover:text-[var(--text-dark)] group-hover:visible group-hover:opacity-100 focus-visible:visible focus-visible:opacity-100"
+                                    className="saki-touch-visible visible flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px] text-[var(--text-secondary)] opacity-85 transition-all hover:text-[var(--text-dark)] md:invisible md:opacity-0 md:group-hover:visible md:group-hover:opacity-100 focus-visible:visible focus-visible:opacity-100"
                                     title={getLocalText('调整思考等级', 'Adjust thinking level')}
                                   >
                                     {config.thinkingLevel === 'low'
@@ -3217,7 +3370,7 @@ export default function Chat({
                   <ChevronDown size={11} className={`shrink-0 transition-transform ${showFeatureMenu ? 'rotate-180' : ''}`} />
                 </button>
                 {showFeatureMenu && (
-                  <div role="dialog" aria-label={getLocalText('功能选择', 'Feature selection')} data-saki-popup="features" className="saki-popup absolute bottom-full left-0 z-[100] mb-2 max-h-[min(70vh,28rem)] w-[min(92vw,30rem)] overflow-y-auto rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 shadow-2xl backdrop-blur-xl">
+                  <div role="dialog" aria-label={getLocalText('功能选择', 'Feature selection')} data-saki-popup="features" className="saki-popup absolute bottom-full left-0 z-[130] mb-2 max-h-[min(70vh,28rem)] w-max max-w-[min(92vw,42rem)] overflow-y-auto rounded-2xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 shadow-2xl backdrop-blur-xl">
                     <div className="mb-2 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">
                       <span>{getLocalText('功能选择', 'Feature selection')}</span>
                       <button
@@ -3372,11 +3525,11 @@ export default function Chat({
                 }
               }}
               placeholder={t('ask_placeholder')}
-              className="flex-1 bg-transparent border-none focus:ring-0 focus:outline-none resize-none py-2.5 text-sm max-h-48 text-[var(--text-dark)]  font-medium placeholder-gray-500 dark:placeholder-gray-400"
+              className="flex-1 min-w-0 bg-transparent border-none focus:ring-0 focus:outline-none resize-none py-2 sm:py-2.5 text-base sm:text-sm max-h-48 text-[var(--text-dark)] font-medium placeholder-gray-500 dark:placeholder-gray-400"
             />
             <button
               onClick={toggleRecording}
-              className={`p-2.5 rounded-full transition-all active:scale-95 ${isRecording ? 'bg-red-500 text-white shadow-lg animate-pulse' : 'text-[var(--text-secondary)]  hover:text-[#ff75ac] dark:hover:text-[#ff9bc8] hover:bg-[var(--control-bg)] '}`}
+              className={`p-2 sm:p-2.5 rounded-full transition-all active:scale-95 ${isRecording ? 'bg-red-500 text-white shadow-lg animate-pulse' : 'text-[var(--text-secondary)]  hover:text-[#ff75ac] dark:hover:text-[#ff9bc8] hover:bg-[var(--control-bg)] '}`}
               title={isRecording ? t('voice_stop') : t('voice_input')}
             >
               {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
@@ -3384,15 +3537,15 @@ export default function Chat({
             <button
               onClick={handleSend}
               disabled={Boolean(restoringCheckpointId)}
-              className="p-2.5 rounded-full transition-all active:scale-95 bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white"
+              className="p-2 sm:p-2.5 rounded-full transition-all active:scale-95 bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white"
               aria-label={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
               title={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
             >
               <ArrowUp size={20} />
             </button>
-            {(isGenerating || currentPendingRequest?.assistantMsgId) && <button type="button" onClick={() => isGenerating ? onStop?.() : onCancelPendingChat?.(currentChatId)} aria-label={getLocalText('结束生成', 'Stop generation')} title={getLocalText('结束生成', 'Stop generation')} className="p-3 rounded-full bg-red-500/80 text-white"><span className="block w-4 h-4 bg-white rounded-sm" /></button>}
+            {(isGenerating || currentPendingRequest?.assistantMsgId) && <button type="button" onClick={() => isGenerating ? onStop?.() : onCancelPendingChat?.(currentChatId)} aria-label={getLocalText('结束生成', 'Stop generation')} title={getLocalText('结束生成', 'Stop generation')} className="p-2.5 sm:p-3 rounded-full bg-red-500/80 text-white"><span className="block w-4 h-4 bg-white rounded-sm" /></button>}
           </div>
-          <div className="flex items-center justify-center gap-1.5 text-[10px] text-[var(--text-tertiary)] opacity-65 tracking-wide mt-2 select-none">
+          <div className="flex items-center justify-center gap-1.5 text-[10px] text-[var(--text-tertiary)] opacity-65 tracking-wide mt-1.5 sm:mt-2 px-2 text-center select-none">
             <span className="w-1 h-1 rounded-full bg-[var(--text-tertiary)] opacity-50" />
             <span>{t('ai_accuracy_tip')}</span>
           </div>
@@ -3562,7 +3715,7 @@ function MessageBubbleToolbar({
   const tokens = isAssistant ? estimateMessageTokens(message) : 0;
 
   return (
-    <div className={`saki-message-toolbar pointer-events-none absolute -top-4 z-10 flex w-max max-w-[calc(100vw-5rem)] gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-3' : 'left-3'}`}>
+    <div className={`saki-message-toolbar saki-touch-visible pointer-events-none absolute -top-3.5 md:-top-4 z-10 flex w-max max-w-[calc(100vw-2.5rem)] items-center gap-0.5 sm:gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1 sm:p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-1 sm:right-3' : 'left-1 sm:left-3'}`}>
       {isAssistant && tokens > 0 && (
         <button 
           onClick={(e) => {
@@ -3632,9 +3785,9 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
   ) || 1;
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-auto">
-      <div data-saki-dialog="true" className="bg-[var(--popup-bg)] border border-[var(--control-border)] rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--control-border)] bg-[var(--surface-inset)] shrink-0">
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-auto">
+      <div data-saki-dialog="true" className="bg-[var(--popup-bg)] border border-[var(--control-border)] rounded-none sm:rounded-3xl w-full max-w-2xl h-full sm:h-auto max-h-[100dvh] sm:max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="flex items-center justify-between px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b border-[var(--control-border)] bg-[var(--surface-inset)] shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 bg-saki-pink/10 text-[var(--accent-text)] rounded-lg">
               <Brain size={16} />
@@ -3652,8 +3805,8 @@ function MessageDiagnosticsModal({ isOpen, onClose, message, getLocalText }) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto p-6 space-y-6 custom-scrollbar text-left">
-          <div className="grid grid-cols-3 gap-4">
+        <div className="flex-1 overflow-auto p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-5 sm:space-y-6 custom-scrollbar text-left">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
             <div className="rounded-2xl border border-[var(--control-border)] bg-[var(--surface-inset)] p-4 flex flex-col justify-center">
               <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('生成时间', 'Creation Time')}</span>
               <span className="text-xs font-bold text-[var(--text-dark)]">{timeStr}</span>
@@ -3827,21 +3980,21 @@ function RichCodeBlock({ language, value }) {
 
   return (
     <div className="my-5 overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-gradient-to-br from-white via-slate-50/95 to-slate-100/90 shadow-[0_20px_50px_rgba(15,23,42,0.08)] ring-1 ring-white/70">
-      <div className="relative flex items-center justify-between border-b border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] px-3.5 py-2">
+      <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] px-3 sm:px-3.5 py-2">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-300/70 to-transparent" />
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+          <div className="hidden xs:flex sm:flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full bg-rose-400/90 shadow-[0_0_0_3px_rgba(251,113,133,0.12)]" />
             <span className="h-2.5 w-2.5 rounded-full bg-amber-400/90 shadow-[0_0_0_3px_rgba(251,191,36,0.12)]" />
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/90 shadow-[0_0_0_3px_rgba(52,211,153,0.12)]" />
           </div>
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/85 px-2.5 py-1 text-[10px] font-semibold text-slate-600 shadow-sm backdrop-blur-sm">
-            <FileText size={11} className="text-sky-500" />
-            <span className="tracking-[0.18em] text-slate-500">{label}</span>
-            <span className="h-1 w-1 rounded-full bg-slate-300" />
-            <span>{localize('代码块', 'Code Block')}</span>
-            <span className="h-1 w-1 rounded-full bg-slate-300" />
-            <span className="text-slate-400">{localize(`${lineCount} 行`, `${lineCount} lines`)}</span>
+          <div className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/85 px-2.5 py-1 text-[10px] font-semibold text-slate-600 shadow-sm backdrop-blur-sm">
+            <FileText size={11} className="shrink-0 text-sky-500" />
+            <span className="truncate tracking-[0.14em] sm:tracking-[0.18em] text-slate-500">{label}</span>
+            <span className="hidden sm:inline-block h-1 w-1 rounded-full bg-slate-300" />
+            <span className="hidden sm:inline">{localize('代码块', 'Code Block')}</span>
+            <span className="h-1 w-1 shrink-0 rounded-full bg-slate-300" />
+            <span className="shrink-0 text-slate-400">{localize(`${lineCount} 行`, `${lineCount} lines`)}</span>
           </div>
         </div>
         <button
@@ -3899,7 +4052,7 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
   const { t } = useTranslation();
   const [zoomImage, setZoomImage] = useState(null);
   if (!content) return null;
-  let processedContent = content;
+  let processedContent = normalizeEscapedMarkdown(content);
 
   processedContent = processedContent.replace(/\[expression[:=].*?\]/g, '');
   processedContent = processedContent
@@ -3969,108 +4122,113 @@ function MessageContent({ content, isGenerating, onOpenSettings }) {
 
         if (!cleanedPart) return null;
 
-        return (
-          <ReactMarkdown
-            key={i}
-            remarkPlugins={markdownPlugins}
-            urlTransform={urlTransform}
-            components={{
-              p: ({ children }) => <div className="mb-4 last:mb-0 leading-relaxed">{children}</div>,
-              pre: ({ children }) => <>{children}</>,
-              code: ({ node, inline, className, children, ...props }) => {
-                const match = /language-(\w+)/.exec(className || '');
-                const isInlineCode = isInlineMarkdownCode({ inline, node, className, children });
-                if (!isInlineCode && match && match[1] === 'mermaid') {
-                  const chartCode = String(children).replace(/\n$/, '');
-                  return <Mermaid chart={chartCode} />;
-                }
-                if (!isInlineCode) {
-                  return <RichCodeBlock language={match?.[1] || ''} value={String(children).replace(/\n$/, '')} />;
-                }
-                return <code className="rounded-md bg-[var(--primary-light)] px-1.5 py-0.5 text-[0.92em] text-[var(--accent-text)]" {...props}>{children}</code>;
-              },
-              a: ({ href, children, ...props }) => {
-                if (typeof href === 'string' && href.startsWith(INTERNAL_SETTINGS_LINK_PREFIX)) {
+        const segments = splitMarkdownImageGroups(cleanedPart);
+
+        return segments.map((segment, segIdx) => {
+          if (segment.type === 'gallery') {
+            return <CollapsibleImageGallery key={`${i}-gallery-${segIdx}`} images={segment.images} />;
+          }
+
+          return (
+            <ReactMarkdown
+              key={`${i}-md-${segIdx}`}
+              remarkPlugins={markdownPlugins}
+              urlTransform={urlTransform}
+              components={{
+                p: ({ children }) => <div className="mb-4 last:mb-0 leading-relaxed">{children}</div>,
+                pre: ({ children }) => <>{children}</>,
+                code: ({ node, inline, className, children, ...props }) => {
+                  const match = /language-(\w+)/.exec(className || '');
+                  const isInlineCode = isInlineMarkdownCode({ inline, node, className, children });
+                  if (!isInlineCode && match && match[1] === 'mermaid') {
+                    const chartCode = String(children).replace(/\n$/, '');
+                    return <Mermaid chart={chartCode} />;
+                  }
+                  if (!isInlineCode) {
+                    return <RichCodeBlock language={match?.[1] || ''} value={String(children).replace(/\n$/, '')} />;
+                  }
+                  return <code className="rounded-md bg-[var(--primary-light)] px-1.5 py-0.5 text-[0.92em] text-[var(--accent-text)]" {...props}>{children}</code>;
+                },
+                a: ({ href, children, ...props }) => {
+                  if (typeof href === 'string' && href.startsWith(INTERNAL_SETTINGS_LINK_PREFIX)) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onOpenSettings?.()}
+                        className="inline-flex items-center rounded-full bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-700 transition-colors hover:bg-sky-200"
+                      >
+                        {children}
+                      </button>
+                    );
+                  }
                   return (
-                    <button
-                      type="button"
-                      onClick={() => onOpenSettings?.()}
-                      className="inline-flex items-center rounded-full bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-700 transition-colors hover:bg-sky-200"
+                    <a
+                      {...props}
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-[var(--accent-text)] underline decoration-saki-pink/40 underline-offset-4 transition-colors hover:decoration-saki-pink"
                     >
                       {children}
-                    </button>
+                    </a>
+                  );
+                },
+                img: ({ node, ...props }) => {
+                  if (!props.src) return null;
+                  return (
+                    <div
+                      className="relative group inline-block my-2 w-full"
+                    >
+                      <img
+                        {...props}
+                        className="rounded-xl border shadow-md max-w-full h-auto cursor-zoom-in hover:opacity-95 transition-opacity bg-white"
+                        style={{ minHeight: '100px', display: 'block' }}
+                        onClick={() => setZoomImage(props.src)}
+                        onError={(e) => {
+                          e.target.src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNlYjVjNWMiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cmVjdCB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHg9IjMiIHk9IjMiIHJ4PSIyIiByeT0iMiIvPjxsaW5lIHgxPSIzIiB5MT0iOSIgeDI9IjIxIiB5Mj0iOSIvPjxsbmUgeDE9IjkiIHkxPSIzIiB4Mj0iOSIgeTI9IjIxIi8+PC9zdmc+';
+                          e.target.className = 'w-12 h-12 opacity-20 mx-auto py-8';
+                        }}
+                      />
+                      {!props.src?.includes('svg+xml') && (
+                        <div className="saki-touch-visible absolute top-2.5 right-2.5 flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200">
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const response = await fetch(props.src);
+                                const blob = await response.blob();
+                                const url = URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.download = `agent-draw-${Date.now()}.png`;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                URL.revokeObjectURL(url);
+                              } catch (err) {
+                                console.error('Download failed:', err);
+                                const link = document.createElement('a');
+                                link.href = props.src;
+                                link.download = `agent-draw-${Date.now()}.png`;
+                                link.click();
+                              }
+                            }}
+                            className="bg-black/70 hover:bg-black/90 text-white p-2.5 rounded-full backdrop-blur-md shadow-xl transition-all"
+                            title={t('download_image')}
+                          >
+                            <Download size={18} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   );
                 }
-                return (
-                  <a
-                    {...props}
-                    href={href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-medium text-[var(--accent-text)] underline decoration-saki-pink/40 underline-offset-4 transition-colors hover:decoration-saki-pink"
-                  >
-                    {children}
-                  </a>
-                );
-              },
-              img: ({ node, ...props }) => {
-                const [hover, setHover] = useState(false);
-                if (!props.src) return null;
-                return (
-                  <div
-                    className="relative group inline-block my-2 w-full"
-                    onMouseEnter={() => setHover(true)}
-                    onMouseLeave={() => setHover(false)}
-                  >
-                    <img
-                      {...props}
-                      className="rounded-xl border shadow-md max-w-full h-auto cursor-zoom-in hover:opacity-95 transition-opacity bg-white"
-                      style={{ minHeight: '100px', display: 'block' }}
-                      onClick={() => setZoomImage(props.src)}
-                      onError={(e) => {
-                        e.target.src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNlYjVjNWMiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cmVjdCB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHg9IjMiIHk9IjMiIHJ4PSIyIiByeT0iMiIvPjxsaW5lIHgxPSIzIiB5MT0iOSIgeDI9IjIxIiB5Mj0iOSIvPjxsbmUgeDE9IjkiIHkxPSIzIiB4Mj0iOSIgeTI9IjIxIi8+PC9zdmc+';
-                        e.target.className = 'w-12 h-12 opacity-20 mx-auto py-8';
-                      }}
-                    />
-                    {hover && !props.src?.includes('svg+xml') && (
-                      <div className="absolute top-3 right-3 flex gap-2 animate-in fade-in zoom-in duration-200">
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            try {
-                              const response = await fetch(props.src);
-                              const blob = await response.blob();
-                              const url = URL.createObjectURL(blob);
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.download = `agent-draw-${Date.now()}.png`;
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                              URL.revokeObjectURL(url);
-                            } catch (err) {
-                              console.error('Download failed:', err);
-                              const link = document.createElement('a');
-                              link.href = props.src;
-                              link.download = `agent-draw-${Date.now()}.png`;
-                              link.click();
-                            }
-                          }}
-                          className="bg-black/70 hover:bg-black/90 text-white p-2.5 rounded-full backdrop-blur-md shadow-xl transition-all"
-                          title={t('download_image')}
-                        >
-                          <Download size={18} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-            }}
-          >
-            {cleanedPart}
-          </ReactMarkdown>
-        );
+              }}
+            >
+              {segment.content}
+            </ReactMarkdown>
+          );
+        });
       })}
       {zoomImage && ReactDOM.createPortal(
         <div
@@ -4266,15 +4424,12 @@ function ToolObservation({ action = {}, observation }) {
                         return <code className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[0.92em] text-sky-700" {...props}>{children}</code>;
                       },
                       img: ({ node, ...props }) => {
-                        const [hover, setHover] = useState(false);
                         const [localZoom, setLocalZoom] = useState(null);
                         if (!props.src) return null;
                         return (
                           <>
                             <div
                               className="relative group inline-block my-2 w-full"
-                              onMouseEnter={() => setHover(true)}
-                              onMouseLeave={() => setHover(false)}
                             >
                               <img
                                 {...props}
@@ -4287,8 +4442,8 @@ function ToolObservation({ action = {}, observation }) {
                                   e.target.className = 'w-12 h-12 opacity-20 mx-auto py-8';
                                 }}
                               />
-                              {hover && !props.src?.includes('svg+xml') && (
-                                <div className="absolute top-3 right-3 flex gap-2 animate-in fade-in zoom-in duration-200">
+                              {!props.src?.includes('svg+xml') && (
+                                <div className="saki-touch-visible absolute top-2.5 right-2.5 flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200">
                                   <button
                                     onClick={async (e) => {
                                       e.stopPropagation();

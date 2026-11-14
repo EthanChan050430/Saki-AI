@@ -6,9 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { Readable } = require('node:stream');
+const { EventEmitter } = require('node:events');
 const { createKeyedSerialQueue, isCurrentRun, parseProviderFrame, getAnthropicModelProfile } = require('../services/agentLoopUtils');
 const { createLineBuffer } = require('../services/streamBuffer');
 const { preserveSteeringMessages, createSteeringController, emitRunOutcome } = require('../services/agentSteering');
+const { applyFinalOutcomeToMessages, resolveFinalPendingRequest, isStalePendingSession } = require('../services/chatSessionFinalizer');
 const source = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8').replace(/\r\n/g, '\n');
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -134,6 +136,53 @@ for (const provider of ['openai', 'anthropic', 'ollama']) {
     });
 }
 
+test('callLLM completes when a provider sends its terminal frame before closing the stream', async () => {
+    const stream = new EventEmitter();
+    stream.destroy = () => {};
+    const request = async () => {
+        setImmediate(() => {
+            stream.emit('data', Buffer.from('data: {"choices":[{"delta":{"content":"complete"}}]}\n'));
+            stream.emit('data', Buffer.from('data: [DONE]\n'));
+        });
+        return { data: stream };
+    };
+    const c = vm.createContext({
+        normalizeChatProviderId: id => id, getConfiguredChatApiKey: () => '',
+        axios: { post: request }, postModelStream: request, createLineBuffer,
+        parseProviderFrame, getAnthropicModelProfile, console,
+    });
+    vm.runInContext(section('async function callLLM(', 'async function runDeepReadingLoop('), c);
+
+    const text = await Promise.race([
+        c.callLLM('openai', 'test', '', 'hello', {}, token => token),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('stream did not finish')), 250)),
+    ]);
+    assert.equal(text, 'complete');
+});
+
+test('callLLM completes when Ollama sends done=true before closing the stream', async () => {
+    const stream = new EventEmitter();
+    stream.destroy = () => {};
+    const request = async () => {
+        setImmediate(() => {
+            stream.emit('data', Buffer.from('{"response":"complete","done":true}\n'));
+        });
+        return { data: stream };
+    };
+    const c = vm.createContext({
+        normalizeChatProviderId: id => id, getConfiguredChatApiKey: () => '',
+        axios: { post: request }, postModelStream: request, createLineBuffer,
+        parseProviderFrame, getAnthropicModelProfile, console,
+    });
+    vm.runInContext(section('async function callLLM(', 'async function runDeepReadingLoop('), c);
+
+    const text = await Promise.race([
+        c.callLLM('ollama', 'test', '', 'hello', {}, token => token),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('stream did not finish')), 250)),
+    ]);
+    assert.equal(text, 'complete');
+});
+
 test('malformed JSON is recoverable but provider error is not a JSON parse failure', () => {
     assert.equal(parseProviderFrame('{'), null);
     assert.throws(() => parseProviderFrame('{"error":{"message":"overloaded"}}'), /overloaded/);
@@ -163,4 +212,77 @@ test('startup hints match configured default ports', () => {
     assert.match(batch, /localhost:5480/);
     assert.match(batch, /localhost:5482/);
     assert.doesNotMatch(batch, /5431|5432/);
+});
+
+test('finalizeChatRunSession and repairStalePendingSession clear orphaned pendingRequest and mark message done', async () => {
+    let saved = {
+        messages: [
+            { role: 'user', id: 'u1', content: 'hello' },
+            { role: 'assistant', id: 'a1', parts: [{ type: 'text', content: 'final answer' }] },
+        ],
+        pendingRequest: { type: 'chat', message: 'hello', assistantMsgId: 'a1' },
+        source: 'web',
+    };
+    let historyList = [{ id: 'chat-final', isPending: true, pendingType: 'chat' }];
+    const events = [];
+    const c = lifecycleContext({
+        path,
+        SESSIONS_DIR: '/sessions',
+        preserveSteeringMessages,
+        applyFinalOutcomeToMessages,
+        resolveFinalPendingRequest,
+        isStalePendingSession,
+        safeReadJsonFile: async () => JSON.parse(JSON.stringify(saved)),
+        fs: { writeJson: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); } },
+        hasPendingRequest: (p) => Boolean(p && typeof p === 'object' && p.assistantMsgId),
+        mergePreservedStoryGlassConversationMessages: incoming => incoming,
+        shouldPruneEmptyHistorySession: () => false,
+        getHistory: async () => JSON.parse(JSON.stringify(historyList)),
+        saveHistory: async (next) => { historyList = JSON.parse(JSON.stringify(next)); },
+        createSessionSummary: ({ chatId, pendingRequest }) => ({
+            id: chatId,
+            isPending: Boolean(pendingRequest),
+            pendingType: pendingRequest?.type || null,
+        }),
+        emitRealtimeEvent: (evt) => events.push(evt),
+    });
+    vm.runInContext(
+        section('function persistSessionRecord(options)', 'function withRunSessionWrite(')
+        + section('async function persistSessionRecordLocked(', 'async function loadQQBotSessionMap('),
+        c
+    );
+
+    const run = c.createBackgroundRun('chat-final', 'agent', 'a1');
+    await c.finalizeChatRunSession({
+        chatId: 'chat-final',
+        assistantMsgId: 'a1',
+        outcome: 'completed',
+        startedAt: Date.now() - 500,
+        runIdentity: run,
+    });
+    assert.equal(saved.pendingRequest, null);
+    assert.equal(saved.messages[1].status, 'done');
+    assert.equal(saved.messages[1].runOutcome, 'completed');
+    assert.equal(historyList[0].isPending, false);
+    assert.ok(events.some(e => e.type === 'session-updated' && e.chatId === 'chat-final'));
+
+    // Re-introduce stale orphaned pendingRequest (simulating pre-fix / crashed write)
+    run.end();
+    saved = {
+        messages: [
+            { role: 'user', id: 'u1', content: 'hello' },
+            { role: 'assistant', id: 'a1', parts: [{ type: 'text', content: 'done text' }] },
+        ],
+        pendingRequest: { type: 'chat', message: 'hello', assistantMsgId: 'a1' },
+    };
+    const repaired = await c.repairStalePendingSession('chat-final');
+    assert.equal(repaired.pendingRequest, null);
+    assert.equal(repaired.messages[1].status, 'done');
+});
+
+test('/api/chat and /api/chat/stream/:chatId/stop finalize sessions before releasing runs', () => {
+    const chatRoute = section("app.post('/api/chat',", '// ── Background-run management routes');
+    const stopRoute = section("app.post('/api/chat/stream/:chatId/stop',", '// ── End background-run management routes');
+    assert.match(chatRoute, /finalizeChatRunSession/);
+    assert.match(stopRoute, /finalizeChatRunSession/);
 });

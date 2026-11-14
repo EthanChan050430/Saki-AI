@@ -89,7 +89,7 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
       id: 'sidebar-tools',
       title: getLocalText('侧边栏工具区', 'Sidebar Tooling'),
       summary: getLocalText('这里负责资料、能力、自动化和外部通道，是工作台的工具中枢。', 'This is the tool hub for knowledge, capabilities, automation, and external channels.'),
-      directoryItems: [getLocalText('记忆', 'Memory'), 'Skill', getLocalText('任务', 'Tasks'), getLocalText('文件', 'Files'), getLocalText('第三方', '3rd-party')],
+      directoryItems: [getLocalText('记忆', 'Memory'), getLocalText('扩展中心', 'Extensions'), getLocalText('任务', 'Tasks'), getLocalText('文件', 'Files'), getLocalText('第三方', '3rd-party')],
       icon: Wrench,
       entries: [
         {
@@ -104,15 +104,15 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
           tip: getLocalText('把常用编码规范、项目背景和个人偏好放进去最有价值。', 'It works best for coding rules, project context, and personal preferences you reuse often.'),
         },
         {
-          title: getLocalText('Skill 系统', 'Skill system'),
-          summary: getLocalText('安装、启停和管理扩展技能。', 'Install, enable, and manage extension skills.'),
-          badge: getLocalText('技能', 'Skills'),
+          title: getLocalText('扩展中心（插件 · Skills · MCP）', 'Extension Hub (Plugins · Skills · MCP)'),
+          summary: getLocalText('统一安装插件、管理 Skills 技能并配置 MCP 服务。', 'Install plugins, manage Skills, and configure MCP servers in one unified window.'),
+          badge: getLocalText('扩展', 'Extensions'),
           entryLabel: getLocalText('入口', 'Entry'),
-          entry: getLocalText('左侧 dock 的扳手图标。', 'The wrench icon in the left dock.'),
+          entry: getLocalText('左侧 dock 的方盒图标。', 'The boxes icon in the left dock.'),
           howLabel: getLocalText('如何使用', 'How to use'),
-          how: getLocalText('可以查看已安装 skill，也能从 OpenHub 搜索并安装新能力。', 'Review installed skills locally or search OpenHub for new ones.'),
+          how: getLocalText('在插件市场一键安装集成 MCP 与专属技能的插件，或在 Skills / MCP 标签页独立配置与测试连接。', 'Install bundled MCP + Skill plugins from the marketplace, or configure Skills and MCP servers directly in their dedicated tabs.'),
           tipLabel: getLocalText('建议：', 'Tip:'),
-          tip: getLocalText('安装后先看详情页，确认 skill 的用途与适用范围。', 'After installing, open the detail view to understand the intended use and scope of the skill.'),
+          tip: getLocalText('安装插件或修改 MCP 配置后，可直接查看服务连接状态并在对话里用 `@` 定向调用。', 'Check live connection status right inside the MCP tab, then target capabilities in chat with `@`.'),
         },
         {
           title: getLocalText('托管任务 / 文件管理 / 第三方聊天', 'Hosted tasks / Files / Third-party chats'),
@@ -371,7 +371,7 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="relative overflow-hidden border-b border-[var(--surface-border-subtle)] bg-[linear-gradient(135deg,rgba(255,117,172,0.12),rgba(255,155,200,0.06),rgba(255,255,255,0.96))] px-4 py-2.5 sm:px-5 sm:py-3 shrink-0">
+        <div className="relative overflow-hidden border-b border-[var(--surface-border-subtle)] bg-[linear-gradient(135deg,rgba(255,117,172,0.12),rgba(255,155,200,0.06),rgba(255,255,255,0.96))] px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-5 sm:py-3 shrink-0">
           <div className="absolute inset-y-0 right-0 w-48 bg-[radial-gradient(circle_at_top_right,rgba(255,117,172,0.15),transparent_72%)]" />
           <div className="relative flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -410,7 +410,7 @@ export default function FeatureGuideModal({ isOpen, onClose, onStartOnboarding, 
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="max-h-[38vh] overflow-y-auto border-b border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] md:max-h-none md:w-[270px] md:min-h-0 md:border-b-0 md:border-r">
+          <aside className="max-h-[28dvh] overflow-y-auto border-b border-[var(--surface-border-subtle)] bg-[var(--surface-bg-light)] md:max-h-none md:w-[270px] md:min-h-0 md:border-b-0 md:border-r">
             <div className="space-y-3 p-4 sm:p-5">
               <div className="rounded-[1.3rem] border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)]  p-4 shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
                 <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-[var(--text-tertiary)]">

@@ -26,6 +26,7 @@ class TaskScheduler {
                 if (task.status === 'running' && (!task.claimedAt || task.claimedAt < staleBefore)) {
                     task.status = 'active';
                     task.claimedAt = null;
+                    task.activeSessionId = null;
                     recovered = true;
                 }
             });
@@ -109,6 +110,7 @@ class TaskScheduler {
             task.lastRun = Date.now();
             task.triggerNow = false;
             task.claimedAt = null;
+            task.activeSessionId = null;
             task.status = 'active';
 
             // If time was 'now', convert it to current time so it becomes a regular schedule
@@ -133,11 +135,16 @@ class TaskScheduler {
         }
     }
 
-    async setTaskStatus(id, status) {
+    async setTaskStatus(id, status, activeSessionId = undefined) {
         const task = this.tasks.find(t => t.id === id);
         if (task) {
             task.status = status;
             task.claimedAt = status === 'running' ? Date.now() : null;
+            if (status !== 'running') {
+                task.activeSessionId = null;
+            } else if (activeSessionId !== undefined) {
+                task.activeSessionId = activeSessionId;
+            }
             await this.saveTasks();
         }
     }

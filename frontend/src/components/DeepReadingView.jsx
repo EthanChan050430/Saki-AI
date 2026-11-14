@@ -53,7 +53,7 @@ const Mermaid = ({ chart }) => {
           dangerouslySetInnerHTML={{ __html: svg }}
           className="mermaid-container cursor-zoom-in overflow-hidden rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all hover:border-blue-200 hover:shadow-xl"
         />
-        <div className="pointer-events-none absolute right-4 top-4 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="saki-touch-visible pointer-events-none absolute right-3 top-3 sm:right-4 sm:top-4 opacity-90 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
           <div className="rounded-full bg-blue-600 p-2 text-white shadow-lg">
             <ZoomIn size={16} />
           </div>
@@ -515,7 +515,7 @@ export default function DeepReadingView({ data, isEmbedded = true }) {
     <>
       {baseView}
       {isFocusMode && ReactDOM.createPortal(
-        <div className="fixed inset-0 z-[170] bg-slate-950/55 p-3 backdrop-blur-md md:p-6">
+        <div className="fixed inset-0 z-[170] bg-slate-950/55 p-0 backdrop-blur-md sm:p-3 md:p-6">
           {focusView}
         </div>,
         document.body

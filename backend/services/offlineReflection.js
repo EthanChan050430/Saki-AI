@@ -67,6 +67,17 @@ function normalizeRelativePath(basePath, targetPath) {
     return path.relative(basePath, targetPath).split(path.sep).join('/');
 }
 
+function isSensitiveFile(filePath = '') {
+    const base = path.basename(filePath).toLowerCase();
+    return /((^|[._-])env($|[._-])|(^|[._-])(?:secret|secrets|credentials|password|token|id_rsa)([._-]|$)|\.(?:pem|p12|pfx|key)$)/i.test(base);
+}
+
+function redactSensitiveText(text = '') {
+    return String(text || '')
+        .replace(/([\\"']?(?:api[_-]?key|access[_-]?token|password|secret|client[_-]?secret|authorization)[\\"']?\s*[:=]\s*)(\\"[^\\"]*\\"|'[^']*'|[^\s,}]+)/gi, '$1[REDACTED]')
+        .replace(/\b(?:sk-[a-z0-9_-]{16,}|Bearer\s+[a-z0-9._-]{12,})\b/gi, '[REDACTED]');
+}
+
 function isTextLikeFile(filePath = '') {
     const ext = path.extname(filePath).toLowerCase();
     return TEXT_FILE_EXTENSIONS.has(ext);
@@ -85,7 +96,7 @@ function extractMessageText(message = {}) {
             .join('\n')
         : '';
 
-    return trimToMax(stripMarkdown([content, partText].filter(Boolean).join('\n')), 1200);
+    return trimToMax(redactSensitiveText(stripMarkdown([content, partText].filter(Boolean).join('\n'))), 1200);
 }
 
 function firstUserTitle(messages = []) {
@@ -184,12 +195,12 @@ function parseJsonObject(text = '') {
 
 async function readFileDigest(filePath, workspaceRoot) {
     const stats = await fs.stat(filePath).catch(() => null);
-    if (!stats?.isFile() || stats.size > MAX_FILE_BYTES || !isTextLikeFile(filePath)) {
+    if (!stats?.isFile() || stats.size > MAX_FILE_BYTES || isSensitiveFile(filePath) || !isTextLikeFile(filePath)) {
         return null;
     }
 
     const content = await fs.readFile(filePath, 'utf8').catch(() => '');
-    const excerpt = trimToMax(content, 1800);
+    const excerpt = trimToMax(redactSensitiveText(content), 1800);
     if (!excerpt.trim()) return null;
 
     return {
@@ -215,7 +226,7 @@ async function scanWorkspaceFiles(rootDir, dayRange, result = []) {
         }
 
         const filePath = path.join(rootDir, entry.name);
-        if (!isTextLikeFile(filePath)) continue;
+        if (isSensitiveFile(filePath) || !isTextLikeFile(filePath)) continue;
 
         const stats = await fs.stat(filePath).catch(() => null);
         if (!stats?.isFile()) continue;
@@ -281,29 +292,17 @@ class OfflineReflectionService {
         return normalized;
     }
 
+    localDateKey(date = new Date()) {
+        return toLocalDateKey(date);
+    }
+
     resolveModelSelection(config = {}) {
-        const explicitProvider = String(config.offlineReflectionProvider || '').trim().toLowerCase();
-        const explicitModel = String(config.offlineReflectionModel || '').trim();
-        if ((explicitProvider === 'ollama' || explicitProvider === 'lmstudio') && explicitModel) {
-            return {
-                provider: explicitProvider,
-                model: explicitModel,
-            };
-        }
-
-        const currentProvider = String(config.provider || '').trim().toLowerCase();
-        const currentModel = String(config.model || '').trim();
-        if ((currentProvider === 'ollama' || currentProvider === 'lmstudio') && currentModel) {
-            return {
-                provider: currentProvider,
-                model: currentModel,
-            };
-        }
-
-        return {
-            provider: explicitProvider === 'lmstudio' ? 'lmstudio' : 'ollama',
-            model: explicitModel || currentModel || 'llama3',
-        };
+        // Manual reflection uses the currently configured chat model, including
+        // remote API providers. Legacy offlineReflectionProvider/Model values are
+        // deliberately ignored so stale local-only settings cannot override it.
+        const provider = String(config.provider || '').trim().toLowerCase();
+        const model = String(config.model || '').trim();
+        return provider && model ? { provider, model } : null;
     }
 
     async collectTodaySessions(dayRange) {
@@ -425,7 +424,7 @@ class OfflineReflectionService {
 
         return `
 You are an offline reflection engine for a local AI agent.
-The user is currently offline. Read today's conversations and today's changed files, then distill durable knowledge into structured JSON.
+This is an explicitly requested MANUAL memory review. Analyze the selected day's conversations and changed files and suggest durable facts for human review. Do not assert that proposed items have been saved.
 
 Return exactly one JSON object and nothing else.
 
@@ -440,7 +439,9 @@ JSON schema:
       "evidenceText": "exact quote from a user message (not assistant text)",
       "category": "identity|preference|project|interaction|relationship|general",
       "importance": 0.0,
-      "confidence": 0.0
+      "confidence": 0.0,
+      "factKey": "optional stable key for a changing fact",
+      "factValue": "optional current value"
     }
   ],
   "entities": [
@@ -525,171 +526,13 @@ ${filesText}
         await fs.writeFile(filePath, `${existing.trimEnd()}\n${content}\n`, 'utf8');
     }
 
-    async maybeRun({ config = {}, activeClientCount = 0, lastUserActivityAt = 0, callModel }) {
-        await this.init();
-
-        if (this.running) {
-            return { status: 'busy' };
-        }
-        if (config?.offlineReflectionEnabled !== true) {
-            return { status: 'disabled' };
-        }
-
-        const idleMs = Math.max(0, Date.now() - Number(lastUserActivityAt || 0));
-        const isOffline = Number(activeClientCount || 0) <= 0 && idleMs >= DEFAULT_IDLE_MS;
-        if (!isOffline) {
-            return { status: 'online', idleMs, activeClientCount };
-        }
-
-        const state = await this.loadState();
-        const input = await this.collectDailyInputs(new Date());
-        if (!input.sessionSummaries.length && !input.fileDigests.length) {
-            return { status: 'no-data' };
-        }
-
-        const inputSignature = buildHash({
-            dateKey: input.dateKey,
-            sessions: input.sessionSummaries.map(item => [item.chatId, item.updatedAt, item.transcript]),
-            files: input.fileDigests.map(item => [item.relativePath, item.updatedAt, item.excerpt]),
-        });
-
-        if (state.lastRunDate === input.dateKey && state.lastInputSignature === inputSignature) {
-            return { status: 'unchanged', dateKey: input.dateKey };
-        }
-
-        const selection = this.resolveModelSelection(config);
-        if (!selection?.provider || !selection?.model) {
-            return { status: 'no-model' };
-        }
-
-        this.running = true;
-
-        try {
-            const prompt = this.buildPrompt(input);
-            let parsed = null;
-
-            if (typeof callModel === 'function') {
-                const raw = await callModel({
-                    provider: selection.provider,
-                    model: selection.model,
-                    prompt,
-                    config: {
-                        ...config,
-                        provider: selection.provider,
-                        model: selection.model,
-                        systemPrompt: 'You are a careful local offline reflection engine. Return valid JSON only.',
-                    },
-                });
-                parsed = parseJsonObject(raw);
-            }
-
-            const result = parsed && typeof parsed === 'object'
-                ? {
-                    summary: trimToMax(parsed.summary || '', 280),
-                    memoryCandidates: Array.isArray(parsed.memoryCandidates) ? parsed.memoryCandidates : [],
-                    entities: Array.isArray(parsed.entities) ? parsed.entities : [],
-                    relations: Array.isArray(parsed.relations) ? parsed.relations : [],
-                }
-                : this.buildFallbackResult(input);
-
-            const savedMemories = [];
-            for (const candidate of result.memoryCandidates || []) {
-                if (!candidate?.name || !candidate?.content) continue;
-                const evidenceText = String(candidate.evidenceText || '').trim();
-                const session = input.sessionSummaries.find(item => evidenceText
-                    && (item.userMessages || []).some(text => text.includes(evidenceText)));
-                if (!session) {
-                    console.warn('[OfflineReflection] Rejected memory candidate without a matching user quote');
-                    continue;
-                }
-                if (this.memoryService.isTombstoned(await this.memoryService.loadStore(), candidate)) {
-                    console.warn('[OfflineReflection] Skipped explicitly deleted memory');
-                    continue;
-                }
-                const memory = await this.memoryService.upsertMemory({
-                    name: candidate.name,
-                    summary: candidate.summary || previewText(candidate.content, 180),
-                    content: candidate.content,
-                    category: candidate.category || 'general',
-                    importance: Number(candidate.importance) || 0.62,
-                    confidence: Number(candidate.confidence) || 0.65,
-                    auto: true,
-                    source: 'offline-reflection:memory',
-                    provenance: { chatId: session.chatId, sourceRole: 'user', evidenceText,
-                        observedAt: session.updatedAt, sourceDateKey: input.dateKey },
-                    merge: true,
-                });
-                savedMemories.push(memory);
-            }
-
-            const graphResult = await this.memoryService.recordOfflineReflectionRun({
-                summary: result.summary,
-                provider: selection.provider,
-                model: selection.model,
-                entities: result.entities,
-                relations: result.relations,
-            });
-
-            await this.appendReflectionLog({
-                dateKey: input.dateKey,
-                selection,
-                summary: result.summary,
-                memories: savedMemories,
-                entities: graphResult.entities || [],
-                relations: graphResult.relations || [],
-            });
-
-            state.lastRunAt = nowIso();
-            state.lastRunDate = input.dateKey;
-            state.lastInputSignature = inputSignature;
-            state.lastError = null;
-            state.runs.unshift({
-                id: slugify(`offline-reflection-${input.dateKey}-${Date.now()}`),
-                at: state.lastRunAt,
-                dateKey: input.dateKey,
-                provider: selection.provider,
-                model: selection.model,
-                summary: result.summary,
-                memoryCount: savedMemories.length,
-                entityCount: (graphResult.entities || []).length,
-                relationCount: (graphResult.relations || []).length,
-            });
-            await this.saveState(state);
-
-            this.emitEvent({
-                type: 'offline-reflection-completed',
-                dateKey: input.dateKey,
-                provider: selection.provider,
-                model: selection.model,
-                summary: result.summary,
-                memoryCount: savedMemories.length,
-                entityCount: (graphResult.entities || []).length,
-                relationCount: (graphResult.relations || []).length,
-            });
-
-            return {
-                status: 'completed',
-                dateKey: input.dateKey,
-                summary: result.summary,
-                savedMemories,
-                entities: graphResult.entities || [],
-                relations: graphResult.relations || [],
-            };
-        } catch (error) {
-            state.lastError = error.message || String(error);
-            await this.saveState(state);
-            this.emitEvent({
-                type: 'offline-reflection-failed',
-                error: state.lastError,
-            });
-            return {
-                status: 'failed',
-                error: state.lastError,
-            };
-        } finally {
-            this.running = false;
-        }
+    async maybeRun() {
+        // Disabled: only MemoryReviewService may trigger model review after a
+        // deliberate action in the Memory Manager panel.
+        return { status: 'manual-only' };
     }
+
+
 }
 
 module.exports = {

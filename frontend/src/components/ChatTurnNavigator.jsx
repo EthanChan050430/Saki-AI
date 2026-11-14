@@ -15,8 +15,21 @@ export default function ChatTurnNavigator({
   const [hoveredTurnIndex, setHoveredTurnIndex] = useState(null);
   const [isHovered, setIsHovered] = useState(false);
   const leaveTimerRef = useRef(null);
+  const rootRef = useRef(null);
   const activeItemRef = useRef(null);
   const listContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (!isHovered) return undefined;
+    const handleOutside = (event) => {
+      if (!rootRef.current?.contains(event.target)) {
+        setIsHovered(false);
+        setHoveredTurnIndex(null);
+      }
+    };
+    document.addEventListener('pointerdown', handleOutside);
+    return () => document.removeEventListener('pointerdown', handleOutside);
+  }, [isHovered]);
 
   const turns = useMemo(() => parseTurns(messages), [messages]);
 
@@ -126,23 +139,24 @@ export default function ChatTurnNavigator({
 
   return (
     <div
-      className="hidden sm:flex absolute right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 select-none pointer-events-none"
+      ref={rootRef}
+      className="flex absolute right-1 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 select-none pointer-events-none"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       data-testid="chat-turn-navigator"
     >
       <div className="relative flex items-center justify-end pointer-events-auto">
         <div
-          className={`absolute right-full pr-2.5 top-1/2 -translate-y-1/2 transition-all duration-200 origin-right ${
+          className={`absolute right-full pr-2 sm:pr-2.5 top-1/2 -translate-y-1/2 transition-all duration-200 origin-right ${
             isHovered
               ? 'opacity-100 scale-100 pointer-events-auto translate-x-0'
               : 'opacity-0 scale-95 pointer-events-none translate-x-1.5'
           }`}
         >
-          <div className="w-[300px] sm:w-[340px] max-w-[calc(100vw-5rem)] rounded-2xl bg-white/95 dark:bg-[#181922]/95 backdrop-blur-2xl border border-[#ff75ac]/25 dark:border-white/10 shadow-[0_16px_48px_rgba(255,117,172,0.18)] dark:shadow-[0_20px_56px_rgba(0,0,0,0.55)] p-2">
+          <div className="w-[min(300px,calc(100vw-3.25rem))] sm:w-[340px] sm:max-w-[calc(100vw-5rem)] rounded-2xl bg-white/95 dark:bg-[#181922]/95 backdrop-blur-2xl border border-[#ff75ac]/25 dark:border-white/10 shadow-[0_16px_48px_rgba(255,117,172,0.18)] dark:shadow-[0_20px_56px_rgba(0,0,0,0.55)] p-2">
             <div
               ref={listContainerRef}
-              className="flex flex-col gap-0.5 max-h-[min(480px,70vh)] overflow-y-auto custom-scrollbar pr-0.5"
+              className="flex flex-col gap-0.5 max-h-[min(420px,55dvh)] sm:max-h-[min(480px,70dvh)] overflow-y-auto custom-scrollbar pr-0.5"
             >
               {turns.map((turn, idx) => {
                 const isHoveredItem = hoveredTurnIndex === idx;
@@ -215,7 +229,14 @@ export default function ChatTurnNavigator({
               <button
                 key={turn.msgId}
                 type="button"
-                onClick={() => scrollToTurn(turn)}
+                onClick={() => {
+                  const canHover = typeof window !== 'undefined' && window.matchMedia?.('(hover: hover)').matches;
+                  if (!canHover && !isHovered) {
+                    setIsHovered(true);
+                    return;
+                  }
+                  scrollToTurn(turn);
+                }}
                 onMouseEnter={() => setHoveredTurnIndex(idx)}
                 className="group relative p-1 focus:outline-none flex items-center justify-center cursor-pointer"
                 aria-label={localizeWith(i18n.resolvedLanguage || i18n.language, `跳转到第 ${idx + 1} 轮对话: ${turn.previewText}`, `Jump to conversation turn ${idx + 1}: ${turn.previewText}`)}

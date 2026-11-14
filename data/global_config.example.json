@@ -17,12 +17,9 @@
   "customApiKey": "",
   "customApiBaseUrl": "",
   "showAllEnabledApiModels": false,
-  "searchEngine": "searxng",
-  "searxngUrl": "http://127.0.0.1:8080",
-  "googleApiKey": "",
-  "googleCxId": "",
-  "bingApiKey": "",
   "searchEnabled": false,
+  "searchEngine": "exa",
+  "searxngUrl": "http://127.0.0.1:8080",
   "mcpServices": [],
   "mcpConfig": {
     "mcpServers": {}
@@ -48,6 +45,19 @@
   "sovitsRefAudio": "",
   "sovitsRefText": "",
   "thirdPartyChats": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "allowFrom": []
+    },
+    "feishu": {
+      "enabled": false,
+      "appId": "",
+      "appSecret": "",
+      "verificationToken": "",
+      "botOpenId": "",
+      "allowFrom": []
+    },
     "qqbot": {
       "enabled": false,
       "appId": "",

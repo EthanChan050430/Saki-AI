@@ -19,11 +19,14 @@ async function prepareTurnCheckpoint(service, { chatId, root, history = [] }) {
     return checkpoint;
 }
 
-function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, saveHistory, createSessionSummary, emitRealtimeEvent }) {
+function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, saveHistory, createSessionSummary, emitRealtimeEvent, isChatRunning = null }) {
     return async (req, res) => {
         const { chatId, checkpointId } = req.body || {};
         try {
             validateChatId(chatId);
+            if (typeof isChatRunning === 'function' && isChatRunning(chatId)) {
+                throw Object.assign(new Error('当前对话仍有任务运行，请先停止该对话后再还原检查点。'), { statusCode: 409 });
+            }
             const result = await service.withSession(chatId, async () => {
                 const sessionFile = path.join(sessionsDir, `${chatId}.json`);
                 const original = await fs.readJson(sessionFile);

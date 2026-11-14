@@ -143,16 +143,16 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
 
   return (
     <motion.div
-      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4'}
+      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4'}
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
       <motion.div data-saki-dialog="true"
-        className={windowed ? 'bg-[var(--surface-bg)]  w-full h-full rounded-[28px] shadow-none relative flex flex-col overflow-hidden text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  w-full max-w-4xl h-[80vh] rounded-2xl shadow-2xl relative flex flex-col overflow-hidden text-[var(--text-dark)] '}
+        className={windowed ? 'bg-[var(--surface-bg)]  w-full h-full rounded-[28px] shadow-none relative flex flex-col overflow-hidden text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  w-full max-w-4xl h-full sm:h-[80vh] rounded-none sm:rounded-2xl shadow-2xl relative flex flex-col overflow-hidden text-[var(--text-dark)] '}
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
+        <div className="px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-saki-pink flex items-center justify-center text-white shadow-sm shrink-0">
               <FileIcon size={16} />
@@ -210,8 +210,8 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
             </div>
           ) : (
             <>
-              <div className="px-4 py-2.5 bg-[var(--surface-bg)] sticky top-0 z-10 flex items-center gap-3 border-b shrink-0">
-                <div className="flex bg-[var(--surface-bg-light)] p-0.5 rounded-xl">
+              <div className="px-3 sm:px-4 py-2.5 bg-[var(--surface-bg)] sticky top-0 z-10 flex flex-wrap items-center gap-2 sm:gap-3 border-b shrink-0">
+                <div className="flex bg-[var(--surface-bg-light)] p-0.5 rounded-xl shrink-0">
                   <button
                     onClick={() => setView('files')}
                     className={`px-3 py-1 rounded-lg text-xs sm:text-sm transition-all ${view === 'files' ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac] font-medium' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
@@ -229,19 +229,19 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
                 {view === 'files' && currentPath && (
                   <button 
                     onClick={handleGoUp}
-                    className="flex items-center gap-1 px-2.5 py-1 bg-[var(--surface-bg-light)] hover:bg-[var(--surface-inset)] text-[var(--text-secondary)] rounded-lg text-xs sm:text-sm transition-colors"
+                    className="flex items-center gap-1 px-2.5 py-1 bg-[var(--surface-bg-light)] hover:bg-[var(--surface-inset)] text-[var(--text-secondary)] rounded-lg text-xs sm:text-sm transition-colors shrink-0"
                   >
                     <CornerLeftUp size={15} />
                     {t('go_up')}
                   </button>
                 )}
 
-                <div className="relative flex-1">
+                <div className="relative flex-1 min-w-[10rem]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" size={16} />
                   <input 
                     type="text" 
                     placeholder={view === 'files' ? (currentPath ? `/${currentPath}` : t('search_file_placeholder')) : t('search_trash_placeholder')}
-                    className="w-full pl-9 pr-4 py-1.5 bg-[var(--surface-bg-light)] rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#ff75ac]/20 transition-all border border-transparent"
+                    className="w-full pl-9 pr-4 py-1.5 bg-[var(--surface-bg-light)] rounded-xl text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#ff75ac]/20 transition-all border border-transparent"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
@@ -291,7 +291,7 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
                                 {t('select')}
                               </button>
                             )}
-                            <div className={`flex items-center gap-1 ${onSelect ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                            <div className="saki-touch-visible flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                               {file.isDirectory ? (
                                 <button onClick={() => handleOpenFolder(file.path)} className="p-1.5 hover:bg-amber-100 text-amber-500 rounded-lg transition-colors" title={t('open')}>
                                   <ChevronRight size={16} />
@@ -318,15 +318,15 @@ export default function FileManagerModal({ isOpen, onClose, onSelect, windowed =
                       ))
                     ) : (
                       trashItems.filter(i => i.name.toLowerCase().includes(searchQuery.toLowerCase())).map(item => (
-                        <div key={item.trashId} className="group p-4 bg-[var(--surface-bg)] border border-[var(--surface-border-subtle)] rounded-2xl hover:border-red-200 hover:shadow-md transition-all flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center text-red-400">
+                        <div key={item.trashId} className="group p-3.5 sm:p-4 bg-[var(--surface-bg)] border border-[var(--surface-border-subtle)] rounded-2xl hover:border-red-200 hover:shadow-md transition-all flex flex-wrap sm:flex-nowrap items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center text-red-400 shrink-0">
                             <Trash2 size={20} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-[var(--text-dark)] truncate">{item.name}</p>
                             <p className="text-[10px] text-[var(--text-tertiary)]">{item.size} • {new Date(item.deletedAt).toLocaleString()}</p>
                           </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="saki-touch-visible flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity ml-auto">
                             <button 
                               onClick={() => handleRestore(item.trashId)} 
                               className="p-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-1 text-[10px] font-bold px-2"

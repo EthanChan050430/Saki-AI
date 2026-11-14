@@ -99,22 +99,28 @@ describe('memory fact admission and replacement', () => {
         assert.equal(calls.length, 1);
     });
 
-    it('admits offline memories only with quotes from actual user messages', async t => {
+    it('requires human review of offline evidence before storing memories', async t => {
         const service = await temporaryMemory(t);
         const { OfflineReflectionService } = require('../services/offlineReflection');
+        const { MemoryReviewService } = require('../services/memoryReview');
         const reflection = new OfflineReflectionService({ dataDir: service.dataDir,
             workspaceRoot: service.workspaceDir, sessionsDir: service.dataDir, memoryService: service });
         reflection.collectDailyInputs = async () => ({ dateKey: '2026-01-01', fileDigests: [],
             sessionSummaries: [{ chatId: 'a', updatedAt: new Date().toISOString(),
                 transcript: 'User: Tea please\nAssistant: Coffee please', userMessages: ['Tea please'] }] });
-        const result = await reflection.maybeRun({ config: { offlineReflectionEnabled: true },
+        const review = new MemoryReviewService({ dataDir: service.dataDir,
+            reflectionService: reflection, memoryService: service });
+        const draft = await review.generate({ dateKey: '2026-01-01',
+            config: { provider: 'openai', model: 'test-model' },
             callModel: async () => JSON.stringify({ memoryCandidates: [
                 { name: 'Tea', content: 'Tea preference', evidenceText: 'Tea please' },
                 { name: 'Coffee', content: 'Coffee preference', evidenceText: 'Coffee please' },
             ] }) });
-        assert.equal(result.status, 'completed');
-        assert.equal(result.savedMemories.length, 1);
-        assert.equal(result.savedMemories[0].provenance.evidenceText, 'Tea please');
+        assert.equal(draft.memoryCandidates.length, 1);
+        assert.equal((await service.loadStore()).memories.length, 0);
+        await review.commit(draft.id);
+        assert.equal((await service.loadStore()).memories.length, 1);
+        assert.equal((await service.loadStore()).memories[0].provenance.evidenceText, 'Tea please');
     });
     it('replaces the current summary and retains the previous version across reloads', async t => {
         const service = await temporaryMemory(t);

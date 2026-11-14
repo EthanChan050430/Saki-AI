@@ -81,7 +81,7 @@ const Mermaid = ({ chart }) => {
           className="mermaid-container w-full overflow-x-auto bg-white p-6 rounded-2xl border border-gray-100 shadow-sm hover:shadow-xl hover:border-blue-200 transition-all cursor-zoom-in flex justify-center active:scale-[0.99]"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
-        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-all transform scale-90 group-hover:scale-100 pointer-events-none">
+        <div className="saki-touch-visible pointer-events-none absolute right-3 top-3 sm:right-4 sm:top-4 opacity-90 md:opacity-0 md:group-hover:opacity-100 transition-all transform md:scale-90 md:group-hover:scale-100">
           <div className="bg-blue-600 text-white p-2 rounded-xl shadow-lg flex items-center gap-2">
             <ZoomIn size={14} />
             <span className="text-[10px] font-bold pr-1">{t('click_to_enlarge')}</span>

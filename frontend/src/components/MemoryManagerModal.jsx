@@ -6,6 +6,7 @@ import axios from 'axios';
 import { BACKEND_URL } from '../utils/backendUrl';
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 import { localizeWith } from '../utils/localize';
+import MemoryReviewPanel from './MemoryReviewPanel';
 
 const CATEGORY_JA = {
   project: 'プロジェクト',
@@ -27,6 +28,7 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
   const [editData, setEditData] = useState({ name: '', content: '' });
   const [showHistorySelector, setShowHistorySelector] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [reviewMode, setReviewMode] = useState(false);
 
   const fetchMemories = async () => {
     try {
@@ -131,16 +133,16 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
 
   return (
     <motion.div
-      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-md p-4'}
+      className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4'}
       {...(!windowed ? modalBackdropMotion : {})}
       onClick={!windowed ? onClose : undefined}
     >
       <motion.div data-saki-dialog="true"
-        className={windowed ? 'bg-[var(--surface-bg)]  rounded-[28px] w-full h-full shadow-none overflow-hidden flex flex-col text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh] text-[var(--text-dark)] '}
+        className={windowed ? 'bg-[var(--surface-bg)]  rounded-[28px] w-full h-full shadow-none overflow-hidden flex flex-col text-[var(--text-dark)] ' : 'bg-[var(--surface-bg)]  rounded-none sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-[80vh] text-[var(--text-dark)] '}
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="px-4 py-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
+        <div className="px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-saki-pink/15 flex items-center justify-center text-[var(--accent-text)] shrink-0">
               <Brain size={17} />
@@ -157,22 +159,22 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
 
         <div className="flex-1 overflow-hidden flex">
           {isEditing ? (
-            <div className="flex-1 flex flex-col p-6 space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
+            <div className="flex-1 flex flex-col p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-4 animate-in fade-in slide-in-from-right-4 duration-300 overflow-y-auto">
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3 sm:gap-4">
+                <div className="flex-1 min-w-0">
                   <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-1.5">{t('memory_name')}</label>
                   <input 
                     type="text"
-                    className="w-full border-2 border-[var(--surface-border-subtle)] rounded-xl px-4 py-2.5 text-sm focus:border-saki-pink focus:ring-0 outline-none transition-all"
+                    className="w-full border-2 border-[var(--surface-border-subtle)] rounded-xl px-4 py-2.5 text-base sm:text-sm focus:border-saki-pink focus:ring-0 outline-none transition-all"
                     placeholder="例如: 饮食偏好, 工作习惯..."
                     value={editData.name}
                     onChange={(e) => setEditData({...editData, name: e.target.value})}
                   />
                 </div>
-                <div className="pt-5">
+                <div className="shrink-0">
                    <button 
                      onClick={() => setShowHistorySelector(true)}
-                     className="flex items-center gap-2 px-4 py-2.5 bg-saki-pink/10 text-[var(--accent-text)] rounded-xl text-sm font-bold hover:bg-saki-pink/15 transition-all active:scale-95"
+                     className="flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2.5 bg-saki-pink/10 text-[var(--accent-text)] rounded-xl text-sm font-bold hover:bg-saki-pink/15 transition-all active:scale-95"
                    >
                      <History size={16} />
                      {t('save_from_history')}
@@ -180,10 +182,10 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                 </div>
               </div>
 
-              <div className="flex-1 flex flex-col">
+              <div className="flex-1 flex flex-col min-h-[12rem]">
                 <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-1.5">{t('memory_content')}</label>
                 <textarea 
-                  className="flex-1 w-full border-2 border-[var(--surface-border-subtle)] rounded-2xl px-4 py-3 text-sm focus:border-saki-pink focus:ring-0 outline-none transition-all resize-none font-medium custom-scrollbar"
+                  className="flex-1 w-full border-2 border-[var(--surface-border-subtle)] rounded-2xl px-4 py-3 text-base sm:text-sm focus:border-saki-pink focus:ring-0 outline-none transition-all resize-none font-medium custom-scrollbar"
                   placeholder="在此输入需要 Agent 长期记住的内容..."
                   value={editData.content}
                   onChange={(e) => setEditData({...editData, content: e.target.value})}
@@ -208,13 +210,27 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-               <div className="px-4 py-2.5 bg-[var(--surface-bg)] border-b flex items-center justify-between gap-3 shrink-0">
-                  <div className="relative flex-1">
+              <div className="px-4 pt-3 flex gap-2 border-b border-[var(--surface-border-subtle)] overflow-x-auto no-scrollbar shrink-0">
+                <button type="button" onClick={() => setReviewMode(false)}
+                  className={`px-3 py-2 text-xs font-bold whitespace-nowrap rounded-t-lg ${!reviewMode ? 'bg-saki-pink/10 text-[var(--accent-text)] border-b-2 border-saki-pink' : 'text-[var(--text-secondary)]'}`}>
+                  {getLocalText('记忆列表', 'Saved memories', '保存済みの記憶')}
+                </button>
+                <button type="button" onClick={() => setReviewMode(true)}
+                  className={`px-3 py-2 text-xs font-bold whitespace-nowrap rounded-t-lg ${reviewMode ? 'bg-saki-pink/10 text-[var(--accent-text)] border-b-2 border-saki-pink' : 'text-[var(--text-secondary)]'}`}>
+                  {getLocalText('手动整理与校正', 'Review & correct', '手動整理と修正')}
+                </button>
+              </div>
+              {reviewMode ? (
+                <MemoryReviewPanel onMemoriesChanged={fetchMemories} language={i18n.resolvedLanguage || i18n.language} />
+              ) : (
+                <>
+               <div className="px-4 py-2.5 bg-[var(--surface-bg)] border-b flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 sm:gap-3 shrink-0">
+                  <div className="relative flex-1 min-w-[10rem]">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" size={16} />
                     <input 
                       type="text" 
                       placeholder={t('search_file_placeholder')}
-                      className="w-full pl-9 pr-4 py-1.5 bg-[var(--surface-bg-light)] rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-saki-pink/20 transition-all"
+                      className="w-full pl-9 pr-4 py-1.5 bg-[var(--surface-bg-light)] rounded-xl text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-saki-pink/20 transition-all"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
@@ -228,9 +244,9 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                   </button>
                </div>
 
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+               <div className="flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3 custom-scrollbar">
                   {systemMeta && (
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3">
                       <div className="rounded-2xl border border-saki-pink/15 bg-saki-pink/10 px-4 py-3">
                         <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--accent-text)]">{getLocalText('长期记忆', 'Long-Term', '長期記憶')}</div>
                         <div className="mt-1 text-2xl font-bold text-[var(--text-dark)]">{systemMeta.longTermCount ?? 0}</div>
@@ -300,7 +316,7 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                           </div>
                           <div className="pt-2 flex items-center justify-between border-t border-[var(--surface-border-subtle)]">
                              <span className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-tighter">{memory.size}</span>
-                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                             <div className="saki-touch-visible flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                                 <button onClick={() => handleEdit(memory)} className="p-1.5 hover:bg-saki-pink/10 text-[var(--accent-text)] rounded-lg transition-colors">
                                   <Edit2 size={16} />
                                 </button>
@@ -314,6 +330,8 @@ export default function MemoryManagerModal({ isOpen, onClose, chatHistory, windo
                     </div>
                   )}
                </div>
+                </>
+              )}
             </div>
           )}
         </div>

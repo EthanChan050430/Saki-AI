@@ -189,7 +189,7 @@ export default function OnboardingTour({
             <div className="absolute inset-0 bg-slate-950/78" />
           )}
 
-          <div className="absolute right-4 top-4 sm:right-6 sm:top-6">
+          <div className="absolute right-4 top-[calc(1rem+env(safe-area-inset-top))] sm:right-6 sm:top-6">
             <button
               type="button"
               onClick={onSkip}

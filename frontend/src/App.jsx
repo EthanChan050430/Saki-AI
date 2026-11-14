@@ -8,21 +8,29 @@ const OnboardingTour = React.lazy(() => import('./components/OnboardingTour'));
 const ThirdPartyChatModal = React.lazy(() => import('./components/ThirdPartyChatModal'));
 const FileManagerModal = React.lazy(() => import('./components/FileManagerModal'));
 const MemoryManagerModal = React.lazy(() => import('./components/MemoryManagerModal'));
-const SkillManagerModal = React.lazy(() => import('./components/SkillManagerModal'));
-const PluginMarketplaceModal = React.lazy(() => import('./components/PluginMarketplaceModal'));
+const ExtensionHubModal = React.lazy(() => import('./components/ExtensionHubModal'));
 const HostedTasksModal = React.lazy(() => import('./components/HostedTasksModal'));
 const CharacterView = React.lazy(() => import('./components/CharacterView'));
 const CherryBlossoms = React.lazy(() => import('./components/CherryBlossoms'));
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes } from 'lucide-react';
+import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes, Server } from 'lucide-react';
 import { BACKEND_URL } from './utils/backendUrl';
 import { applyTextStreamEvent } from './utils/streamText';
-import { mergeModelCatalog, startModelRefresh } from './utils/modelRefresh';
+import {
+  applyProviderModelUpdates,
+  decorateModel,
+  dedupeModels,
+  mapCatalogModels,
+  mergeModelCatalog,
+  normalizeCopilotModelName,
+  startModelRefresh,
+} from './utils/modelRefresh';
 import {
   API_CHAT_PROVIDER_IDS,
   API_PROVIDER_DEFAULTS,
+  CHAT_PROVIDER_OPTIONS,
   getProviderApiKey,
   getProviderBaseUrl,
   migrateApiProviderConfig,
@@ -35,7 +43,17 @@ import { createStreamUpdateScheduler } from './utils/sseStream';
 import { calculateContextStatusFromMessages } from './utils/contextUsage';
 import { localize, localizeWith } from './utils/localize';
 import { QUEUE_STORAGE_KEY, restoreQueues, createChatQueueStore, mergeSteeringEvent, canAdvanceQueue } from './utils/chatQueue';
-import { createEpochGuard, loadChatSnapshot, readCachedConfig, cacheConfig, persistConfig, getDispatchConfig, applyStreamingActions } from './utils/chatRuntime.js';
+import {
+  createEpochGuard,
+  loadChatSnapshot,
+  readCachedConfig,
+  cacheConfig,
+  persistConfig,
+  getDispatchConfig,
+  applyStreamingActions,
+  sanitizeLoadedPendingRequest,
+  reconcileCompletedBackgroundSnapshot,
+} from './utils/chatRuntime.js';
 const CONFIG_CACHE = {
   getItem: key => localStorage.getItem(key),
   setItem: (key, value) => localStorage.setItem(key, value),
@@ -215,83 +233,6 @@ function getDesktopUtilityWindowLayout(count) {
   return DESKTOP_UTILITY_WINDOW_LAYOUTS[normalizedCount] || DESKTOP_UTILITY_WINDOW_LAYOUTS[UTILITY_WINDOW_LIMIT];
 }
 
-function normalizeCopilotModelName(name = '') {
-  if (!name) return name;
-  return name.includes('/') ? name.split('/').slice(1).join('/') : name;
-}
-
-function dedupeModels(items = []) {
-  const seen = new Set();
-  return items.filter(item => {
-    const key = `${item.provider}:${item.name}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function isVisionCapableFromCapabilities(capabilities = {}) {
-  const raw = JSON.stringify(capabilities || {}).toLowerCase();
-  if (!raw || raw === '{}') return false;
-  return [
-    'vision',
-    'image',
-    'multimodal',
-    'multi-modal',
-    'input_image',
-    'image_input',
-    'modalities',
-    'vision_preview',
-  ].some(keyword => raw.includes(keyword));
-}
-
-function inferVisionSupportFromName(model = {}) {
-  const text = `${model.provider || ''} ${model.name || ''} ${model.label || ''}`.toLowerCase();
-  return [
-    'vision',
-    'vl',
-    '4o',
-    'gemini',
-    'llava',
-    'bakllava',
-    'minicpm-v',
-    'minicpmv',
-    'qwen-vl',
-    'qwen2-vl',
-    'qwen2.5-vl',
-    'qwen2.5vl',
-    'internvl',
-    'moondream',
-    'pixtral',
-  ].some(keyword => text.includes(keyword));
-}
-
-function decorateModel(model = {}) {
-  const supportsVision = Boolean(model.supportsVision)
-    || isVisionCapableFromCapabilities(model.capabilities)
-    || inferVisionSupportFromName(model);
-
-  return {
-    ...model,
-    supportsVision,
-  };
-}
-
-function mapCatalogModels(items = [], provider = '') {
-  return (Array.isArray(items) ? items : []).map(item => {
-    if (typeof item === 'string') {
-      return decorateModel({ name: item, label: item, provider });
-    }
-    return decorateModel({
-      name: item.name || item.id,
-      label: item.label || item.name || item.id,
-      provider,
-      capabilities: item.capabilities || {},
-      supportsVision: item.supportsVision,
-    });
-  }).filter(model => model.name);
-}
-
 function getConfiguredApiProvidersForModels(config = {}) {
   return API_CHAT_PROVIDER_IDS.filter(provider => {
     return isChatProviderEnabled(config, provider) && (config.provider === provider || config.showAllEnabledApiModels);
@@ -375,29 +316,36 @@ function normalizeTaskTodoPayload(payload = {}, previousTodo = null) {
   };
 }
 
+function extractLastExpressionTag(text) {
+  if (!text) return null;
+  const expressionMatches = [...String(text).matchAll(/\[expression[:=]\s*([\w.-]+)\s*\]/gi)];
+  if (!expressionMatches.length) return null;
+  return expressionMatches[expressionMatches.length - 1][1]?.trim() || null;
+}
+
 function applyStreamDeltaToMessage(m, data, options = {}, onExpressionChange) {
   let parts = [...(m.parts || [])];
   if (data.reasoning) {
     const lastIndex = parts.length - 1;
+    let updatedReasoning = data.reasoning;
     if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
-      const updatedContent = parts[lastIndex].content + data.reasoning;
-      parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+      updatedReasoning = parts[lastIndex].content + data.reasoning;
+      parts[lastIndex] = { ...parts[lastIndex], content: updatedReasoning };
     } else {
       parts.push({ type: 'reasoning', content: data.reasoning });
+    }
+    if (!options.useWeb && onExpressionChange) {
+      const fileName = extractLastExpressionTag(updatedReasoning);
+      if (fileName) onExpressionChange(fileName);
     }
   }
   if (data.text || data.textReplacement) {
     parts = applyTextStreamEvent(parts, data);
     const newContent = parts.at(-1)?.type === 'text' ? parts.at(-1).content : '';
     if (!options.useWeb && onExpressionChange) {
-      const expressionRegex = /\[expression[:=]\s*([\w.-]+)\s*\]/g;
-      const expressionMatches = [...newContent.matchAll(expressionRegex)];
-      if (expressionMatches.length > 0) {
-        const lastMatch = expressionMatches[expressionMatches.length - 1];
-        const fileName = lastMatch[1]?.trim();
-        if (fileName) {
-          onExpressionChange(fileName);
-        }
+      const fileName = extractLastExpressionTag(newContent);
+      if (fileName) {
+        onExpressionChange(fileName);
       }
     }
   }
@@ -417,7 +365,13 @@ function applyStreamDeltaToMessage(m, data, options = {}, onExpressionChange) {
     ? upsertGeneratedFile(m.generatedFiles, data.generatedFile)
     : (m.generatedFiles || []);
   const newStreamingActions = data.action ? [] : (m.streamingActions || []);
-  return { ...m, parts, generatedFiles, streamingActions: newStreamingActions };
+  return {
+    ...m,
+    parts,
+    generatedFiles,
+    streamingActions: newStreamingActions,
+    ...(data.pptEntryRef ? { pptEntryRef: data.pptEntryRef } : {}),
+  };
 }
 
 function applyTodoUpdateToAssistantMessage(message, todoPayload) {
@@ -664,14 +618,16 @@ function App() {
   const [isStoryGlassOverlayOpen, setIsStoryGlassOverlayOpen] = useState(false);
 
   const [models, setModels] = useState([decorateModel({ name: 'llama3', label: 'llama3', provider: 'ollama' })]);
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
   const [isSidebarOpen, setSidebarOpen] = useState(!isMobileViewportWidth());
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [isFeatureGuideOpen, setIsFeatureGuideOpen] = useState(false);
   const [isThirdPartyChatModalOpen, setIsThirdPartyChatModalOpen] = useState(false);
   const [isFileManagerOpen, setIsFileManagerOpen] = useState(false);
   const [isMemoryManagerOpen, setIsMemoryManagerOpen] = useState(false);
-  const [isSkillManagerOpen, setIsSkillManagerOpen] = useState(false);
-  const [isPluginMarketplaceOpen, setIsPluginMarketplaceOpen] = useState(false);
+  const [isExtensionHubOpen, setIsExtensionHubOpen] = useState(false);
+  const [extensionHubTab, setExtensionHubTab] = useState('marketplace');
   const [isHostedTasksOpen, setIsHostedTasksOpen] = useState(false);
   const [desktopUtilityWindows, setDesktopUtilityWindows] = useState([]);
   const [fileManagerMode, setFileManagerMode] = useState('manage');
@@ -679,19 +635,83 @@ function App() {
   const [isCharacterViewOpen, setCharacterViewOpen] = useState(false);
   const [currentExpression, setCurrentExpression] = useState('normal.png');
   const [animationTrigger, setAnimationTrigger] = useState(null);
+  const [dockHostEl, setDockHostEl] = useState(null);
+  const handleDockHostMount = useCallback((el) => {
+    setDockHostEl(el);
+  }, []);
+  const handleDockHostUnmount = useCallback((el) => {
+    setDockHostEl((prev) => (prev === el ? null : prev));
+  }, []);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const [musicPlaylist, setMusicPlaylist] = useState([]);
+  const [currentMusicIndex, setCurrentMusicIndex] = useState(0);
   const musicRef = useRef(null);
+  const musicObjectUrlsRef = useRef([]);
+  const musicPlaylistRef = useRef(musicPlaylist);
+  musicPlaylistRef.current = musicPlaylist;
   const getMusicAudio = useCallback(() => {
     if (!musicRef.current) {
-      const audio = new Audio('/assets/HiSchool.mp3');
-      audio.onerror = () => {
-        if (audio.src && audio.src.endsWith('.mp3')) {
-          audio.src = '/assets/HiSchool.wav';
-        }
-      };
+      const audio = new Audio();
+      audio.addEventListener('ended', () => {
+        const length = musicPlaylistRef.current.length;
+        setCurrentMusicIndex(index => length ? (index + 1) % length : 0);
+      });
       musicRef.current = audio;
     }
     return musicRef.current;
+  }, []);
+
+  useEffect(() => () => {
+    musicRef.current?.pause();
+    musicObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+  }, []);
+
+  useEffect(() => {
+    const audio = getMusicAudio();
+    const track = musicPlaylist[currentMusicIndex];
+    if (!track) {
+      audio.pause();
+      audio.removeAttribute('src');
+      return;
+    }
+    if (audio.src !== track.url) audio.src = track.url;
+    audio.loop = musicPlaylist.length <= 1;
+    if (isMusicPlaying) {
+      audio.play().catch(error => {
+        if (error.name === 'AbortError') return;
+        console.error('Audio play failed:', error);
+        setIsMusicPlaying(false);
+      });
+    } else {
+      audio.pause();
+    }
+  }, [currentMusicIndex, musicPlaylist, isMusicPlaying, getMusicAudio]);
+
+  const uploadMusic = useCallback((files) => {
+    const nextTracks = Array.from(files || []).filter(file => file.type.startsWith('audio/')).map(file => ({
+      id: `${file.name}-${file.lastModified}-${Math.random()}`,
+      name: file.name,
+      url: URL.createObjectURL(file),
+    }));
+    musicObjectUrlsRef.current.push(...nextTracks.map(track => track.url));
+    if (nextTracks.length) setMusicPlaylist(previous => [...previous, ...nextTracks]);
+  }, []);
+
+  const removeMusic = useCallback((index) => {
+    setMusicPlaylist(previous => {
+      const removed = previous[index];
+      if (removed) {
+        URL.revokeObjectURL(removed.url);
+        musicObjectUrlsRef.current = musicObjectUrlsRef.current.filter(url => url !== removed.url);
+      }
+      const next = previous.filter((_, itemIndex) => itemIndex !== index);
+      setCurrentMusicIndex(current => next.length ? Math.min(current > index ? current - 1 : current, next.length - 1) : 0);
+      if (!next.length) {
+        musicRef.current?.pause();
+        setIsMusicPlaying(false);
+      }
+      return next;
+    });
   }, []);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const chatContainerRef = useRef(null);
@@ -711,8 +731,7 @@ function App() {
     setIsThirdPartyChatModalOpen(false);
     setIsFileManagerOpen(false);
     setIsMemoryManagerOpen(false);
-    setIsSkillManagerOpen(false);
-    setIsPluginMarketplaceOpen(false);
+    setIsExtensionHubOpen(false);
     setIsHostedTasksOpen(false);
   };
 
@@ -800,22 +819,14 @@ function App() {
     setIsMemoryManagerOpen(true);
   };
 
-  const openSkillManagerModal = () => {
+  const openExtensionHubModal = (tab = 'marketplace') => {
+    setExtensionHubTab(tab);
     if (useDesktopUtilityWindows) {
-      openDesktopUtilityWindow('skill');
+      openDesktopUtilityWindow('extensions');
       return;
     }
     closePrimaryModals();
-    setIsSkillManagerOpen(true);
-  };
-
-  const openPluginMarketplaceModal = () => {
-    if (useDesktopUtilityWindows) {
-      openDesktopUtilityWindow('plugins');
-      return;
-    }
-    closePrimaryModals();
-    setIsPluginMarketplaceOpen(true);
+    setIsExtensionHubOpen(true);
   };
 
   const openHostedTasksModal = () => {
@@ -903,34 +914,19 @@ function App() {
     setIsMemoryManagerOpen(true);
   };
 
-  const toggleSkillManagerModal = () => {
+  const toggleExtensionHubModal = () => {
     if (useDesktopUtilityWindows) {
-      toggleDesktopUtilityWindow('skill');
+      toggleDesktopUtilityWindow('extensions');
       return;
     }
 
-    if (isSkillManagerOpen) {
-      setIsSkillManagerOpen(false);
+    if (isExtensionHubOpen) {
+      setIsExtensionHubOpen(false);
       return;
     }
 
     closePrimaryModals();
-    setIsSkillManagerOpen(true);
-  };
-
-  const togglePluginMarketplaceModal = () => {
-    if (useDesktopUtilityWindows) {
-      toggleDesktopUtilityWindow('plugins');
-      return;
-    }
-
-    if (isPluginMarketplaceOpen) {
-      setIsPluginMarketplaceOpen(false);
-      return;
-    }
-
-    closePrimaryModals();
-    setIsPluginMarketplaceOpen(true);
+    setIsExtensionHubOpen(true);
   };
 
   const toggleHostedTasksModal = () => {
@@ -979,21 +975,22 @@ function App() {
   };
 
   const toggleMusicMode = () => {
-    const audio = getMusicAudio();
+    if (!musicPlaylist.length) return;
     if (isMusicPlaying) {
-      if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
-      }
       setAnimationTrigger({ type: 'stop', timestamp: Date.now() });
       setIsMusicPlaying(false);
     } else {
-      if (audio) {
-        audio.loop = true;
-        audio.play().catch(err => console.error("Audio play failed:", err));
-      }
       setAnimationTrigger({ type: 'dance', loop: true, timestamp: Date.now() });
       setIsMusicPlaying(true);
+    }
+  };
+
+  const selectMusic = (index) => {
+    if (!musicPlaylist[index]) return;
+    setCurrentMusicIndex(index);
+    if (!isMusicPlaying) {
+      setIsMusicPlaying(true);
+      setAnimationTrigger({ type: 'dance', loop: true, timestamp: Date.now() });
     }
   };
 
@@ -1016,25 +1013,6 @@ function App() {
     }
   }, [isGenerating, isMusicPlaying]);
 
-  useEffect(() => {
-    if (isMusicPlaying && messages.length > 0 && !isGenerating) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg.role === 'assistant') {
-        const textToSpeak = lastMsg.parts
-          .filter(p => p.type === 'text')
-          .map(p => p.content.replace(/\[expression[:=].*?\.png\]/g, '').replace(/```[\s\S]*?```/g, '').trim())
-          .join(' ')
-          .trim();
-
-        if (textToSpeak) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(textToSpeak);
-          window.speechSynthesis.speak(utterance);
-        }
-      }
-    }
-  }, [messages, isMusicPlaying, isGenerating]);
-
   const [config, setConfig] = useState(() => {
     const saved = readCachedConfig(CONFIG_CACHE);
     const defaultConfig = {
@@ -1044,16 +1022,14 @@ function App() {
       apiKey: '',
       apiBaseUrl: '',
       ...API_PROVIDER_DEFAULTS,
-      searchEngine: 'searxng',
-      searxngUrl: 'http://127.0.0.1:8080',
-      googleApiKey: '',
-      googleCxId: '',
-      bingApiKey: '',
       searchEnabled: false,
+      searchEngine: 'exa',
+      searxngUrl: 'http://127.0.0.1:8080',
       mcpServices: [],
       drawingModel: '',
       drawingProvider: '',
       musicEnabled: true,
+      autoTtsEnabled: true,
       offlineReflectionEnabled: false,
       offlineReflectionProvider: 'ollama',
       offlineReflectionModel: '',
@@ -1083,6 +1059,10 @@ function App() {
       }
       if (parsed.musicEnabled === undefined) {
         parsed.musicEnabled = defaultConfig.musicEnabled;
+        migrated = true;
+      }
+      if (parsed.autoTtsEnabled === undefined) {
+        parsed.autoTtsEnabled = defaultConfig.autoTtsEnabled;
         migrated = true;
       }
       if (parsed.offlineReflectionEnabled === undefined) {
@@ -1120,6 +1100,7 @@ function App() {
     }
     return defaultConfig;
   });
+
   const configRef = useRef(config);
   configRef.current = config;
 
@@ -1416,6 +1397,7 @@ function App() {
             .filter(model => isChatProviderEnabled(config, model.provider))
             .map(decorateModel)
         );
+        modelsRef.current = cachedModels;
         setModels(cachedModels);
       } catch (e) {}
     }
@@ -1499,15 +1481,18 @@ function App() {
       }
 
       combinedModels = ensureCurrentModelInCatalog(
-        dedupeModels(mergeModelCatalog(combinedModels, cachedModels, refreshedProviders)),
+        dedupeModels(mergeModelCatalog(combinedModels, modelsRef.current, refreshedProviders)),
         config
       );
 
       if (isCancelled) return;
       cachedModels = combinedModels;
+      modelsRef.current = combinedModels;
 
       setModels(combinedModels);
-      localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(combinedModels));
+      try {
+        localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(combinedModels));
+      } catch (e) {}
 
       if (combinedModels.length > 0) {
         const isCurrentModelDrawing = config.drawingModel === config.model && config.drawingProvider === config.provider;
@@ -1568,6 +1553,74 @@ function App() {
     config.drawingProvider
   ]);
 
+  const handleUpdateProviderModels = useCallback((updatesByProvider = {}, { enableProviders = [] } = {}) => {
+    const currentConfig = configRef.current || {};
+    const providersToEnable = Array.isArray(enableProviders) ? enableProviders.filter(Boolean) : [];
+    const nextProviderEnabled = providersToEnable.length > 0
+      ? {
+          ...Object.fromEntries(CHAT_PROVIDER_OPTIONS.map(({ id }) => [id, isChatProviderEnabled(currentConfig, id)])),
+          ...Object.fromEntries(providersToEnable.map(id => [id, true])),
+        }
+      : currentConfig.providerEnabled;
+
+    const nextConfigPreview = {
+      ...currentConfig,
+      ...(nextProviderEnabled ? { providerEnabled: nextProviderEnabled } : {}),
+    };
+
+    const merged = applyProviderModelUpdates(modelsRef.current, updatesByProvider);
+    const activeProvider = nextConfigPreview.provider;
+    const activeProviderFresh = updatesByProvider?.[activeProvider]
+      ? mapCatalogModels(updatesByProvider[activeProvider], activeProvider)
+      : null;
+
+    let nextModel = nextConfigPreview.model;
+    if (activeProviderFresh && activeProviderFresh.length > 0) {
+      const normalizedCurrentModel = activeProvider === 'copilot'
+        ? normalizeCopilotModelName(nextConfigPreview.model)
+        : nextConfigPreview.model;
+      const availableFresh = activeProviderFresh.filter(
+        m => !(m.name === nextConfigPreview.drawingModel && m.provider === nextConfigPreview.drawingProvider)
+      );
+      const currentExists = availableFresh.some(m => m.name === normalizedCurrentModel);
+      if (!currentExists && availableFresh.length > 0) {
+        nextModel = availableFresh[0].name;
+      } else if (currentExists && normalizedCurrentModel !== nextConfigPreview.model) {
+        nextModel = normalizedCurrentModel;
+      }
+    }
+
+    const finalConfig = { ...nextConfigPreview, model: nextModel };
+    const finalModels = ensureCurrentModelInCatalog(
+      merged.filter(model => isChatProviderEnabled(finalConfig, model.provider)),
+      finalConfig
+    );
+
+    modelsRef.current = finalModels;
+    setModels(finalModels);
+    try {
+      localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(finalModels));
+    } catch (e) {}
+
+    if (providersToEnable.length > 0 || nextModel !== currentConfig.model) {
+      setConfig(prev => {
+        const mergedEnabled = providersToEnable.length > 0
+          ? {
+              ...Object.fromEntries(CHAT_PROVIDER_OPTIONS.map(({ id }) => [id, isChatProviderEnabled(prev, id)])),
+              ...Object.fromEntries(providersToEnable.map(id => [id, true])),
+            }
+          : prev.providerEnabled;
+        return {
+          ...prev,
+          ...(mergedEnabled ? { providerEnabled: mergedEnabled } : {}),
+          ...(nextModel !== prev.model && prev.provider === activeProvider ? { model: nextModel } : {}),
+        };
+      });
+    }
+
+    return finalModels;
+  }, []);
+
   const refreshHistory = () => {
     axios.get(`${BACKEND_URL}/api/history`).then(res => {
       commitHistory(res.data);
@@ -1616,6 +1669,8 @@ function App() {
         setMessages(result.messages);
         latestMessagesRef.current = result.messages;
         setCurrentPendingRequest(null);
+        pendingRef.current = null;
+        resumeQueueAfterRewind(currentChatId, true);
         setContextStatus(calculateContextStatusFromMessages(result.messages, config));
         refreshHistory();
         return true;
@@ -1689,9 +1744,15 @@ function App() {
             const res = await axios.get(`${BACKEND_URL}/api/history/${data.chatId}`);
             if (currentChatIdRef.current !== data.chatId || runningRef.current || loadingChatRef.current) return;
             const loadedMessages = res.data.messages || [];
+            const safePending = sanitizeLoadedPendingRequest({
+              messages: loadedMessages,
+              pendingRequest: res.data.pendingRequest || null,
+              isRunning: false,
+            });
             setMessages(loadedMessages);
             latestMessagesRef.current = loadedMessages;
-            setCurrentPendingRequest(res.data.pendingRequest || null);
+            pendingRef.current = safePending;
+            setCurrentPendingRequest(safePending);
             setContextStatus(calculateContextStatusFromMessages(loadedMessages, config));
           }
         }
@@ -1708,6 +1769,7 @@ function App() {
   const startBgPoll = (chatId) => {
     const epochCurrent = chatEpochRef.current.capture();
     const isCurrent = () => epochCurrent() && currentChatIdRef.current === chatId;
+    const trackedAssistantId = pendingRef.current?.assistantMsgId || null;
     queueStore.pause(chatId, '后台运行恢复中；结束后请确认记录并继续队列。');
     if (bgPollRef.current) clearInterval(bgPollRef.current);
     let pollInFlight = false;
@@ -1722,8 +1784,46 @@ function App() {
       Promise.allSettled([
         axios.get(`${BACKEND_URL}/api/history/${chatId}`),
         axios.get(`${BACKEND_URL}/api/chat/running`),
-      ]).then(([historyResult, runningResult]) => {
+      ]).then(async ([historyResult, runningResult]) => {
         if (!isCurrent()) return;
+        const stillRunning = runningResult.status === 'fulfilled'
+          ? (runningResult.value.data.running || []).includes(chatId)
+          : true;
+
+        if (!stillRunning) {
+          if (bgPollRef.current === poll) {
+            setIsGenerating(false);
+            clearInterval(poll);
+            bgPollRef.current = null;
+          }
+          // Re-fetch once after run exit so we do not freeze on a stale pre-exit snapshot.
+          let finalData = historyResult.status === 'fulfilled' ? historyResult.value.data : null;
+          try {
+            const freshResponse = await axios.get(`${BACKEND_URL}/api/history/${chatId}`);
+            finalData = freshResponse.data;
+          } catch {
+            // Fall back to the concurrent snapshot if the final refresh fails.
+          }
+          if (!isCurrent() || runningRef.current) return;
+          if (finalData) {
+            const reconciled = reconcileCompletedBackgroundSnapshot({
+              messages: finalData.messages || [],
+              pendingRequest: finalData.pendingRequest || null,
+              assistantMsgId: trackedAssistantId || finalData.pendingRequest?.assistantMsgId || null,
+            });
+            setMessages(reconciled.messages);
+            latestMessagesRef.current = reconciled.messages;
+            pendingRef.current = reconciled.pendingRequest;
+            setCurrentPendingRequest(reconciled.pendingRequest);
+            setContextStatus(calculateContextStatusFromMessages(reconciled.messages, configRef.current));
+          } else {
+            pendingRef.current = null;
+            setCurrentPendingRequest(null);
+          }
+          refreshHistory();
+          return;
+        }
+
         if (historyResult.status === 'fulfilled' && !runningRef.current) {
           const response = historyResult.value;
           const msgs = response.data.messages || [];
@@ -1735,13 +1835,6 @@ function App() {
           setContextStatus(cs);
         } else if (historyResult.status === 'rejected') {
           console.warn('Failed to refresh chat while recovering background run:', historyResult.reason);
-        }
-        if (runningResult.status === 'fulfilled' && !(runningResult.value.data.running || []).includes(chatId)) {
-          if (bgPollRef.current === poll) {
-            setIsGenerating(false);
-            clearInterval(poll);
-            bgPollRef.current = null;
-          }
         }
       }).finally(() => {
         pollInFlight = false;
@@ -2035,13 +2128,36 @@ function App() {
 
             if (data.type === 'ppt' || data.pptData) {
               const pptData = data.pptData || data;
+              const targetId = data.targetMessageId ?? assistantMsgId;
               setMessages(prevMsgs => {
                 const newMsgs = prevMsgs.map(m =>
-                  m.id === assistantMsgId ? { ...m, pptData: { ...(m.pptData || {}), ...pptData } } : m
+                  String(m.id) === String(targetId)
+                    ? {
+                        ...m,
+                        pptData: { ...(m.pptData || {}), ...pptData },
+                        ...(data.clearGeneratedFiles ? { generatedFiles: [] } : {}),
+                      }
+                    : m
                 );
                 latestMessagesRef.current = newMsgs;
                 return newMsgs;
               });
+              continue;
+            }
+
+            if (data.type === 'pptEntryRef' || data.pptEntryRef) {
+              const pptEntryRef = data.pptEntryRef || null;
+              if (pptEntryRef) {
+                setMessages(prevMsgs => {
+                  const newMsgs = prevMsgs.map(m =>
+                    String(m.id) === String(assistantMsgId)
+                      ? { ...m, pptEntryRef }
+                      : m
+                  );
+                  latestMessagesRef.current = newMsgs;
+                  return newMsgs;
+                });
+              }
               continue;
             }
 
@@ -2165,6 +2281,11 @@ function App() {
     return save;
   };
 
+  const resumeQueueAfterRewind = (chatId, removedPendingRequest) => {
+    if (!chatId || !removedPendingRequest) return;
+    queueStore.resume(chatId);
+  };
+
   const handleStartNewChat = () => {
     detachChatRun();
     setDeepReadingData(null);
@@ -2207,6 +2328,16 @@ function App() {
         if (r && (r.data.running || []).includes(chatId)) {
           setIsGenerating(true);
           startBgPoll(chatId);
+        } else {
+          const safePending = sanitizeLoadedPendingRequest({
+            messages: latestMessagesRef.current,
+            pendingRequest: pendingRef.current,
+            isRunning: false,
+          });
+          if (safePending !== pendingRef.current) {
+            pendingRef.current = safePending;
+            setCurrentPendingRequest(safePending);
+          }
         }
       },
       onError: err => {
@@ -2247,6 +2378,10 @@ function App() {
       ? null
       : currentPendingRequest;
 
+    if (currentPendingRequest && !nextPendingRequest) {
+      pendingRef.current = null;
+      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    }
     syncChatState(nextMessages, nextPendingRequest);
   };
 
@@ -2271,6 +2406,10 @@ function App() {
       ? null
       : currentPendingRequest;
 
+    if (currentPendingRequest && !nextPendingRequest) {
+      pendingRef.current = null;
+      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    }
     syncChatState(nextMessages, nextPendingRequest);
     return true;
   };
@@ -2292,6 +2431,10 @@ function App() {
       ? null
       : currentPendingRequest;
 
+    if (currentPendingRequest && !nextPendingRequest) {
+      pendingRef.current = null;
+      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    }
     syncChatState(nextMessages, nextPendingRequest);
     setComposerPreset({
       text: group.userMessage.content || '',
@@ -2300,14 +2443,21 @@ function App() {
     });
   };
 
-  const handleRevisePpt = async (messageId, slideId, instruction, restore = false, imageRequest = null) => {
+  const handleRevisePpt = async (messageId, slideId, instruction, restore = false, imageRequest = null, options = null) => {
     const chatId = currentChatIdRef.current;
     if (!chatId || runningRef.current) throw new Error(getLocalText('请等待当前生成结束后再修改。', 'Wait for the current generation to finish.'));
     const original = latestMessagesRef.current.find(message => message.id === messageId);
     if (!original?.pptData) throw new Error(getLocalText('找不到演示稿。', 'Presentation not found.'));
-    const response = await axios.post(`${BACKEND_URL}/api/ppt/${imageRequest ? 'image' : 'revise'}`, {
-      data: original.pptData, slideId, instruction, restore, config, ...imageRequest,
-    });
+    const isAgentFollowUp = !restore && !imageRequest && (
+      options?.scope === 'agent'
+      || options?.scope === 'deck'
+      || (Array.isArray(options?.attachments) && options.attachments.length > 0)
+    );
+    const endpoint = isAgentFollowUp ? 'follow-up' : (imageRequest ? 'image' : 'revise');
+    const payload = isAgentFollowUp
+      ? { data: original.pptData, instruction, activeSlideId: slideId, attachments: options?.attachments || [], config }
+      : { data: original.pptData, slideId, instruction, restore, config, ...imageRequest };
+    const response = await axios.post(`${BACKEND_URL}/api/ppt/${endpoint}`, payload);
     if (currentChatIdRef.current !== chatId || runningRef.current
         || latestMessagesRef.current.find(message => message.id === messageId) !== original) {
       throw new Error(getLocalText('对话已变化，本次修改未保存，请重试。', 'The conversation changed. Revision was not saved; please retry.'));
@@ -2318,6 +2468,7 @@ function App() {
     setMessages(nextMessages);
     try {
       await persistChatState(chatId, nextMessages, currentPendingRequest);
+      return response?.data;
     } catch (error) {
       if (currentChatIdRef.current === chatId) {
         const reverted = latestMessagesRef.current.map(message => message === updated ? original : message);
@@ -2456,6 +2607,11 @@ function App() {
           return;
         }
         if (done) {
+          const tail = buffer.trim();
+          if (tail.startsWith('data: ')) {
+            const tailData = tail.slice(6).trim();
+            if (tailData === '[DONE]') completed = true;
+          }
           break;
         }
 
@@ -2551,13 +2707,37 @@ function App() {
 
             if (data.type === 'ppt' || data.pptData) {
               const pptData = data.pptData || data;
+              const targetId = data.targetMessageId ?? assistantMsgId;
               setMessages(prevMsgs => {
                 const newMsgs = prevMsgs.map(m =>
-                  m.id === assistantMsgId ? { ...m, pptData: { ...(m.pptData || {}), ...pptData }, status: 'streaming' } : m
+                  String(m.id) === String(targetId)
+                    ? {
+                        ...m,
+                        pptData: { ...(m.pptData || {}), ...pptData },
+                        ...(data.clearGeneratedFiles ? { generatedFiles: [] } : {}),
+                        status: String(targetId) === String(assistantMsgId) ? 'streaming' : m.status,
+                      }
+                    : m
                 );
                 latestMessagesRef.current = newMsgs;
                 return newMsgs;
               });
+              continue;
+            }
+
+            if (data.type === 'pptEntryRef' || data.pptEntryRef) {
+              const pptEntryRef = data.pptEntryRef || null;
+              if (pptEntryRef) {
+                setMessages(prevMsgs => {
+                  const newMsgs = prevMsgs.map(m =>
+                    String(m.id) === String(assistantMsgId)
+                      ? { ...m, pptEntryRef }
+                      : m
+                  );
+                  latestMessagesRef.current = newMsgs;
+                  return newMsgs;
+                });
+              }
               continue;
             }
 
@@ -2631,12 +2811,17 @@ function App() {
                     let rawText = m.rawText || '';
                     if (data.reasoning) {
                       const lastIndex = parts.length - 1;
+                      let updatedReasoning = data.reasoning;
                       if (lastIndex >= 0 && parts[lastIndex].type === 'reasoning') {
-                        const updatedContent = parts[lastIndex].content + data.reasoning;
-                        parts[lastIndex] = { ...parts[lastIndex], content: updatedContent };
+                        updatedReasoning = parts[lastIndex].content + data.reasoning;
+                        parts[lastIndex] = { ...parts[lastIndex], content: updatedReasoning };
                       } else {
                         const reasoningPart = { type: 'reasoning', content: data.reasoning };
                         parts.push(reasoningPart);
+                      }
+                      if (!options.useWeb) {
+                        const fileName = extractLastExpressionTag(updatedReasoning);
+                        if (fileName) setCurrentExpression(fileName);
                       }
                     }
                     if (data.text || data.textReplacement) {
@@ -2758,7 +2943,7 @@ function App() {
       streamError ||= finalAssistant?.status === 'error' || isLikelyModelConfigFailure(extractAssistantTextParts(finalAssistant));
       const successful = canAdvanceQueue({ outcome: runOutcome, done: completed, error: streamError, approval: awaitingApproval, stopped: run.stopped });
       if (!successful) queueStore.pause(activeChatId, awaitingApproval ? '等待审批，队列已暂停。' : '任务未成功完成，队列已暂停。');
-      const finalPendingRequest = awaitingApproval ? nextPendingRequest : (completed || shouldClearPending || runOutcome ? null : nextPendingRequest);
+      const finalPendingRequest = awaitingApproval ? nextPendingRequest : null;
       const durationMs = Date.now() - generationStartTime;
       const newMsgs = latestMessagesRef.current.map(message => (
           message.id === assistantMsgId
@@ -2866,6 +3051,8 @@ function App() {
         setMessages(result.messages);
         latestMessagesRef.current = result.messages;
         setCurrentPendingRequest(null);
+        pendingRef.current = null;
+        resumeQueueAfterRewind(chatId, true);
         setDeepReadingData(null);
         setContextStatus(calculateContextStatusFromMessages(result.messages, config));
         setComposerPreset({
@@ -3026,6 +3213,10 @@ function App() {
 
     setMessages(nextMessages);
     latestMessagesRef.current = nextMessages;
+    if (currentPendingRequest && !nextPendingRequest) {
+      pendingRef.current = null;
+      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    }
     setCurrentPendingRequest(nextPendingRequest);
     setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
     persistChatState(currentChatId, nextMessages, nextPendingRequest);
@@ -3087,6 +3278,14 @@ function App() {
         return;
       }
 
+      const runningRes = await axios.get(`${BACKEND_URL}/api/chat/running`).catch(() => null);
+      if (currentChatIdRef.current !== chatId) return;
+      if ((runningRes?.data?.running || []).includes(chatId)) {
+        setIsGenerating(true);
+        startBgPoll(chatId);
+        return;
+      }
+
       await streamPendingAssistantResponse({
         activeChatId: chatId,
         requestMessage: pendingRequest.message || baseHistory[baseHistory.length - 1]?.content || '',
@@ -3114,6 +3313,7 @@ function App() {
     }
 
     try {
+      await axios.post(`${BACKEND_URL}/api/chat/stream/${encodeURIComponent(chatId)}/stop`).catch(() => {});
       const res = await axios.get(`${BACKEND_URL}/api/history/${chatId}`);
       const sessionMessages = Array.isArray(res.data.messages) ? res.data.messages : [];
       const pendingRequest = res.data.pendingRequest || null;
@@ -3323,19 +3523,27 @@ function App() {
     },
     {
       id: 'plugins',
-      label: getLocalText('插件市场', 'Plugin marketplace'),
+      label: getLocalText('扩展中心 · 插件市场', 'Extension Hub · Marketplace'),
       description: getLocalText('浏览并安装绑定 MCP 与专属技能的插件', 'Browse and install MCP + Skill plugins'),
       icon: Boxes,
-      keywords: 'plugins mcp marketplace market 插件 扩展',
-      run: openPluginMarketplaceModal
+      keywords: 'plugins mcp marketplace market extensions 插件 扩展',
+      run: () => openExtensionHubModal('marketplace')
     },
     {
       id: 'skills',
-      label: getLocalText('技能系统', 'Skill system'),
-      description: getLocalText('查看和管理技能', 'Review and manage skills'),
+      label: getLocalText('扩展中心 · Skills 技能', 'Extension Hub · Skills'),
+      description: getLocalText('查看、安装和管理 Skill 技能', 'Review, install, and manage skills'),
       icon: Wrench,
-      keywords: 'skills tools',
-      run: openSkillManagerModal
+      keywords: 'skills tools extensions 技能',
+      run: () => openExtensionHubModal('skills')
+    },
+    {
+      id: 'mcp',
+      label: getLocalText('扩展中心 · MCP 服务', 'Extension Hub · MCP'),
+      description: getLocalText('配置并同步自定义 MCP 与插件 MCP 服务', 'Configure and sync custom and plugin MCP servers'),
+      icon: Server,
+      keywords: 'mcp server config tools 服务 配置',
+      run: () => openExtensionHubModal('mcp')
     },
     {
       id: 'tasks',
@@ -3363,7 +3571,8 @@ function App() {
 
   const filteredPaletteChats = history.filter(item => {
     if (!normalizedPaletteQuery) return true;
-    const searchable = `${item.title || ''} ${item.source || ''} ${formatHistoryTimestamp(item.updatedAt)}`.toLowerCase();
+    const sourceLabel = item.source === 'hosted' ? getLocalText('托管', 'Hosted') : '';
+    const searchable = `${item.title || ''} ${item.source || ''} ${sourceLabel} ${formatHistoryTimestamp(item.updatedAt)}`.toLowerCase();
     return searchable.includes(normalizedPaletteQuery);
   }).slice(0, normalizedPaletteQuery ? 12 : 8).map(item => ({
     ...item,
@@ -3377,7 +3586,7 @@ function App() {
     ? [
         ...(isDesktopUtilityWindowOpen('guide') ? ['guide'] : []),
         ...(isDesktopUtilityWindowOpen('memory') ? ['memory'] : []),
-        ...(isDesktopUtilityWindowOpen('skill') ? ['skill'] : []),
+        ...(isDesktopUtilityWindowOpen('extensions') ? ['extensions'] : []),
         ...(isDesktopUtilityWindowOpen('hosted') ? ['hosted'] : []),
         ...(isDesktopUtilityWindowOpen('files') ? ['files'] : []),
         ...(isDesktopUtilityWindowOpen('third-party') ? ['third-party'] : []),
@@ -3386,8 +3595,7 @@ function App() {
     : [
         ...(isFeatureGuideOpen ? ['guide'] : []),
         ...(isMemoryManagerOpen ? ['memory'] : []),
-        ...(isSkillManagerOpen ? ['skill'] : []),
-        ...(isPluginMarketplaceOpen ? ['plugins'] : []),
+        ...(isExtensionHubOpen ? ['extensions'] : []),
         ...(isHostedTasksOpen ? ['hosted'] : []),
         ...(isFileManagerOpen ? ['files'] : []),
         ...(isThirdPartyChatModalOpen ? ['third-party'] : []),
@@ -3445,6 +3653,7 @@ function App() {
             setConfig={setConfig}
             onClose={() => closeDesktopUtilityWindow('settings')}
             models={models}
+            onUpdateProviderModels={handleUpdateProviderModels}
             windowed={true}
           />
         );
@@ -3478,19 +3687,14 @@ function App() {
             windowed={true}
           />
         );
-      case 'skill':
+      case 'extensions':
         return (
-          <SkillManagerModal
+          <ExtensionHubModal
             isOpen={true}
-            onClose={() => closeDesktopUtilityWindow('skill')}
-            windowed={true}
-          />
-        );
-      case 'plugins':
-        return (
-          <PluginMarketplaceModal
-            isOpen={true}
-            onClose={() => closeDesktopUtilityWindow('plugins')}
+            onClose={() => closeDesktopUtilityWindow('extensions')}
+            config={config}
+            setConfig={setConfig}
+            initialTab={extensionHubTab}
             windowed={true}
           />
         );
@@ -3499,8 +3703,10 @@ function App() {
           <HostedTasksModal
             isOpen={true}
             onClose={() => closeDesktopUtilityWindow('hosted')}
-            config={config}
-            setConfig={setConfig}
+            onSelectSession={(sessionId) => {
+              handleLoadChat(sessionId);
+              closeDesktopUtilityWindow('hosted');
+            }}
             BACKEND_URL={BACKEND_URL}
             windowed={true}
           />
@@ -3513,13 +3719,13 @@ function App() {
   return (
     <Suspense fallback={null}>
     <div
-      className="flex h-screen bg-[#f0f4f9] dark:bg-[#0b0c10] text-[#1d1d1f] dark:text-[#f5f5f7] font-sans overflow-hidden transition-colors duration-300 relative"
+      className="flex h-[100dvh] bg-[#f0f4f9] dark:bg-[#0b0c10] text-[#1d1d1f] dark:text-[#f5f5f7] font-sans overflow-hidden transition-colors duration-300 relative"
       data-saki-background={getChatBackgroundSource(config, theme, isMobileViewport)}
       style={{
         backgroundImage: `url(${JSON.stringify(getChatBackgroundSource(config, theme, isMobileViewport))})`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
-        backgroundAttachment: 'fixed'
+        backgroundAttachment: isMobileViewport ? 'scroll' : 'fixed'
       }}
     >
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
@@ -3541,14 +3747,13 @@ function App() {
         onToggleSettings={toggleSettingsModal}
         onToggleFileManager={() => toggleFileManagerModal('manage')}
         onToggleMemoryManager={toggleMemoryManagerModal}
-        onToggleSkillManager={toggleSkillManagerModal}
-        onTogglePluginMarketplace={togglePluginMarketplaceModal}
+        onToggleExtensionHub={toggleExtensionHubModal}
         onToggleHostedTasks={toggleHostedTasksModal}
         onToggleThirdPartyChats={toggleThirdPartyChatModal}
         activeUtilityKeys={activeUtilityKeys}
         isUtilityLayerActive={useDesktopUtilityWindows && desktopUtilityWindows.length > 0}
       />
-      <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-white/30 dark:bg-[#12131a]/40 shadow-2xl z-10 border-l border-white/20 dark:border-white/5">
+      <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-white/30 dark:bg-[#12131a]/40 shadow-2xl border-l border-white/20 dark:border-white/5">
         {config.showParticles && window.__SAKI_RUNTIME__?.profile !== 'light' && <CherryBlossoms />}
         <Header
           toggleSidebar={() => setSidebarOpen(!isSidebarOpen)}
@@ -3557,6 +3762,11 @@ function App() {
           isExporting={isExporting}
           isMusicPlaying={isMusicPlaying}
           onToggleMusic={toggleMusicMode}
+          musicPlaylist={musicPlaylist}
+          currentMusicIndex={currentMusicIndex}
+          onSelectMusic={selectMusic}
+          onUploadMusic={uploadMusic}
+          onRemoveMusic={removeMusic}
           hasMessages={messages.length > 0}
           theme={theme}
           onToggleTheme={toggleTheme}
@@ -3615,6 +3825,8 @@ function App() {
                onAppendStoryGlassConversation={handleAppendStoryGlassConversation}
                onEnsureChat={ensureActiveChat}
                models={models}
+               onDockHostMount={handleDockHostMount}
+               onDockHostUnmount={handleDockHostUnmount}
             />
           </motion.div>
         </AnimatePresence>
@@ -3703,6 +3915,7 @@ function App() {
               setConfig={setConfig}
               onClose={() => setSettingsOpen(false)}
               models={models}
+              onUpdateProviderModels={handleUpdateProviderModels}
             />
           )}
           {!useDesktopUtilityWindows && isThirdPartyChatModalOpen && (
@@ -3732,18 +3945,14 @@ function App() {
               chatHistory={history}
             />
           )}
-          {!useDesktopUtilityWindows && isSkillManagerOpen && (
-            <SkillManagerModal
-              key="skill-modal"
+          {!useDesktopUtilityWindows && isExtensionHubOpen && (
+            <ExtensionHubModal
+              key="extension-hub-modal"
               isOpen={true}
-              onClose={() => setIsSkillManagerOpen(false)}
-            />
-          )}
-          {!useDesktopUtilityWindows && isPluginMarketplaceOpen && (
-            <PluginMarketplaceModal
-              key="plugin-marketplace-modal"
-              isOpen={true}
-              onClose={() => setIsPluginMarketplaceOpen(false)}
+              onClose={() => setIsExtensionHubOpen(false)}
+              config={config}
+              setConfig={setConfig}
+              initialTab={extensionHubTab}
             />
           )}
           {!useDesktopUtilityWindows && isHostedTasksOpen && (
@@ -3751,19 +3960,21 @@ function App() {
               key="hosted-tasks-modal"
               isOpen={true}
               onClose={() => setIsHostedTasksOpen(false)}
-              config={config}
-              setConfig={setConfig}
+              onSelectSession={(sessionId) => {
+                handleLoadChat(sessionId);
+                setIsHostedTasksOpen(false);
+              }}
               BACKEND_URL={BACKEND_URL}
             />
           )}
         </AnimatePresence>
       {isCommandPaletteOpen && (
         <div
-          className="fixed inset-0 z-[130] bg-slate-950/45 backdrop-blur-sm px-4 py-10"
+          className="fixed inset-0 z-[130] bg-slate-950/45 backdrop-blur-sm px-3 py-4 sm:px-4 sm:py-10"
           onClick={closeCommandPalette}
         >
           <div
-            className="mx-auto flex h-full max-h-[min(42rem,calc(100vh-5rem))] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] border border-white/40 dark:border-white/10 bg-white/95 dark:bg-[#161720]/95 shadow-2xl backdrop-blur-2xl"
+            className="mx-auto flex h-full max-h-[min(42rem,calc(100dvh-2rem))] sm:max-h-[min(42rem,calc(100dvh-5rem))] w-full max-w-3xl flex-col overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border border-white/40 dark:border-white/10 bg-white/95 dark:bg-[#161720]/95 shadow-2xl backdrop-blur-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="border-b border-gray-100 dark:border-white/10 px-4 py-2.5">
@@ -3778,7 +3989,7 @@ function App() {
                   }}
                   onKeyDown={handleCommandPaletteKeyDown}
                   placeholder={getLocalText('搜索对话或跳转到功能…', 'Search chats or jump to a feature...')}
-                  className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                  className="flex-1 bg-transparent text-base sm:text-sm text-gray-900 dark:text-gray-100 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
                 />
                 <div className="hidden rounded-lg bg-gray-100 dark:bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-gray-500 dark:text-gray-400 sm:block">
                   {navigator.platform?.toLowerCase?.().includes('mac') ? 'Cmd K' : 'Ctrl K'}
@@ -3836,6 +4047,9 @@ function App() {
         isOpen={isCharacterViewOpen}
         setIsOpen={setCharacterViewOpen}
         triggerAnimation={animationTrigger}
+        isGenerating={isGenerating}
+        isMusicPlaying={isMusicPlaying}
+        dockHostEl={dockHostEl}
       />
       <OnboardingTour
         isOpen={isOnboardingActive}
@@ -3847,12 +4061,12 @@ function App() {
         refreshToken={onboardingRefreshToken}
       />
       {approvalRequest && !isGenerating && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 px-4">
-          <div className="w-full max-w-xl rounded-3xl border border-white/20 dark:border-white/10 bg-white/95 dark:bg-[#161822]/95 p-6 shadow-2xl backdrop-blur-xl text-gray-900 dark:text-gray-100">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 px-3 sm:px-4 py-4">
+          <div className="w-full max-w-xl max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl border border-white/20 dark:border-white/10 bg-white/95 dark:bg-[#161822]/95 p-4 sm:p-6 shadow-2xl backdrop-blur-xl text-gray-900 dark:text-gray-100">
             <div className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-600">
               {getLocalText('敏感操作确认', 'Sensitive Action')}
             </div>
-            <h2 className="mt-2 text-xl font-bold text-gray-900 dark:text-white">
+            <h2 className="mt-2 text-lg sm:text-xl font-bold text-gray-900 dark:text-white">
               {getLocalText('需要你的确认', 'Approval required')}
             </h2>
             <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
@@ -3872,7 +4086,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+              <div className="rounded-2xl bg-gray-50 dark:bg-white/5 px-4 py-3">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
                   {getLocalText('原因', 'Reason')}
                 </div>
@@ -3891,7 +4105,7 @@ function App() {
               </div>
             </div>
 
-            <div className="mt-6 flex items-center justify-end gap-3">
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
               <button
                 onClick={() => handleApprovalDecision(false)}
                 className="rounded-2xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-100"

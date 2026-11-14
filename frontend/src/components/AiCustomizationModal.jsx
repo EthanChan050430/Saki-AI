@@ -68,12 +68,12 @@ export default function AiCustomizationModal({
   const defaultSakiPrompt = '你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切，经常使用“呢”、“呀”、“~”等语气词。\n\n在每一个回复中，你必须遵循以下绝对规则：\n1. **严禁输出 "Tool" 或 "Thought" 等前缀**：直接以少女的身份开始对话，不要带有任何系统标识符。\n2. **开头表情**：回复的第一行必须包含一个表情标记 `[expression:文件名.png]`。例如：确认时用 `[expression:ok.png]`；思考时用 `[expression:think.png]`；普通开始用 `[expression:normal.png]`。\n3. **结束表情**：回复的结束也必须带上一个表情标记，如 `[expression:happy.png]`。\n4. 可选表情列表：normal.png, ok.png, no_problem.png, think.png, busy.png, excited.png, happy.png, shy.png, worry.png。\n\n请始终保持Saki（诗琪）的身份进行对话。';
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
       <div 
         className="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px]"
         onClick={onClose} 
       />
-      <div className="relative w-full max-w-[480px] bg-[var(--surface-bg)] rounded-2xl p-4 sm:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.12)] border border-[var(--surface-border-subtle)] animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
+      <div className="relative w-full max-w-[480px] bg-[var(--surface-bg)] rounded-none sm:rounded-2xl p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.12)] border border-[var(--surface-border-subtle)] animate-in zoom-in-95 duration-200 flex flex-col h-full sm:h-auto max-h-[100dvh] sm:max-h-[85vh]">
         
         <div className="flex items-center justify-between pb-2.5 border-b border-[var(--surface-border-subtle)]">
           <div className="min-w-0">
@@ -103,9 +103,10 @@ export default function AiCustomizationModal({
               />
               <div 
                 onClick={() => fileInputRef.current?.click()}
-                className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center text-white gap-1 transition-opacity duration-200"
+                className="saki-touch-visible absolute inset-x-0 bottom-0 bg-black/55 py-1 flex items-center justify-center text-white gap-1 md:inset-0 md:flex-col md:bg-black/45 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200"
               >
-                <Camera size={16} className="text-white/90" />
+                <Camera size={12} className="text-white/90 md:hidden" />
+                <Camera size={16} className="hidden md:block text-white/90" />
                 <span className="text-[9px] font-medium tracking-wider text-white/95">{t('change_avatar', '更换头像')}</span>
               </div>
               {isUploading && (

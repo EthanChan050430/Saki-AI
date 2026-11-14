@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createToolRegistry, parseToolCalls } = require('../services/agentTools.js');
+const { createToolRegistry, parseToolCalls, normalizeRespondText } = require('../services/agentTools.js');
 const { compactLoopMessages } = require('../services/agentContext.js');
 const {
     nativeToolsFromRegistry,
@@ -241,5 +241,27 @@ describe('native history compaction', () => {
         const callIndex = messages.findIndex(message => message.tool_calls);
         assert.equal(messages[callIndex + 1].role, 'tool');
         assert.equal(messages.some(message => message.role === 'tool' && messages[messages.indexOf(message) - 1]?.tool_calls?.[0]?.id !== message.tool_call_id), false);
+    });
+});
+
+describe('respond newline decoding and normalization', () => {
+    it('decodes \\n in single-quoted and fallback double-quoted tool args without mangling Windows paths', () => {
+        const tools = registry();
+        const [singleQuoted] = parseToolCalls("Tool: respond('First\\n\\n## Heading')", tools);
+        assert.equal(singleQuoted.parsedArgs[0], 'First\n\n## Heading');
+
+        const [invalidJsonFallback] = parseToolCalls('Tool: respond("It\\\'s fine\\n\\n- item")', tools);
+        assert.equal(invalidJsonFallback.parsedArgs[0], "It's fine\n\n- item");
+
+        const [winPath] = parseToolCalls('Tool: readFile("C:\\Users\\new\\notes.txt")', tools);
+        assert.equal(winPath.parsedArgs[0], 'C:\\Users\\new\\notes.txt');
+    });
+
+    it('normalizes double-escaped newlines in respond payloads while preserving inline code and paths', () => {
+        const raw = '[expression:think.png]\\n内容\\n\\n## 标题\\n1. 条目\\n   - 子条目 `\\n` 与 C:\\new\\a.txt\\n[expression:ok.png]';
+        assert.equal(
+            normalizeRespondText(raw),
+            '[expression:think.png]\n内容\n\n## 标题\n1. 条目\n   - 子条目 `\\n` 与 C:\\new\\a.txt\n[expression:ok.png]'
+        );
     });
 });

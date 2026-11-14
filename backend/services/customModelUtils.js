@@ -50,6 +50,7 @@ function resolveModelLabel(item, fallback = '') {
 
     return String(
         item.label
+        || item.display_name
         || item.name
         || item.id
         || item.model

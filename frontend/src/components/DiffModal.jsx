@@ -90,10 +90,10 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
   if (!isOpen || !fileMetadata) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[160] flex items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
-        className={`bg-[#1e1e1e] border border-white/10 rounded-2xl w-full ${multiFile ? 'max-w-6xl' : 'max-w-5xl'} max-h-[90vh] flex flex-col shadow-2xl overflow-hidden outline-none`}>
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5 bg-[#252526] shrink-0">
+        className={`bg-[#1e1e1e] border border-white/10 rounded-none sm:rounded-2xl w-full ${multiFile ? 'max-w-6xl' : 'max-w-5xl'} h-full sm:h-auto max-h-[100dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden outline-none`}>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b border-white/5 bg-[#252526] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="p-1.5 bg-blue-500/10 rounded-lg text-blue-400 shrink-0">
               <FileCode size={16} />
@@ -145,9 +145,9 @@ const DiffModal = ({ isOpen, onClose, fileMetadata, onRollback, files = [], onSe
               </button>;
             })}
           </nav>}
-        <div className="saki-diff-editor flex-1 overflow-auto p-4 bg-[#1e1e1e] custom-scrollbar">
+        <div className="saki-diff-editor flex-1 overflow-auto p-3 sm:p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-[#1e1e1e] custom-scrollbar">
           {hasChanges ? (
-            <div className="border border-white/10 rounded-lg overflow-hidden">
+            <div className="border border-white/10 rounded-lg overflow-hidden min-w-[540px] md:min-w-0">
               <div className="grid grid-cols-2 text-[11px] font-mono">
                 <div className="bg-[#252526] text-white/50 px-3 py-2 border-r border-white/10">{t('original_version')}</div>
                 <div className="bg-[#252526] text-white/50 px-3 py-2">{t('modified_version')}</div>

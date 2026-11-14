@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Cpu, Server, Terminal, Shield, ExternalLink, RefreshCw, CheckCircle2, Image, ChevronDown, UserCircle, Palette, Plus, Globe, Bot, Search, Volume2, Mic, Music2, Trash2, Brain } from 'lucide-react';
+import { X, Cpu, Terminal, Shield, ExternalLink, RefreshCw, CheckCircle2, Search, Image, ChevronDown, UserCircle, Palette, Plus, Globe, Bot, Volume2, Mic, Music2, Trash2, Brain } from 'lucide-react';
 import { motion } from 'framer-motion';
 import ImageCropperModal from './ImageCropperModal';
 import botAvatar from '../head.png';
@@ -18,8 +18,16 @@ import {
 import { modalBackdropMotion, modalPanelMotion } from '../utils/modalMotion';
 import { CHAT_BACKGROUNDS, getChatBackgroundPreset, getChatBackgroundSource, selectChatBackground } from '../utils/chatAppearance';
 import { localizeWith } from '../utils/localize';
+import { fetchProviderModels, normalizeCopilotModelName } from '../utils/modelRefresh';
+import {
+  getLocalTtsState,
+  subscribeLocalTtsStatus,
+  initLocalTts,
+  synthesizeLocalSentence,
+  playFloat32Audio,
+} from '../utils/localTtsEngine';
 
-export default function SettingsModal({ config, setConfig, onClose, models, windowed = false }) {
+export default function SettingsModal({ config, setConfig, onClose, models, onUpdateProviderModels, windowed = false }) {
   const { t, i18n } = useTranslation();
   const backgroundPreset = getChatBackgroundPreset(config);
   const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
@@ -43,7 +51,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
       [activeApiProvider.baseUrlField]: value,
     });
   };
-  const [mcpConfigText, setMcpConfigText] = useState(config.mcpConfig ? JSON.stringify(config.mcpConfig, null, 2) : '{\n  "mcpServers": {}\n}');
   const [deviceFlow, setDeviceFlow] = useState(null);
   const [isPolling, setIsPolling] = useState(false);
   const pollTimerRef = useRef(null);
@@ -58,27 +65,365 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
   const drawingModelsRequestRef = useRef(0);
   const customDrawingConfigRef = useRef(config);
   customDrawingConfigRef.current = config;
+  const [apiDetectState, setApiDetectState] = useState({
+    loading: false,
+    error: '',
+    updatedProvider: '',
+    detectedByProvider: {},
+  });
+  const [apiModelFilter, setApiModelFilter] = useState('');
+  const apiDetectRequestRef = useRef(0);
+  const [allApiDetectState, setAllApiDetectState] = useState({
+    loading: false,
+    error: '',
+    summary: '',
+    results: null,
+    filter: '',
+  });
+  const allApiDetectRequestRef = useRef(0);
+  const [searxngTestState, setSearxngTestState] = useState({
+    loading: false,
+    result: null,
+    error: '',
+  });
   const sovitsAudioInputRef = useRef(null);
-  const offlineReflectionModels = Array.isArray(models)
-    ? models.filter((model) => ['ollama', 'lmstudio'].includes(model?.provider))
-    : [];
-  const hasConfiguredOfflineReflectionModel = offlineReflectionModels.some(
-    (model) => model.provider === config.offlineReflectionProvider && model.name === config.offlineReflectionModel
-  );
-  const offlineReflectionOptions = hasConfiguredOfflineReflectionModel || !config.offlineReflectionModel
-    ? offlineReflectionModels
-    : [
-        ...offlineReflectionModels,
-        {
-          provider: config.offlineReflectionProvider || 'ollama',
-          name: config.offlineReflectionModel,
-          label: `${config.offlineReflectionModel} (${getLocalText('当前配置', 'current')})`,
-        },
-      ];
+  useEffect(() => {
+    setApiModelFilter('');
+    setApiDetectState(prev => (prev.error ? { ...prev, error: '' } : prev));
+  }, [config.provider]);
+  useEffect(() => {
+    setSearxngTestState(prev => (prev.result || prev.error ? { loading: false, result: null, error: '' } : prev));
+  }, [config.searxngUrl, config.searchEngine]);
 
-  const formatOfflineReflectionProvider = (provider) => {
-    if (provider === 'lmstudio') return 'LMStudio';
-    return 'Ollama';
+  const handleTestSearxng = async () => {
+    const targetUrl = String(config.searxngUrl || '').trim();
+    if (!targetUrl) {
+      setSearxngTestState({
+        loading: false,
+        result: null,
+        error: getLocalText('请先填写 SearxNG 地址', 'Please enter a SearxNG URL first', '先に SearxNG URL を入力してください'),
+      });
+      return;
+    }
+    setSearxngTestState({ loading: true, result: null, error: '' });
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/search/searxng/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ searxngUrl: targetUrl }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setSearxngTestState({
+          loading: false,
+          result: null,
+          error: data.error || getLocalText('SearxNG 连接测试失败', 'Failed to connect to SearxNG', 'SearxNG 接続テストに失敗しました'),
+        });
+        return;
+      }
+      setSearxngTestState({ loading: false, result: data, error: '' });
+    } catch (error) {
+      setSearxngTestState({
+        loading: false,
+        result: null,
+        error: error.message || getLocalText('SearxNG 连接测试失败', 'Failed to connect to SearxNG', 'SearxNG 接続テストに失敗しました'),
+      });
+    }
+  };
+
+  const selectDetectedModel = (providerId, modelName) => {
+    if (!providerId || !modelName) return;
+    setConfig(prev => ({
+      ...prev,
+      provider: providerId,
+      model: modelName,
+      providerEnabled: {
+        ...Object.fromEntries(CHAT_PROVIDER_OPTIONS.map(({ id }) => [id, isChatProviderEnabled(prev, id)])),
+        [providerId]: true,
+      },
+    }));
+  };
+
+  const handleDetectProviderModels = async (providerId) => {
+    if (!providerId) return;
+    const providerTitle = getChatProviderName(providerId, i18n.resolvedLanguage || i18n.language);
+    const isApi = Boolean(getApiProviderMeta(providerId));
+    const baseUrl = isApi ? String(getProviderBaseUrl(config, providerId) || '').trim() : '';
+    const apiKey = isApi ? String(getProviderApiKey(config, providerId) || '').trim() : '';
+
+    if (providerId === 'custom' && !baseUrl) {
+      setApiDetectState(prev => ({
+        ...prev,
+        loading: false,
+        error: getLocalText('请先填写基础地址 (Base URL)', 'Please enter a Base URL first', '先にベース URL を入力してください'),
+      }));
+      return;
+    }
+    if (isApi && providerId !== 'custom' && !apiKey) {
+      setApiDetectState(prev => ({
+        ...prev,
+        loading: false,
+        error: getLocalText(`请先填写 ${providerTitle} API 密钥`, `Please enter your ${providerTitle} API Key first`, `先に ${providerTitle} の API キーを入力してください`),
+      }));
+      return;
+    }
+
+    const requestId = ++apiDetectRequestRef.current;
+    setApiDetectState(prev => ({ ...prev, loading: true, error: '' }));
+
+    try {
+      const detected = await fetchProviderModels({
+        backendUrl: BACKEND_URL,
+        provider: providerId,
+        ollamaUrl: config.ollamaUrl || '',
+        lmstudioUrl: config.lmstudioUrl || '',
+        copilotToken: config.copilotToken || '',
+        baseUrl,
+        apiKey,
+      });
+      if (requestId !== apiDetectRequestRef.current) return;
+
+      setApiDetectState(prev => ({
+        loading: false,
+        error: '',
+        updatedProvider: providerId,
+        detectedByProvider: {
+          ...prev.detectedByProvider,
+          [providerId]: detected,
+        },
+      }));
+      onUpdateProviderModels?.({ [providerId]: detected }, { enableProviders: [providerId] });
+    } catch (error) {
+      if (requestId !== apiDetectRequestRef.current) return;
+      setApiDetectState(prev => ({
+        ...prev,
+        loading: false,
+        error: error?.message || getLocalText('检测模型列表失败', 'Failed to detect models', 'モデル一覧の検出に失敗しました'),
+      }));
+    }
+  };
+
+  const handleDetectAllEnabledApiModels = async () => {
+    const enabledProviderIds = CHAT_PROVIDER_OPTIONS
+      .map(item => item.id)
+      .filter(id => isChatProviderEnabled(config, id));
+    const configuredIds = enabledProviderIds.filter(id => {
+      if (id === 'ollama' || id === 'lmstudio') return true;
+      if (id === 'copilot') return Boolean(String(config.copilotToken || '').trim());
+      if (id === 'custom') return Boolean(getProviderBaseUrl(config, id).trim());
+      return Boolean(getProviderApiKey(config, id).trim());
+    });
+
+    if (configuredIds.length === 0) {
+      setAllApiDetectState(prev => ({
+        ...prev,
+        loading: false,
+        summary: '',
+        error: getLocalText(
+          '已启用的服务商尚未填写密钥或配置端点',
+          'No enabled providers have credentials or endpoints configured',
+          '有効なプロバイダーにキーまたはエンドポイントが設定されていません'
+        ),
+      }));
+      return;
+    }
+
+    const requestId = ++allApiDetectRequestRef.current;
+    setAllApiDetectState(prev => ({ ...prev, loading: true, error: '', summary: '' }));
+
+    const settled = await Promise.allSettled(
+      configuredIds.map(async (providerId) => ({
+        providerId,
+        models: await fetchProviderModels({
+          backendUrl: BACKEND_URL,
+          provider: providerId,
+          ollamaUrl: config.ollamaUrl || '',
+          lmstudioUrl: config.lmstudioUrl || '',
+          copilotToken: config.copilotToken || '',
+          baseUrl: getProviderBaseUrl(config, providerId).trim(),
+          apiKey: getProviderApiKey(config, providerId).trim(),
+        }),
+      }))
+    );
+
+    if (requestId !== allApiDetectRequestRef.current) return;
+
+    const updatesByProvider = {};
+    const failedProviders = [];
+    let totalCount = 0;
+
+    settled.forEach((result, idx) => {
+      const providerId = configuredIds[idx];
+      if (result.status === 'fulfilled') {
+        updatesByProvider[providerId] = result.value.models;
+        totalCount += result.value.models.length;
+      } else {
+        failedProviders.push(getChatProviderName(providerId, i18n.resolvedLanguage || i18n.language));
+      }
+    });
+
+    const succeededCount = Object.keys(updatesByProvider).length;
+    if (succeededCount > 0) {
+      onUpdateProviderModels?.(updatesByProvider);
+      setApiDetectState(prev => ({
+        ...prev,
+        detectedByProvider: {
+          ...prev.detectedByProvider,
+          ...updatesByProvider,
+        },
+      }));
+    }
+
+    setAllApiDetectState(prev => ({
+      ...prev,
+      loading: false,
+      results: succeededCount > 0 ? updatesByProvider : prev.results,
+      summary: succeededCount > 0
+        ? getLocalText(
+            `已检测 ${succeededCount} 个服务商，共 ${totalCount} 个可用模型 · 列表已更新`,
+            `Detected ${totalCount} models across ${succeededCount} provider(s) · List updated`,
+            `${succeededCount} 個のプロバイダーから ${totalCount} 個のモデルを検出・更新しました`
+          )
+        : '',
+      error: failedProviders.length > 0
+        ? getLocalText(
+            `部分检测失败：${failedProviders.join('、')}`,
+            `Failed for: ${failedProviders.join(', ')}`,
+            `検出失敗：${failedProviders.join('・')}`
+          )
+        : '',
+    }));
+  };
+
+  const getProviderCatalogModels = (providerId) => {
+    if (!providerId) return [];
+    if (Object.prototype.hasOwnProperty.call(apiDetectState.detectedByProvider, providerId)) {
+      return apiDetectState.detectedByProvider[providerId] || [];
+    }
+    return Array.isArray(models)
+      ? models.filter(m => m?.provider === providerId && m?.label !== `${m?.name} (current)`)
+      : [];
+  };
+
+  const renderSelectableModelButtons = (providerId, modelList = []) => {
+    const normalizedActiveModel = providerId === 'copilot'
+      ? normalizeCopilotModelName(config.model)
+      : config.model;
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+        {modelList.map(model => {
+          const isSelected = config.provider === providerId && normalizedActiveModel === model.name;
+          return (
+            <button
+              key={`${providerId}:${model.name}`}
+              type="button"
+              onClick={() => selectDetectedModel(providerId, model.name)}
+              title={model.name}
+              className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-all min-w-0 ${
+                isSelected
+                  ? 'border-[#ff75ac] bg-[#ff75ac]/12 text-[#ff75ac] dark:text-[#ff9bc8] font-semibold'
+                  : 'border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] text-[var(--text-dark)] hover:border-[#ff75ac]/45 hover:bg-[#ff75ac]/5'
+              }`}
+            >
+              <span className="truncate">{model.label || model.name}</span>
+              <span className="flex items-center gap-1 shrink-0">
+                {model.supportsVision && <Image size={11} className="text-sky-500" />}
+                {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-[#ff75ac]" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderProviderDetectPanel = (providerId, hintText) => {
+    const providerModels = getProviderCatalogModels(providerId);
+    const hasDetected = Object.prototype.hasOwnProperty.call(apiDetectState.detectedByProvider, providerId);
+    const filteredModels = apiModelFilter.trim()
+      ? providerModels.filter(m => `${m.label || ''} ${m.name || ''}`.toLowerCase().includes(apiModelFilter.trim().toLowerCase()))
+      : providerModels;
+
+    return (
+      <>
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+          <p className="text-[10px] text-[var(--text-tertiary)]">{hintText}</p>
+          <button
+            type="button"
+            onClick={() => handleDetectProviderModels(providerId)}
+            disabled={apiDetectState.loading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#ff75ac]/35 bg-[#ff75ac]/10 px-3 py-1.5 text-xs font-semibold text-[#ff75ac] transition-all hover:bg-[#ff75ac] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          >
+            <RefreshCw size={12} className={apiDetectState.loading ? 'animate-spin' : ''} />
+            {apiDetectState.loading
+              ? getLocalText('检测中...', 'Detecting...', '検出中...')
+              : getLocalText('检测全部模型', 'Detect All Models', 'すべてのモデルを検出')}
+          </button>
+        </div>
+
+        {(apiDetectState.error || hasDetected || providerModels.length > 0) && (
+          <div className="border-t border-[var(--surface-border-subtle)] pt-3 space-y-2.5">
+            {apiDetectState.error && (
+              <div role="alert" className="rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
+                {apiDetectState.error}
+              </div>
+            )}
+
+            {(hasDetected || providerModels.length > 0) && (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                    {apiDetectState.updatedProvider === providerId ? (
+                      <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
+                    ) : (
+                      <Cpu size={13} className="text-[var(--text-tertiary)] shrink-0" />
+                    )}
+                    <span>
+                      {getLocalText(
+                        `可用模型 (${providerModels.length})`,
+                        `Available Models (${providerModels.length})`,
+                        `利用可能なモデル (${providerModels.length})`
+                      )}
+                    </span>
+                    {apiDetectState.updatedProvider === providerId && (
+                      <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        {getLocalText('已更新列表', 'List updated', '更新済み')}
+                      </span>
+                    )}
+                  </div>
+                  {providerModels.length > 8 && (
+                    <div className="relative">
+                      <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
+                      <input
+                        type="text"
+                        value={apiModelFilter}
+                        onChange={(e) => setApiModelFilter(e.target.value)}
+                        placeholder={getLocalText('筛选模型...', 'Filter models...', 'モデルを検索...')}
+                        className="w-36 sm:w-44 rounded-lg border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] pl-7 pr-2.5 py-1 text-[11px] text-[var(--text-dark)] outline-none focus:border-[#ff75ac]"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {providerModels.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] px-3 py-2.5 text-center text-xs text-[var(--text-tertiary)]">
+                    {getLocalText('未检测到可用聊天模型', 'No available chat models detected', '利用可能なチャットモデルが見つかりませんでした')}
+                  </div>
+                ) : filteredModels.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] px-3 py-2 text-center text-xs text-[var(--text-tertiary)]">
+                    {getLocalText('没有匹配的模型', 'No matching models', '一致するモデルがありません')}
+                  </div>
+                ) : (
+                  <div className="max-h-44 overflow-y-auto pr-0.5">
+                    {renderSelectableModelButtons(providerId, filteredModels)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </>
+    );
   };
 
   const refreshCustomDrawingModels = async () => {
@@ -204,6 +549,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     }
   };
 
+  const [localTtsStatus, setLocalTtsStatus] = useState(() => getLocalTtsState());
+
+  useEffect(() => {
+    return subscribeLocalTtsStatus(setLocalTtsStatus);
+  }, []);
+
   useEffect(() => {
     if (config.ttsProvider === 'gpt-sovits' && sovitsModels.gpt.length === 0) {
       refreshSovitsModels();
@@ -224,13 +575,13 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
       const formData = new FormData();
       formData.append('file', file);
-      
+
       const res = await fetch(`${BACKEND_URL}/api/upload`, {
         method: 'POST',
         body: formData
       });
       const data = await res.json();
-      
+
       if (data.filename) {
         const imageUrl = `${BACKEND_URL}/uploads/${data.filename}`;
         if (cropperData.target === 'user') {
@@ -278,7 +629,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
           body: JSON.stringify({ device_code: deviceFlow.device_code })
         });
         const data = await res.json();
-        
+
         if (!isActive) return;
 
         if (data.access_token) {
@@ -323,18 +674,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
     };
   }, [isPolling, deviceFlow, setConfig]);
 
-  const addMcp = () => {
-    if (!mcpUrl) return;
-    const newMcp = [...(config.mcpServices || []), mcpUrl];
-    setConfig({ ...config, mcpServices: newMcp });
-    setMcpUrl('');
-    fetch(`${BACKEND_URL}/api/mcp/config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcpServices: newMcp })
-    });
-  };
-
   return (
     <motion.div
       className={windowed ? 'h-full w-full' : 'fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4'}
@@ -346,7 +685,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
         {...(!windowed ? modalPanelMotion : {})}
         onClick={!windowed ? (event) => event.stopPropagation() : undefined}
       >
-        <div className="px-4 py-2.5 border-b border-[var(--surface-border-subtle)] flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
+        <div className="px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:pt-2.5 border-b border-[var(--surface-border-subtle)] flex items-center justify-between bg-[var(--surface-bg-light)] shrink-0">
           <h3 className="text-sm sm:text-base font-semibold text-[var(--text-dark)] flex items-center gap-2">
             <Shield size={16} className="text-[#ff75ac]" />
             {t('settings')}
@@ -356,7 +695,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 sm:space-y-8">
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Cpu size={16} />
@@ -398,7 +737,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 {activeApiProvider.id === 'custom' && (
                   <div>
                     <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{getLocalText('基础地址', 'Base URL', 'ベース URL')}</label>
-                    <input 
+                    <input
                       type="text"
                       className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
                       placeholder="https://api.openai.com/v1"
@@ -410,7 +749,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 <div>
                   <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{activeApiProvider.name} {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
                   <div className="relative">
-                    <input 
+                    <input
                       type="password"
                       className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none pr-10"
                       placeholder="sk-..."
@@ -420,56 +759,116 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     <Shield className="absolute right-3 top-2.5 text-[var(--text-tertiary)]" size={16} />
                   </div>
                 </div>
-                <p className="text-[10px] text-[var(--text-tertiary)]">
-                  {getLocalText('这个 Key 只会保存到当前供应商，不会再和其它 API 共用。', 'This key is stored only for this provider and will not be reused by other APIs.')}
-                </p>
+                {renderProviderDetectPanel(
+                  activeApiProvider.id,
+                  getLocalText('这个 Key 只会保存到当前供应商，不会再和其它 API 共用。', 'This key is stored only for this provider and will not be reused by other APIs.')
+                )}
               </div>
             )}
-            <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border bg-[var(--surface-bg-light)] p-4">
-              <div className="min-w-0 pr-2">
-                <div className="text-sm font-bold text-[var(--text-dark)]">
-                  {getLocalText('主页列出全部已启用 API 模型', 'List all enabled API models on Home')}
+            <div className="mt-4 rounded-xl border bg-[var(--surface-bg-light)] p-4 space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 pr-2">
+                  <div className="text-sm font-bold text-[var(--text-dark)]">
+                    {getLocalText('主页列出全部已启用 API 模型', 'List all enabled API models on Home')}
+                  </div>
+                  <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                    {getLocalText(
+                      `开启后，顶部模型列表会拉取所有开关已开启的 API 模型。当前已启用 ${configuredApiCount} 个 API。关闭服务商会保留密钥，但停止获取并隐藏其模型。`,
+                      `Fetch models from all APIs enabled by their switches. ${configuredApiCount} API(s) enabled. Disabling a provider keeps credentials but stops fetching and hides its models.`
+                    )}
+                  </div>
                 </div>
-                <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">
-                  {getLocalText(
-                    `开启后，顶部模型列表会拉取所有开关已开启的 API 模型。当前已启用 ${configuredApiCount} 个 API。关闭服务商会保留密钥，但停止获取并隐藏其模型。`,
-                    `Fetch models from all APIs enabled by their switches. ${configuredApiCount} API(s) enabled. Disabling a provider keeps credentials but stops fetching and hides its models.`
+                <button
+                  onClick={() => setConfig({ ...config, showAllEnabledApiModels: !config.showAllEnabledApiModels })}
+                    role="switch" aria-checked={Boolean(config.showAllEnabledApiModels)} aria-label={getLocalText('显示全部已启用模型', 'Show all enabled models')}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.showAllEnabledApiModels ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
+                  title={getLocalText('切换全部 API 模型列表', 'Toggle all API model listing')}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.showAllEnabledApiModels ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+              {config.showAllEnabledApiModels && configuredApiCount > 0 && (
+                <div className="border-t border-[var(--surface-border-subtle)] pt-3 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 text-[11px] text-[var(--text-secondary)]">
+                      {allApiDetectState.summary ? (
+                        <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                          <CheckCircle2 size={13} className="shrink-0" />
+                          {allApiDetectState.summary}
+                        </span>
+                      ) : (
+                        getLocalText('一键检测所有已启用的 API 可用模型并更新列表', 'Detect all models from enabled APIs and update the catalog', '有効なすべての API からモデルを一括検出し更新します')
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleDetectAllEnabledApiModels}
+                      disabled={allApiDetectState.loading}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--surface-border-subtle)] bg-[var(--surface-bg)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text-dark)] transition-all hover:border-[#ff75ac] hover:text-[#ff75ac] disabled:opacity-50 shrink-0"
+                    >
+                      <RefreshCw size={11} className={allApiDetectState.loading ? 'animate-spin' : ''} />
+                      {allApiDetectState.loading
+                        ? getLocalText('正在检测...', 'Detecting...', '検出中...')
+                        : getLocalText('检测全部已启用 API', 'Detect All Enabled APIs', '有効な API を一括検出')}
+                    </button>
+                  </div>
+                  {allApiDetectState.error && (
+                    <div role="alert" className="rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-1.5 text-[11px] text-red-600 dark:text-red-300">
+                      {allApiDetectState.error}
+                    </div>
+                  )}
+                  {allApiDetectState.results && Object.keys(allApiDetectState.results).length > 0 && (
+                    <div className="max-h-48 overflow-y-auto space-y-2.5 pr-0.5">
+                      {Object.entries(allApiDetectState.results).map(([providerId, providerModels]) => (
+                        <div key={providerId} className="space-y-1">
+                          <div className="text-[11px] font-semibold text-[var(--text-secondary)]">
+                            {getChatProviderName(providerId, i18n.resolvedLanguage || i18n.language)} ({providerModels.length})
+                          </div>
+                          {providerModels.length > 0 ? (
+                            renderSelectableModelButtons(providerId, providerModels)
+                          ) : (
+                            <div className="text-[11px] text-[var(--text-tertiary)]">
+                              {getLocalText('未检测到可用模型', 'No models detected', 'モデルが見つかりませんでした')}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-              </div>
-              <button
-                onClick={() => setConfig({ ...config, showAllEnabledApiModels: !config.showAllEnabledApiModels })}
-                  role="switch" aria-checked={Boolean(config.showAllEnabledApiModels)} aria-label={getLocalText('显示全部已启用模型', 'Show all enabled models')}
-                className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.showAllEnabledApiModels ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
-                title={getLocalText('切换全部 API 模型列表', 'Toggle all API model listing')}
-              >
-                <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.showAllEnabledApiModels ? 'left-6' : 'left-1'}`} />
-              </button>
+              )}
             </div>
             {config.provider === 'ollama' && (
-              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl">
-                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">{t('ollama_endpoint')}</label>
-                <input 
-                   type="text"
-                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                   placeholder="http://localhost:11434"
-                   value={config.ollamaUrl || ''}
-                   onChange={(e) => setConfig({...config, ollamaUrl: e.target.value})}
-                />
-                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{t('ollama_tip')}</p>
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">{t('ollama_endpoint')}</label>
+                  <input
+                     type="text"
+                     className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
+                     placeholder="http://localhost:11434"
+                     value={config.ollamaUrl || ''}
+                     onChange={(e) => setConfig({...config, ollamaUrl: e.target.value})}
+                  />
+                </div>
+                {renderProviderDetectPanel('ollama', t('ollama_tip'))}
               </div>
             )}
             {config.provider === 'lmstudio' && (
-              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl">
-                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">LMStudio {getLocalText('端点', 'Endpoint', 'エンドポイント')}</label>
-                <input 
-                   type="text"
-                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                   placeholder="http://localhost:1234"
-                   value={config.lmstudioUrl || ''}
-                   onChange={(e) => setConfig({...config, lmstudioUrl: e.target.value})}
-                />
-                <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{getLocalText('本地 LMStudio 服务端点（默认：http://localhost:1234）', 'Local LMStudio server endpoint (default: http://localhost:1234)', 'ローカル LMStudio サーバーのエンドポイント（既定: http://localhost:1234）')}</p>
+              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">LMStudio {getLocalText('端点', 'Endpoint', 'エンドポイント')}</label>
+                  <input
+                     type="text"
+                     className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
+                     placeholder="http://localhost:1234"
+                     value={config.lmstudioUrl || ''}
+                     onChange={(e) => setConfig({...config, lmstudioUrl: e.target.value})}
+                  />
+                </div>
+                {renderProviderDetectPanel(
+                  'lmstudio',
+                  getLocalText('本地 LMStudio 服务端点（默认：http://localhost:1234）', 'Local LMStudio server endpoint (default: http://localhost:1234)', 'ローカル LMStudio サーバーのエンドポイント（既定: http://localhost:1234）')
+                )}
               </div>
             )}
             {config.provider === 'copilot' && (
@@ -480,7 +879,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       {t('github_auth_desc')}
                     </div>
                     {!deviceFlow ? (
-                      <button 
+                      <button
                         onClick={startGitHubLogin}
                         className="w-full bg-[var(--code-bg)] text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-[var(--code-bg)] transition-all shadow-lg shadow-slate-200"
                       >
@@ -493,9 +892,9 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         <div className="text-3xl font-mono font-bold tracking-[0.3em] bg-[var(--surface-bg)] border-2 border-dashed border-saki-pink/25 py-4 rounded-2xl text-[#ff75ac] shadow-inner">
                           {deviceFlow.user_code}
                         </div>
-                        <a 
-                          href={deviceFlow.verification_uri} 
-                          target="_blank" 
+                        <a
+                          href={deviceFlow.verification_uri}
+                          target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-2 bg-[#ff75ac] text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-saki-pink transition-all"
                         >
@@ -520,13 +919,17 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         <div className="text-[10px] text-[var(--text-secondary)] truncate w-32">{getLocalText('令牌', 'Token', 'トークン')}: {config.copilotToken.slice(0, 8)}...</div>
                       </div>
                     </div>
-                    <button 
+                    <button
                       onClick={() => setConfig({...config, copilotToken: ''})}
                       className="text-xs text-red-500 font-medium hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors border border-red-50"
                     >
                       {t('relogin')}
                     </button>
                   </div>
+                )}
+                {renderProviderDetectPanel(
+                  'copilot',
+                  getLocalText('检测当前已授权 GitHub Models 或本地 Copilot 可用模型', 'Detect available models for your authorized GitHub Models / Copilot account', '認証済みの GitHub Models / Copilot で利用可能なモデルを検出します')
                 )}
               </div>
             )}
@@ -535,82 +938,81 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Search size={16} />
-              {t('search_engine_config')}
+              {getLocalText('搜索引擎配置', 'Search Engine', '検索エンジン')}
             </h4>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {[
-                { id: 'off', name: t('none'), sub: t('disabled') },
-                { id: 'searxng', name: 'SearxNG', sub: getLocalText('本地', '(Local)', 'ローカル') },
-                { id: 'google', name: 'Google', sub: getLocalText('自定义搜索', 'Custom Search', 'カスタム検索') },
-                { id: 'bing', name: 'Bing', sub: 'Azure' },
-                { id: 'duckduckgo', name: 'DuckDuckGo', sub: getLocalText('免费', '(Free)', '無料') },
-              ].map(s => (
-                <button 
-                  key={s.id}
-                  onClick={() => setConfig({...config, searchEngine: s.id})}
-                  className={`p-3 border-2 rounded-xl text-left transition-all ${config.searchEngine === s.id ? 'border-saki-pink bg-saki-pink/10' : 'hover:border-[var(--surface-border-subtle)]'}`}
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-3">
+              <div>
+                <label htmlFor="search-provider" className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                  {getLocalText('搜索服务', 'Search provider', '検索プロバイダー')}
+                </label>
+                <select
+                  id="search-provider"
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-[var(--surface-bg)]"
+                  value={config.searchEngine === 'searxng' ? 'searxng' : 'exa'}
+                  onChange={event => setConfig({ ...config, searchEngine: event.target.value })}
                 >
-                  <div className="font-bold text-[var(--text-dark)] text-sm">{s.name}</div>
-                  <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">{s.sub}</div>
-                </button>
-              ))}
+                  <option value="exa">{getLocalText('默认（Exa 托管搜索）', 'Default (Exa hosted search)', 'デフォルト（Exa ホスト検索）')}</option>
+                  <option value="searxng">SearxNG</option>
+                </select>
+              </div>
+              {config.searchEngine === 'searxng' && (
+                <div>
+                  <label htmlFor="searxng-url" className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{t('searxng_url')}</label>
+                  <div className="flex gap-2">
+                    <input
+                      id="searxng-url"
+                      type="url"
+                      className="flex-1 border rounded-lg px-3 py-2 text-sm bg-[var(--surface-bg)]"
+                      placeholder="http://127.0.0.1:8080"
+                      value={config.searxngUrl || ''}
+                      onChange={event => setConfig({ ...config, searxngUrl: event.target.value })}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleTestSearxng}
+                      disabled={searxngTestState.loading}
+                      className="px-3 py-2 rounded-lg border text-xs font-medium bg-[var(--surface-bg)] hover:bg-[var(--surface-bg-light)] disabled:opacity-50 inline-flex items-center gap-1.5 shrink-0"
+                    >
+                      <RefreshCw size={13} className={searxngTestState.loading ? 'animate-spin' : ''} />
+                      {searxngTestState.loading
+                        ? getLocalText('检测中...', 'Testing...', 'テスト中...')
+                        : getLocalText('检测引擎', 'Test & Detect', '接続テスト')}
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-xs text-[var(--text-secondary)]">{t('searxng_url_tip')}</p>
+                  <p className="text-xs text-[var(--text-secondary)]">{getLocalText(
+                    '填写后端可访问的实例地址，并在实例 settings.yml 的 search.formats 中启用 json。连接失败时会明确报错，不会自动切换服务。',
+                    'Use an instance URL reachable by the backend and enable json in search.formats in its settings.yml. Failures are reported without switching providers.',
+                    'バックエンドから接続できる URL を入力し、settings.yml の search.formats で json を有効にしてください。失敗時に自動で切り替えません。'
+                  )}</p>
+                  {searxngTestState.error && (
+                    <div className="mt-2 text-xs text-red-500 bg-red-50/60 border border-red-200/70 rounded-lg px-3 py-2">
+                      {searxngTestState.error}
+                    </div>
+                  )}
+                  {searxngTestState.result && (
+                    <div className="mt-2 text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200/80 rounded-lg px-3 py-2 space-y-1">
+                      <div className="font-medium flex items-center gap-1.5">
+                        <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                        {getLocalText(
+                          `连接成功（JSON 接口可用）：已启用 ${searxngTestState.result.enabledEnginesCount || 0} 个引擎，试搜返回 ${searxngTestState.result.sampleResultCount} 条`,
+                          `Connected (JSON OK): ${searxngTestState.result.enabledEnginesCount || 0} enabled engines, ${searxngTestState.result.sampleResultCount} probe results`,
+                          `接続成功（JSON 有効）: ${searxngTestState.result.enabledEnginesCount || 0} エンジン有効、テスト結果 ${searxngTestState.result.sampleResultCount} 件`
+                        )}
+                      </div>
+                      {searxngTestState.result.categories && Object.keys(searxngTestState.result.categories).length > 0 && (
+                        <div className="text-[11px] opacity-85">
+                          {['general', 'news', 'it', 'web', 'science']
+                            .filter(cat => searxngTestState.result.categories[cat])
+                            .map(cat => `${cat}: ${searxngTestState.result.categories[cat]}`)
+                            .join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-
-            {config.searchEngine === 'searxng' && (
-              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{t('searxng_url')}</label>
-                  <input 
-                    type="text"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                    placeholder="http://127.0.0.1:8080"
-                    value={config.searxngUrl || ''}
-                    onChange={(e) => setConfig({...config, searxngUrl: e.target.value})}
-                  />
-                  <p className="text-[10px] text-[var(--text-tertiary)] mt-2">{t('searxng_url_tip')}</p>
-                </div>
-              </div>
-            )}
-
-            {config.searchEngine === 'google' && (
-              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
-                  <input 
-                    type="password"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                    placeholder="AIza..."
-                    value={config.googleApiKey || ''}
-                    onChange={(e) => setConfig({...config, googleApiKey: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Google CX ID</label>
-                  <input 
-                    type="text"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                    placeholder="Search Engine ID"
-                    value={config.googleCxId || ''}
-                    onChange={(e) => setConfig({...config, googleCxId: e.target.value})}
-                  />
-                </div>
-              </div>
-            )}
-
-            {config.searchEngine === 'bing' && (
-              <div className="mt-4 p-4 bg-[var(--surface-bg-light)] border rounded-xl space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Bing {getLocalText('API 密钥', 'API Key', 'API キー')}</label>
-                  <input 
-                    type="password"
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none"
-                    placeholder="Azure Key"
-                    value={config.bingApiKey || ''}
-                    onChange={(e) => setConfig({...config, bingApiKey: e.target.value})}
-                  />
-                </div>
-              </div>
-            )}
           </section>
 
           <section>
@@ -620,7 +1022,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
             </h4>
             <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-3">
               <label className="block text-xs font-medium text-[var(--text-secondary)]">{t('personality_def')}</label>
-              <textarea 
+              <textarea
                 className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] min-h-[100px] resize-none"
                 placeholder={t('prompt_placeholder')}
                 value={config.systemPrompt || t('saki_personality')}
@@ -663,26 +1065,26 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                </div>
 
                <div className="space-y-4">
-                 <div className="flex p-1 bg-[var(--surface-inset)] rounded-lg w-fit">
-                    <button 
+                 <div className="flex flex-wrap p-1 bg-[var(--surface-inset)] rounded-lg w-fit max-w-full gap-0.5">
+                    <button
                       onClick={() => setConfig({...config, drawingProvider: 'none'})}
                       className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'none' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--text-secondary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('none')}
                     </button>
-                    <button 
+                    <button
                       onClick={() => setConfig({...config, drawingProvider: (config.drawingProvider === 'stable-diffusion' || config.drawingProvider === 'none') ? '' : config.drawingProvider})}
                       className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(config.drawingProvider !== 'stable-diffusion' && config.drawingProvider !== 'none') ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('llm_drawing')}
                     </button>
-                    <button 
+                    <button
                       onClick={() => setConfig({...config, drawingProvider: 'stable-diffusion'})}
                       className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'stable-diffusion' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--accent-text)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
                       {t('sd_drawing')}
                     </button>
-                    <button 
+                    <button
                       onClick={() => setConfig({...config, drawingProvider: 'custom'})}
                       className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.drawingProvider === 'custom' ? 'bg-[var(--surface-bg)] shadow-sm text-orange-600' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                     >
@@ -698,7 +1100,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                      <div>
                         <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('sd_api_url')}</label>
-                        <input 
+                        <input
                           type="text"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="http://127.0.0.1:7860/sdapi/v1/txt2img"
@@ -712,7 +1114,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                       <div>
                         <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('基础地址', 'Base URL', 'ベース URL')}</label>
-                        <input 
+                        <input
                           type="text"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="https://api.openai.com/v1"
@@ -722,7 +1124,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       </div>
                       <div>
                         <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('API 密钥', 'API Key', 'API キー')}</label>
-                        <input 
+                        <input
                           type="password"
                           className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
                           placeholder="sk-..."
@@ -760,7 +1162,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                      <div className="relative">
                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('select_drawing_model')}</label>
-                       <select 
+                       <select
                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] appearance-none pr-10"
                          value={config.drawingModel ? `${config.drawingProvider}:${config.drawingModel}` : ''}
                          onChange={(e) => {
@@ -798,14 +1200,34 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               {t('tts_settings')}
             </h4>
             <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
-              <div className="flex p-1 bg-[var(--surface-inset)] rounded-lg w-fit">
-                <button 
+              <div className="flex items-center justify-between gap-4">
+                <div className="pr-4">
+                  <div className="text-sm font-bold text-[var(--text-dark)]">{getLocalText('自动朗读回复', 'Automatically read replies', '返信を自動読み上げ')}</div>
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed">{getLocalText('开启后，Saki 回复完成时会自动使用当前 TTS 播放。', 'Read completed Saki replies with the selected TTS provider.', 'オンにすると、選択した TTS で返信を自動再生します。')}</div>
+                </div>
+                <button
+                  onClick={() => setConfig({ ...config, autoTtsEnabled: config.autoTtsEnabled === false })}
+                  role="switch" aria-checked={config.autoTtsEnabled !== false}
+                  aria-label={getLocalText('自动朗读回复', 'Automatically read replies', '返信を自動読み上げ')}
+                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.autoTtsEnabled !== false ? 'bg-[#ff75ac]' : 'bg-[var(--surface-inset)]'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.autoTtsEnabled !== false ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+              <div className="flex flex-wrap p-1 bg-[var(--surface-inset)] rounded-lg w-fit gap-0.5">
+                <button
                   onClick={() => setConfig({...config, ttsProvider: 'browser'})}
                   className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${(!config.ttsProvider || config.ttsProvider === 'browser') ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                 >
                   {t('browser_tts')}
                 </button>
-                <button 
+                <button
+                  onClick={() => setConfig({...config, ttsProvider: 'local-wasm'})}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'local-wasm' ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
+                >
+                  {getLocalText('本地模型 (WASM)', 'Local Model (WASM)', 'ローカルモデル (WASM)')}
+                </button>
+                <button
                   onClick={() => setConfig({...config, ttsProvider: 'gpt-sovits'})}
                   className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'gpt-sovits' ? 'bg-[var(--surface-bg)] shadow-sm text-[var(--accent-text)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                 >
@@ -813,19 +1235,93 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                 </button>
               </div>
 
+              {config.ttsProvider === 'local-wasm' && (
+                <div className="space-y-3 p-3.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-bg)] animate-in fade-in slide-in-from-top-1 duration-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-bold text-[var(--text-dark)]">
+                        {getLocalText('浏览器端神经网络语音 (sherpa-onnx WASM)', 'In-Browser Neural TTS (sherpa-onnx WASM)', 'ブラウザ内ニューラル TTS (sherpa-onnx WASM)')}
+                      </div>
+                      <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
+                        {getLocalText('模型作为静态资源托管，首次加载后自动缓存在本地浏览器中；全程零服务器算力消耗，加载失败时自动回退到浏览器 TTS。', 'Hosted as static files and cached in your browser after first load. Uses zero server compute and falls back to Browser TTS on error.')}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="text-[11px] font-medium text-[var(--text-secondary)]">
+                      {localTtsStatus.status === 'idle' && getLocalText('状态：未加载（点击预加载或首次朗读时自动加载）', 'Status: Not loaded')}
+                      {localTtsStatus.status === 'loading' && (localTtsStatus.progressText || getLocalText('正在加载模型...', 'Loading model...'))}
+                      {localTtsStatus.status === 'ready' && <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{getLocalText('状态：已就绪（本地推理）', 'Status: Ready')}</span>}
+                      {localTtsStatus.status === 'error' && <span className="text-rose-500">{localTtsStatus.error}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          initLocalTts().catch(() => {});
+                        }}
+                        disabled={localTtsStatus.status === 'loading'}
+                        className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] text-[11px] font-semibold hover:bg-[var(--surface-bg-light)] disabled:opacity-50"
+                      >
+                        {localTtsStatus.status === 'ready'
+                          ? getLocalText('已就绪', 'Ready')
+                          : localTtsStatus.status === 'loading'
+                            ? `${localTtsStatus.percent || 0}%`
+                            : getLocalText('预加载模型', 'Preload')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            const audio = await synthesizeLocalSentence(
+                              getLocalText('嗨嗨，我来啦，现在使用的是本地浏览器语音模型哦！', 'Hello! Local browser voice model is active.'),
+                              { sid: Number(config.localTtsSid) || 0, speed: Number(config.localTtsSpeed) || 1.0 }
+                            );
+                            if (audio) await playFloat32Audio(audio.samples, audio.sampleRate);
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }}
+                        disabled={localTtsStatus.status === 'loading'}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#ff75ac] text-white text-[11px] font-semibold hover:opacity-90 disabled:opacity-50"
+                      >
+                        {getLocalText('试听', 'Test')}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">
+                      <span>{getLocalText('语速', 'Speech Speed', '話速')}</span>
+                      <span className="font-mono">{Number(config.localTtsSpeed || 1.0).toFixed(2)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.7"
+                      max="1.4"
+                      step="0.05"
+                      value={config.localTtsSpeed || 1.0}
+                      onChange={(e) => setConfig({ ...config, localTtsSpeed: parseFloat(e.target.value) })}
+                      className="w-full accent-[#ff75ac]"
+                    />
+                  </div>
+                </div>
+              )}
+
               {config.ttsProvider === 'gpt-sovits' && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
                   <div>
                     <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{getLocalText('API 地址', 'API URL', 'API URL')}</label>
                     <div className="flex gap-2">
-                      <input 
+                      <input
                         type="text"
                         className="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] font-mono"
                         placeholder="http://127.0.0.1:9880"
                         value={config.sovitsUrl || 'http://127.0.0.1:9880'}
                         onChange={(e) => setConfig({...config, sovitsUrl: e.target.value})}
                       />
-                      <button 
+                      <button
                         onClick={refreshSovitsModels}
                         className="p-2 bg-[var(--surface-bg)] border rounded-lg hover:bg-[var(--surface-bg-light)] text-[var(--accent-text)] transition-all active:scale-95"
                         title={t('refresh_models')}
@@ -834,11 +1330,11 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       </button>
                     </div>
                   </div>
-                  
-                  <div className="grid grid-cols-2 gap-3">
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">GPT {getLocalText('模型', 'Model', 'モデル')}</label>
-                      <select 
+                      <select
                         className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsGptModel || ''}
                         onChange={(e) => {
@@ -854,7 +1350,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">SoVITS {getLocalText('模型', 'Model', 'モデル')}</label>
-                      <select 
+                      <select
                         className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsSovitsModel || ''}
                         onChange={(e) => {
@@ -873,7 +1369,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   <div>
                     <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('refer_audio')}</label>
                     <div className="flex items-center gap-3">
-                      <button 
+                      <button
                         onClick={() => sovitsAudioInputRef.current?.click()}
                         className={`flex-1 border-2 border-dashed rounded-xl p-3 text-xs transition-all flex items-center justify-center gap-2 ${config.sovitsRefAudio ? 'border-saki-pink/40 bg-saki-pink/10 text-[var(--accent-text)]' : 'border-[var(--surface-border-subtle)] text-[var(--text-secondary)] hover:border-saki-pink/40 hover:bg-saki-pink/10'}`}
                       >
@@ -886,7 +1382,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
                   <div>
                     <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('refer_text')}</label>
-                    <textarea 
+                    <textarea
                       className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saki-pink outline-none bg-[var(--surface-bg)] min-h-[60px] resize-none"
                       value={config.sovitsRefText || ''}
                       onChange={(e) => setConfig({...config, sovitsRefText: e.target.value})}
@@ -931,87 +1427,28 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Brain size={16} />
-              {getLocalText('离线反思', 'Offline Reflection')}
+              {getLocalText('记忆反思与人工整理', 'Memory review & correction')}
             </h4>
-            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="pr-4">
-                  <div className="text-sm font-bold text-[var(--text-dark)]">
-                    {getLocalText('用户离线时自动蒸馏当天上下文', 'Digest today\'s context when the user is offline')}
-                  </div>
-                  <div className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed">
-                    {getLocalText(
-                      '当网页端无人在线一段时间后，Agent 会读取当天的对话和当天改动过的文本文件，用本地小模型提炼长期记忆，并抽取结构化实体关系，例如“某个项目当前进展到哪了”。',
-                      'After the user has been offline for a while, the agent reads today\'s chats and today\'s changed text files, uses a small local model to distill long-term memory, and extracts structured entities and relations such as the latest project status.'
-                    )}
-                  </div>
-                </div>
-                <button
-                  onClick={() => setConfig({ ...config, offlineReflectionEnabled: config.offlineReflectionEnabled ? false : true })}
-                  role="switch" aria-checked={Boolean(config.offlineReflectionEnabled)} aria-label={getLocalText('离线反思', 'Offline reflection')}
-                  className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${config.offlineReflectionEnabled ? 'bg-saki-pink' : 'bg-[var(--surface-inset)]'}`}
-                  title={getLocalText('切换离线反思开关', 'Toggle offline reflection')}
-                >
-                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.offlineReflectionEnabled ? 'left-6' : 'left-1'}`} />
-                </button>
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-3">
+              <div className="text-sm font-bold text-[var(--text-dark)]">
+                {getLocalText('仅在记忆面板中手动运行', 'Manual review only')}
               </div>
-
-              <div className={`space-y-3 transition-opacity ${config.offlineReflectionEnabled ? 'opacity-100' : 'opacity-60'}`}>
-                <div>
-                  <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">
-                    {getLocalText('反思模型', 'Reflection Model')}
-                  </label>
-                  <div className="relative">
-                    <select
-                      disabled={!config.offlineReflectionEnabled}
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] appearance-none pr-10 disabled:bg-[var(--surface-bg-light)] disabled:text-[var(--text-tertiary)]"
-                      value={config.offlineReflectionModel ? `${config.offlineReflectionProvider}:${config.offlineReflectionModel}` : ''}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (!value) {
-                          setConfig({
-                            ...config,
-                            offlineReflectionProvider: 'ollama',
-                            offlineReflectionModel: '',
-                          });
-                          return;
-                        }
-
-                        const [provider, ...modelParts] = value.split(':');
-                        setConfig({
-                          ...config,
-                          offlineReflectionProvider: provider,
-                          offlineReflectionModel: modelParts.join(':'),
-                        });
-                      }}
-                    >
-                      <option value="">
-                        {getLocalText('自动选择当前本地模型（推荐）', 'Auto-select current local model (Recommended)')}
-                      </option>
-                      {offlineReflectionOptions.map((model) => (
-                        <option key={`${model.provider}:${model.name}`} value={`${model.provider}:${model.name}`}>
-                          {formatOfflineReflectionProvider(model.provider)}: {model.label || model.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="absolute right-3 top-3 pointer-events-none text-[var(--text-tertiary)]">
-                      <ChevronDown size={16} />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-saki-pink/15 bg-saki-pink/10 px-3 py-3 text-[11px] leading-relaxed text-[var(--accent-text)]">
-                  {offlineReflectionModels.length > 0
-                    ? getLocalText(
-                        '模型列表来自本地提供商（Ollama / LMStudio）。如果这里留空，系统会优先跟随当前已连接的本地聊天模型。',
-                        'The model list comes from local providers (Ollama / LMStudio). If left empty, the system will prefer the currently connected local chat model.'
-                      )
-                    : getLocalText(
-                        '当前还没有检测到本地模型，离线反思启用后会在本地模型可用时自动尝试运行。',
-                        'No local models are detected yet. Once a local model becomes available, offline reflection will start trying automatically.'
-                      )}
-                </div>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                {getLocalText(
+                  '自动离线反思与自动睡眠整理已停用。请前往「记忆系统 → 手动整理与校正」选择日期，生成建议，逐条校正或取消选择后，再确认保存。',
+                  'Automatic reflection and sleep consolidation are disabled. Open Memory Manager → Review & correct, generate proposals for a date, then edit and approve before committing.'
+                )}
+              </p>
+              <div className="rounded-lg border border-saki-pink/15 bg-saki-pink/10 px-3 py-2 text-xs text-[var(--accent-text)]">
+                {getLocalText('当前使用模型：', 'Configured model: ')}
+                <span className="font-semibold">{config.provider || '—'} / {config.model || '—'}</span>
               </div>
+              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                {getLocalText(
+                  '可使用当前配置的 API 模型或本地模型。如果使用云端 API，点击生成将向对应提供商发送当天对话与工作区内容片段，可能产生费用。',
+                  'Uses your current API or local chat model. Cloud API review sends conversation and workspace excerpts to that provider and may incur charges.'
+                )}
+              </p>
             </div>
           </section>
 
@@ -1047,7 +1484,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   <div className="text-sm font-bold text-[var(--text-dark)]">{t('particles_effect')}</div>
                   <div className="text-[10px] text-[var(--text-secondary)]">{t('particles_desc')}</div>
                 </div>
-                <button 
+                <button
                   onClick={() => setConfig({...config, showParticles: !config.showParticles})}
                   role="switch" aria-checked={Boolean(config.showParticles)} aria-label={getLocalText('樱花粒子', 'Sakura particles')}
                   className={`w-10 h-5 rounded-full transition-all relative ${config.showParticles ? 'bg-pink-400' : 'bg-[var(--surface-inset)]'}`}
@@ -1064,7 +1501,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       {t('user_avatar')}
                     </div>
                     <div className="flex items-center gap-4">
-                      <div 
+                      <div
                         className="w-16 h-16 rounded-full border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all shadow-sm shrink-0"
                         onClick={() => document.getElementById('avatar-upload').click()}
                       >
@@ -1075,11 +1512,11 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         )}
                       </div>
                       <div className="flex-1 space-y-2">
-                        <input 
+                        <input
                           id="avatar-upload"
-                          type="file" 
-                          accept="image/*" 
-                          className="hidden" 
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
                           onChange={(e) => {
                             const file = e.target.files[0];
                             if (file) {
@@ -1097,14 +1534,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                           }}
                         />
                         <div className="flex flex-wrap gap-2">
-                          <button 
+                          <button
                             onClick={() => document.getElementById('avatar-upload').click()}
                             className="text-[11px] bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-bold shadow-sm transition-all active:scale-95"
                           >
                             {t('change_avatar')}
                           </button>
                           {config.userAvatar && config.userAvatar !== '/assets/head_user.png' && (
-                            <button 
+                            <button
                               onClick={() => setConfig({...config, userAvatar: '/assets/head_user.png'})}
                               className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
                             >
@@ -1122,7 +1559,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       {t('ai_avatar')}
                     </div>
                     <div className="flex items-center gap-4">
-                      <div 
+                      <div
                         className="w-16 h-16 rounded-full border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all shadow-sm shrink-0"
                         onClick={() => document.getElementById('ai-avatar-upload').click()}
                       >
@@ -1133,11 +1570,11 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                         )}
                       </div>
                       <div className="flex-1 space-y-2">
-                        <input 
+                        <input
                           id="ai-avatar-upload"
-                          type="file" 
-                          accept="image/*" 
-                          className="hidden" 
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
                           onChange={(e) => {
                             const file = e.target.files[0];
                             if (file) {
@@ -1155,14 +1592,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                           }}
                         />
                         <div className="flex flex-wrap gap-2">
-                          <button 
+                          <button
                             onClick={() => document.getElementById('ai-avatar-upload').click()}
                             className="text-[11px] bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-bold shadow-sm transition-all active:scale-95"
                           >
                             {t('change_ai_avatar')}
                           </button>
                           {config.aiAvatar && (
-                            <button 
+                            <button
                               onClick={() => setConfig({...config, aiAvatar: ''})}
                               className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
                             >
@@ -1179,7 +1616,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
               <div>
                 <label className="block text-xs font-medium text-[var(--text-secondary)] mb-2">{t('background_image')}</label>
                 <div className="flex items-center gap-4">
-                  <div 
+                  <div
                     className="w-24 h-16 rounded-lg border-2 border-dashed border-[var(--surface-border-subtle)] flex items-center justify-center overflow-hidden bg-[var(--surface-bg)] group cursor-pointer hover:border-saki-pink transition-all"
                     onClick={() => document.getElementById('bg-upload').click()}
                   >
@@ -1190,11 +1627,11 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                     )}
                   </div>
                   <div className="flex-1">
-                    <input 
+                    <input
                       id="bg-upload"
-                      type="file" 
-                      accept="image/*" 
-                      className="hidden" 
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files[0];
                         if (file) {
@@ -1218,14 +1655,14 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                       }}
                     />
                     <div className="flex gap-2">
-                      <button 
+                      <button
                         onClick={() => document.getElementById('bg-upload').click()}
                         className="text-xs bg-[var(--surface-bg)] border px-3 py-1.5 rounded-lg hover:bg-[var(--surface-bg-light)] font-medium"
                       >
                         {t('upload_image')}
                       </button>
                       {backgroundPreset !== 'auto' && (
-                        <button 
+                        <button
                           onClick={() => setConfig(previous => selectChatBackground(previous, 'auto'))}
                           className="text-xs text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-medium"
                         >
@@ -1260,32 +1697,6 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
                   {getLocalText('昼夜随主题会自动切换晴空与夜景；手机端使用专用竖版。上传图片后将固定使用你的自定义背景。', 'Follow theme switches between daylight and night, with portrait artwork on mobile. Uploaded images remain fixed.')}
                 </p>
               </div>
-            </div>
-          </section>
-
-          <section>
-            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Server size={16} />
-              {t('mcp_config')}
-</h4>
-            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
-              <div className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                {t('mcp_config_desc')}
-              </div>
-              <textarea 
-                className="w-full border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] min-h-[200px] resize-none"
-                value={mcpConfigText}
-                onChange={(e) => {
-                  setMcpConfigText(e.target.value);
-                  try {
-                    const parsed = JSON.parse(e.target.value);
-                    setConfig({ ...config, mcpConfig: parsed });
-                  } catch (e) {
-                    // Invalid JSON - don't update config yet
-                  }
-                }}
-              />
-              <p className="text-[10px] text-[var(--text-tertiary)]">{t('mcp_tip')}</p>
             </div>
           </section>
 
@@ -1336,7 +1747,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
 
 
         <div className="p-4 border-t bg-[var(--surface-bg-light)] flex justify-end">
-          <button 
+          <button
             onClick={onClose}
             className="bg-[#ff75ac] text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-saki-pink shadow-lg shadow-blue-100"
           >
@@ -1345,10 +1756,10 @@ export default function SettingsModal({ config, setConfig, onClose, models, wind
         </div>
 
         {cropperData.isOpen && (
-          <ImageCropperModal 
-            image={cropperData.image} 
-            onCropComplete={handleCropComplete} 
-            onClose={() => setCropperData({ ...cropperData, isOpen: false })} 
+          <ImageCropperModal
+            image={cropperData.image}
+            onCropComplete={handleCropComplete}
+            onClose={() => setCropperData({ ...cropperData, isOpen: false })}
           />
         )}
       </motion.div>
