@@ -31,7 +31,9 @@ Saki takes the task-driven collaboration of coding agents like **Codex and Claud
 
 
 
-https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
+https://github.com/user-attachments/assets/296a2a45-9590-4b40-84da-655930a4de1a
+
+
 
 ## A closer look at Saki
 
