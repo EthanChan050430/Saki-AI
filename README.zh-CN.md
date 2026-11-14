@@ -31,7 +31,9 @@ Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Codi
 
 
 
-https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
+https://github.com/user-attachments/assets/283a9c57-3d0d-473e-bba6-f1969d2420b1
+
+
 
 ## 看见 Saki
 
