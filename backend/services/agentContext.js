@@ -137,6 +137,8 @@ function compactLoopMessages(messages, { systemText = '', budgetTokens = 32000, 
 }
 
 // Stream usage fields are cumulative snapshots, never deltas to add together.
+// The tracker also normalises the three provider dialects of cache accounting so
+// callers receive one shape (see services/usageStats.js).
 function createUsageTracker(onUsage) {
     let fields = {};
     return event => {
@@ -152,14 +154,38 @@ function createUsageTracker(onUsage) {
             promptTokens = fields.input_tokens + (fields.cache_creation_input_tokens || 0) + (fields.cache_read_input_tokens || 0);
         }
         const completionTokens = fields.completion_tokens ?? fields.output_tokens;
-        if (count(promptTokens) && count(completionTokens)) onUsage({ promptTokens, completionTokens });
+        if (!count(promptTokens) || !count(completionTokens)) return;
+
+        // Anthropic: separate cache fields. DeepSeek: hit/miss split of prompt_tokens.
+        // OpenAI: cached_tokens nested under prompt_tokens_details, included in prompt_tokens.
+        const cacheReadTokens = Math.max(0, Math.floor(
+            fields.cache_read_input_tokens
+            ?? fields.prompt_cache_hit_tokens
+            ?? fields.prompt_tokens_details?.cached_tokens
+            ?? fields.cached_tokens
+            ?? 0,
+        ));
+        const cacheCreationTokens = Math.max(0, Math.floor(fields.cache_creation_input_tokens ?? 0));
+        const uncachedInputTokens = Math.max(0, Math.floor(promptTokens - cacheReadTokens - cacheCreationTokens));
+
+        onUsage({
+            promptTokens,
+            completionTokens,
+            cacheReadTokens,
+            cacheCreationTokens,
+            uncachedInputTokens,
+        });
     };
 }
 
+// `usedTokens` is what occupies the window: the input side of the request. The
+// output is reported separately so a cache/context panel can show both without
+// double counting the same tokens.
 function contextStatusFromUsage(usage, budgetTokens, metadata = {}) {
-    const usedTokens = usage.promptTokens + usage.completionTokens;
+    const usedTokens = Number(usage?.promptTokens) || 0;
     return {
         ...metadata, ...usage, usedTokens, budgetTokens,
+        contextTokens: usedTokens,
         percent: Math.min(100, Math.round(usedTokens / Math.max(1, budgetTokens) * 100)),
         estimated: false, source: 'api', updatedAt: new Date().toISOString(),
     };

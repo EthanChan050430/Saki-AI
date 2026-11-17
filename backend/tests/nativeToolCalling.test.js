@@ -4,6 +4,33 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createToolRegistry, parseToolCalls, normalizeRespondText } = require('../services/agentTools.js');
+const { parseModelToolMarkup, cleanSavedToolMarkup } = require('../services/modelToolMarkup');
+
+it('recovers bare search markup while preserving quoted tool examples and ignoring unsupported actions', () => {
+    const tools = createToolRegistry();
+    const search = '<tool_call>search(query:<arg_value>NVIDIA Jensen Huang CEO</arg_value>)';
+    const quoted = '\x60' + search + '\x60\n\n~~~text\n' + search + '\n~~~\n';
+    const raw = quoted + '我来查。' + search + '<toolcall>search(query:<arg_value>英伟达 CEO</arg_value>)</toolcall>'
+        + '<toolcall>terminal(command:<arg_value>example</arg_value>)';
+    assert.deepEqual(parseToolCalls(raw, tools).map(call => [call.name, ...call.parsedArgs]), [
+        ['search', 'NVIDIA Jensen Huang CEO'], ['search', '英伟达 CEO'],
+    ]);
+    assert.equal(parseModelToolMarkup(raw).text, quoted + '我来查。');
+    assert.deepEqual(parseToolCalls('<think>' + search + '</think>', tools), []);
+    assert.deepEqual(parseToolCalls('Tool: respond("Example ' + search + '")', tools).map(call => call.name), ['respond']);
+});
+
+it('cleans historical assistant dialogue without editing user quotes or tool activity', () => {
+    const search = '<toolcall>search(query:<arg_value>test</arg_value>)';
+    const user = { role: 'user', content: search };
+    const action = { type: 'action', data: { type: 'search' }, observation: 'failed' };
+    const assistant = { role: 'assistant', parts: [{ type: 'text', content: '我先查。' + search }, action] };
+    const [savedUser, savedAssistant] = cleanSavedToolMarkup([user, assistant]);
+    assert.equal(savedUser, user);
+    assert.equal(savedAssistant.parts[0].content, '我先查。');
+    assert.equal(savedAssistant.parts[1], action);
+    assert.match(assistant.parts[0].content, /<toolcall>/);
+});
 const { compactLoopMessages } = require('../services/agentContext.js');
 const {
     nativeToolsFromRegistry,

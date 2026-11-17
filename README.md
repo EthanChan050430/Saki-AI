@@ -1,9 +1,9 @@
 <div align="center">
 
-# Saki AI Agent
-### Local-first AI workspace for code, files, research and long-term collaboration
+# Saki AI
+### Open-source, local-first AI agent workspace for code, files, research, and daily work
 
-Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Coding
+Multi-Model GUI · File & Terminal Agent · Git-free Checkpoints · MCP & Skills
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -21,43 +21,41 @@ Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Codi
 
 </div>
 
-**Saki AI is a local-first AI workspace built for Chinese-speaking users.** Connect local or cloud models in one GUI, let the agent work on your code, workspace files and terminal tasks, and bring research, documents, slides, long-term memory and QQ workflows into your daily work.
+**Saki AI is an open-source, local-first AI workspace that runs on your machine.** Connect local models (Ollama, LM Studio) or cloud APIs (OpenAI, Claude, Gemini, DeepSeek, Qwen, etc.) in one GUI, and let the agent edit code, manage workspace files, run terminal commands, conduct deep research, and generate documents or slides.
 
-Saki takes the task-driven collaboration of coding agents like **Codex and Claude Code** as its reference point. It does not claim to out-code them. The goal is a **personal AI workspace that isn't locked to one model, covers more than coding, and lets you manage and roll back tasks on your own machine**. The UI is served by a local web service; the Windows portable build launches it from an EXE and opens your browser. It is not a native desktop GUI.
+Inspired by task-driven coding agents like **Claude Code and Codex**, Saki focuses on giving you a **model-agnostic visual workspace that goes beyond coding**—with automatic per-turn file snapshots (roll back anytime without Git), long-term memory, MCP/plugin extensions, and live voice/video calls.
 
 **[Download Windows Portable](https://github.com/EthanChan050430/Saki-AI/releases/latest)** · [Quick Start](#quick-start) · [Low-resource Deployment](docs/deployment.md) · [Plugins](docs/plugin-marketplace.md)
 
-> **Keywords**: Desktop AI Agent · Coding Agent · Local-first · Ollama / LM Studio · MCP · Workspace Checkpoints · Long-term Memory · Research & Office
+https://github.com/user-attachments/assets/296a2a45-9590-4b40-84da-655930a4de1a
 
+## Preview
 
+**Multi-model workspace**: read and edit local files, run terminal commands, inspect diffs, and keep long-term memory across sessions.
 
-https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
+![Saki AI workspace — a local-first home for ideas, multi-model collaboration and long-term memory](.github/assets/saki-workspace-current-en.png)
 
-## A closer look at Saki
+**Plugin marketplace & MCP extensions**: install plugins, MCP tools, and custom Skills in one click.
 
-Your ideas, models and tools, together in a personal workspace.
+![Saki AI plugin marketplace — discover plugins, MCP tools and dedicated Skills](.github/assets/saki-extensions-current-en.png)
 
-![Saki AI workspace — a local-first home for ideas, multi-model collaboration and long-term memory](.github/assets/saki-workspace-poster-en.png)
+**Live character video calls**: voice conversation with real-time captions and optional camera input.
 
-Extend your workflow with plugins, MCP tools and dedicated Skills.
+![Saki video call demo — live character and voice interaction](.github/assets/saki-video-call-poster-en.png)
 
-![Saki AI plugin marketplace — discover plugins, MCP tools and dedicated Skills](.github/assets/saki-extensions-poster-en.png)
-
-## Start on the desktop, keep exploring
-
-Add new abilities to your AI workflow and take it all the way to your servers. These two projects show what else Saki can do.
+## Ecosystem & Related Projects
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <a href="https://github.com/EthanChan050430/saki-plugins"><img src=".github/assets/explore-extensions-zh.svg" width="640" alt="Extensions — explore the saki-plugins repository" /></a>
-      <p>Find plugins, MCP tools and Skills for everyday tasks. Saki's plugin marketplace installs plugins straight from the repository, or you can start from an example and build your own.</p>
-      <p><a href="https://github.com/EthanChan050430/saki-plugins"><strong>Browse extensions · View repo ↗</strong></a></p>
+      <a href="https://github.com/EthanChan050430/saki-plugins"><img src=".github/assets/explore-extensions-zh.svg" width="640" alt="saki-plugins — plugins, MCP tools, and Skills repository for Saki AI" /></a>
+      <p>Install plugins straight from Saki's built-in marketplace, or build your own plugins and Skills starting from the examples.</p>
+      <p><a href="https://github.com/EthanChan050430/saki-plugins"><strong>Browse saki-plugins ↗</strong></a></p>
     </td>
     <td width="50%" valign="top">
       <a href="https://github.com/EthanChan050430/Saki-Panel"><img src=".github/assets/explore-saki-panel-zh.svg" width="640" alt="Saki Panel — open-source server panel with an AI assistant" /></a>
-      <p>From your desktop to your servers. Manage Minecraft, Steam, Docker and regular processes in one web console, and let Saki troubleshoot with logs, files and node metrics.</p>
-      <p><a href="https://github.com/EthanChan050430/Saki-Panel"><strong>Meet Saki Panel · View repo ↗</strong></a></p>
+      <p>Open-source server panel with an AI assistant. Manage Minecraft, Steam, Docker, and regular processes in one web console, with AI troubleshooting backed by logs and node metrics.</p>
+      <p><a href="https://github.com/EthanChan050430/Saki-Panel"><strong>Meet Saki Panel ↗</strong></a></p>
     </td>
   </tr>
 </table>
@@ -68,11 +66,12 @@ Add new abilities to your AI workflow and take it all the way to your servers. T
 - **Real work in your repo**: reads and edits files, runs terminal commands, and shows every tool call and diff.
 - **Undo anything in the workspace**: each turn snapshots the workspace before the agent starts, including changes made from the terminal. Jump back to any turn. No Git required.
 - **Steer while it runs**: add instructions mid-task, queue follow-ups, edit or cancel them.
+- **Video calls**: talk with Saki through a live character, voice, captions and optional camera input. See the [video call guide](docs/video-call.md).
 - **Long-term memory**: preferences and project rules carry across sessions.
 - **Beyond code**: PDF / Office Q&A, multi-source deep research, PPT generation and export, claim checking.
 - **Story Glass**: tell Saki a story and she mixes a cocktail for it, served as a shareable card.
 - **Extensible**: MCP, Skills, and a plugin marketplace. Optional QQ bot, Stable Diffusion and GPT-SoVITS voice.
-- **Lightweight**: one process, one port in production. Data lives in local JSON files, no database needed.
+- **Lightweight**: runs as a single-process, single-port local web service with data stored in local JSON files (no database needed). The Windows portable build bundles Node.js and opens straight in your browser.
 
 ## Quick Start
 

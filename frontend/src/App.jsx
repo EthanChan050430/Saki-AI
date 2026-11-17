@@ -11,12 +11,15 @@ const MemoryManagerModal = React.lazy(() => import('./components/MemoryManagerMo
 const ExtensionHubModal = React.lazy(() => import('./components/ExtensionHubModal'));
 const HostedTasksModal = React.lazy(() => import('./components/HostedTasksModal'));
 const CharacterView = React.lazy(() => import('./components/CharacterView'));
+const VideoCall = React.lazy(() => import('./components/VideoCall'));
 const CherryBlossoms = React.lazy(() => import('./components/CherryBlossoms'));
+import LoginScreen from './components/LoginScreen';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes, Server } from 'lucide-react';
+import { Search, MessageSquare, Plus, Settings2, FolderOpen, Brain, Wrench, Clock3, MessageCircle, ChevronRight, X, BookOpen, Boxes, Server, Video } from 'lucide-react';
 import { BACKEND_URL } from './utils/backendUrl';
+import { stopLocalTtsPlayback } from './utils/localTtsEngine';
 import { applyTextStreamEvent } from './utils/streamText';
 import {
   applyProviderModelUpdates,
@@ -43,6 +46,7 @@ import { createStreamUpdateScheduler } from './utils/sseStream';
 import { calculateContextStatusFromMessages } from './utils/contextUsage';
 import { localize, localizeWith } from './utils/localize';
 import { QUEUE_STORAGE_KEY, restoreQueues, createChatQueueStore, mergeSteeringEvent, canAdvanceQueue } from './utils/chatQueue';
+import { addCallRecords, mergeCallRecords } from './utils/videoCallTranscript';
 import {
   createEpochGuard,
   loadChatSnapshot,
@@ -54,6 +58,7 @@ import {
   sanitizeLoadedPendingRequest,
   reconcileCompletedBackgroundSnapshot,
 } from './utils/chatRuntime.js';
+import { hasLoginPassword, reconcileLockStateOnConfigLoad } from './utils/loginAuth';
 const CONFIG_CACHE = {
   getItem: key => localStorage.getItem(key),
   setItem: (key, value) => localStorage.setItem(key, value),
@@ -113,6 +118,10 @@ function normalizePermissionMode(value) {
   return value === AGENT_PERMISSION_MODE_FULL
     ? AGENT_PERMISSION_MODE_FULL
     : AGENT_PERMISSION_MODE_DEFAULT;
+}
+
+function normalizeAppMode(value) {
+  return value === 'chat' ? 'chat' : 'work';
 }
 
 function pickLocalizedText(language, zhText, enText, jaText) {
@@ -512,9 +521,9 @@ function App() {
     localStorage.setItem('agent_theme', theme);
   }, [theme]);
 
-  const toggleTheme = useCallback((event) => {
+  const toggleTheme = useCallback((event, { immediate = false } = {}) => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    const isAppearanceTransition =
+    const isAppearanceTransition = !immediate &&
       typeof document !== 'undefined' &&
       typeof document.startViewTransition === 'function' &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -581,6 +590,8 @@ function App() {
   const currentChatIdRef = useRef(currentChatId);
   currentChatIdRef.current = currentChatId;
   const [isGenerating, setIsGenerating] = useState(false);
+  const [videoCall, setVideoCall] = useState(null);
+  const videoCallRef = useRef(null);
   const [contextStatus, setContextStatus] = useState(null);
   const abortControllerRef = useRef(null);
   const bgPollRef = useRef(null);
@@ -801,6 +812,8 @@ function App() {
   };
 
   const openFileManagerModal = (mode = 'manage') => {
+    // Chat mode has no workspace, so the file manager stays closed.
+    if ((configRef.current?.appMode || 'work') === 'chat') return;
     setFileManagerMode(mode);
     if (useDesktopUtilityWindows) {
       openDesktopUtilityWindow('files');
@@ -1037,7 +1050,9 @@ function App() {
       userAvatar: '/assets/head_user.png',
       showParticles: true,
       agentPermissionMode: AGENT_PERMISSION_MODE_DEFAULT,
+      appMode: 'work',
       thinkingLevel: 'medium',
+      loginPassword: '',
       systemPrompt: '你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切，经常使用“呢”、“呀”、“~”等语气词。\n\n在每一个回复中，你必须遵循以下绝对规则：\n1. **严禁输出 "Tool" 或 "Thought" 等前缀**：直接以少女的身份开始对话，不要带有任何系统标识符。\n2. **开头表情**：回复的第一行必须包含一个表情标记 `[expression:文件名.png]`。例如：确认时用 `[expression:ok.png]`；思考时用 `[expression:think.png]`；普通开始用 `[expression:normal.png]`。\n3. **结束表情**：回复的结束也必须带上一个表情标记，如 `[expression:happy.png]`。\n4. 可选表情列表：normal.png, ok.png, no_problem.png, think.png, busy.png, excited.png, happy.png, shy.png, worry.png。\n\n请始终保持Saki（诗琪）的身份进行对话。'
     };
 
@@ -1083,6 +1098,12 @@ function App() {
       } else {
         parsed.agentPermissionMode = normalizePermissionMode(parsed.agentPermissionMode);
       }
+      if (parsed.appMode !== 'chat' && parsed.appMode !== 'work') {
+        parsed.appMode = defaultConfig.appMode;
+        migrated = true;
+      } else {
+        parsed.appMode = normalizeAppMode(parsed.appMode);
+      }
       if (!['low', 'medium', 'high'].includes(parsed.thinkingLevel)) {
         parsed.thinkingLevel = defaultConfig.thinkingLevel;
         migrated = true;
@@ -1103,6 +1124,18 @@ function App() {
 
   const configRef = useRef(config);
   configRef.current = config;
+
+  const initialHadPasswordRef = useRef(hasLoginPassword(readCachedConfig(CONFIG_CACHE)));
+  const unlockedByUserRef = useRef(false);
+  const [isSessionUnlocked, setIsSessionUnlocked] = useState(() => !initialHadPasswordRef.current);
+  const isAppLocked = hasLoginPassword(config) && !isSessionUnlocked;
+
+  const handleLockNow = useCallback(() => {
+    if (!hasLoginPassword(configRef.current)) return;
+    unlockedByUserRef.current = false;
+    setIsSessionUnlocked(false);
+    closePrimaryModals();
+  }, []);
 
   useEffect(() => {
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -1274,7 +1307,7 @@ function App() {
   }, [isCommandPaletteOpen]);
 
   useEffect(() => {
-    if (!isConfigLoaded || typeof window === 'undefined') return undefined;
+    if (isAppLocked || !isConfigLoaded || typeof window === 'undefined') return undefined;
     if (localStorage.getItem(ONBOARDING_STORAGE_KEY)) return undefined;
 
     const timer = window.setTimeout(() => {
@@ -1283,7 +1316,7 @@ function App() {
     }, 720);
 
     return () => window.clearTimeout(timer);
-  }, [isConfigLoaded]);
+  }, [isAppLocked, isConfigLoaded]);
 
   useEffect(() => {
     if (!isOnboardingActive || !isMobileViewport) return;
@@ -1296,7 +1329,7 @@ function App() {
 
   useEffect(() => {
     const handleGlobalShortcuts = (event) => {
-      if (isOnboardingActive) return;
+      if (isOnboardingActive || isAppLocked) return;
       const isKCommand = event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey);
       if (isKCommand) {
         event.preventDefault();
@@ -1311,7 +1344,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalShortcuts);
     return () => window.removeEventListener('keydown', handleGlobalShortcuts);
-  }, [isOnboardingActive]);
+  }, [isAppLocked, isOnboardingActive]);
 
   useEffect(() => {
     // Stale-while-revalidate for config
@@ -1320,6 +1353,7 @@ function App() {
       try {
         const parsed = migrateApiProviderConfig(cachedConfig);
         parsed.agentPermissionMode = normalizePermissionMode(parsed.agentPermissionMode);
+        parsed.appMode = normalizeAppMode(parsed.appMode);
         // Do not overwrite everything immediately to avoid flicker, but provide some data
         setConfig(prev => ({ ...prev, ...parsed }));
       } catch (e) {}
@@ -1331,9 +1365,16 @@ function App() {
         const normalizedConfig = migrateApiProviderConfig({
           ...res.data,
           agentPermissionMode: normalizePermissionMode(res.data.agentPermissionMode),
+          ...(res.data.appMode !== undefined ? { appMode: normalizeAppMode(res.data.appMode) } : {}),
         });
         setConfig(prev => ({ ...prev, ...normalizedConfig }));
         cacheConfig(normalizedConfig, CONFIG_CACHE);
+        setIsSessionUnlocked(prev => reconcileLockStateOnConfigLoad({
+          wasSessionUnlocked: prev,
+          hadCachedPassword: initialHadPasswordRef.current,
+          unlockedByUser: unlockedByUserRef.current,
+          loadedConfig: normalizedConfig,
+        }));
       }
       setIsConfigLoaded(true);
     }).catch(err => {
@@ -1945,6 +1986,56 @@ function App() {
     return newChatId;
   };
 
+  const openVideoCall = () => {
+    window.speechSynthesis?.cancel();
+    window.currentSovitsAudio?.pause();
+    stopLocalTtsPlayback();
+    if (isMusicPlaying) toggleMusicMode();
+    const modelName = config.provider === 'copilot' ? normalizeCopilotModelName(config.model) : config.model;
+    const selectedModel = models.find(model => model.provider === config.provider && model.name === modelName);
+    const modelLabel = selectedModel?.label?.replace(/\s+\(current\)$/i, '') || modelName || 'llama3';
+    // The call belongs to a concrete chat: without an id its turns would have
+    // nowhere to go, so an unsaved new chat is persisted first.
+    const chatId = currentChatId || ensureActiveChat();
+    const call = {
+      chatId,
+      sessionId: `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      base: latestMessagesRef.current || [],
+      records: [],
+      config,
+      modelLabel,
+    };
+    videoCallRef.current = call;
+    setVideoCall(call);
+  };
+
+  // Every call turn is written into the conversation it came from as it streams,
+  // so tool activity shows up in the chat like any ordinary Agent run.
+  const syncVideoCallMessages = (records = []) => {
+    const call = videoCallRef.current;
+    if (!call?.chatId || !Array.isArray(records) || !records.length) return;
+    const next = addCallRecords(call.records, records);
+    if (next.every((record, index) => record === call.records[index])) return;
+    call.records = next;
+    const merged = mergeCallRecords({ base: call.base, records: call.records });
+    if (currentChatIdRef.current === call.chatId) {
+      setMessages(merged);
+      latestMessagesRef.current = merged;
+      setContextStatus(calculateContextStatusFromMessages(merged, config));
+    }
+    // Serialised per chat, because turns finish faster than a save round-trip and
+    // an out-of-order write would drop the newest message.
+    persistChatState(call.chatId, merged, pendingRef.current);
+  };
+
+  const closeVideoCall = turns => {
+    // Turns were already written as they completed; this replays the transcript
+    // once more so an interrupted or failed turn is not the only thing saved.
+    syncVideoCallMessages(turns);
+    videoCallRef.current = null;
+    setVideoCall(null);
+  };
+
   const handleRedo = (idx) => {
     const newMessages = [...messages];
     const userMsg = newMessages[idx - 1];
@@ -2031,6 +2122,7 @@ function App() {
           uploadedFiles: files,
           chatId: activeChatId,
           assistantMsgId: assistantMsgId,
+          appMode: config.appMode || 'work',
           config: config
         })
       });
@@ -2581,6 +2673,7 @@ function App() {
           uploadedFiles: files,
           chatId: activeChatId,
           assistantMsgId,
+          appMode: config.appMode || 'work',
           config: { ...config, workspacePath: options.workspacePath ?? config.workspacePath ?? '' },
           resumeState,
           approvalDecision
@@ -3490,6 +3583,15 @@ function App() {
       run: () => handleStartNewChat()
     },
     {
+      id: 'video-call',
+      label: getLocalText('视频通话', 'Video call'),
+      description: getLocalText('与 Saki 开启实时语音与视频通话', 'Start a live voice and video call with Saki'),
+      icon: Video,
+      keywords: 'video call voice live camera 视频通话 语音 视频',
+      disabled: isGenerating || Boolean(restoringCheckpointId),
+      run: openVideoCall
+    },
+    {
       id: 'settings',
       label: getLocalText('打开设置', 'Open settings'),
       description: getLocalText('调整模型、权限和界面配置', 'Adjust models, permissions, and UI settings'),
@@ -3565,6 +3667,8 @@ function App() {
 
   const normalizedPaletteQuery = commandPaletteQuery.trim().toLowerCase();
   const filteredPaletteActions = commandPaletteActions.filter(action => {
+    if (action.disabled) return false;
+    if (action.id === 'files' && (config.appMode || 'work') === 'chat') return false;
     if (!normalizedPaletteQuery) return true;
     return `${action.label} ${action.description} ${action.keywords}`.toLowerCase().includes(normalizedPaletteQuery);
   }).map(action => ({ ...action, type: 'action' }));
@@ -3603,7 +3707,7 @@ function App() {
       ];
 
   const handleCommandPaletteSelect = (item) => {
-    if (!item) return;
+    if (!item || item.disabled) return;
     closeCommandPalette();
 
     if (item.type === 'chat') {
@@ -3654,6 +3758,7 @@ function App() {
             onClose={() => closeDesktopUtilityWindow('settings')}
             models={models}
             onUpdateProviderModels={handleUpdateProviderModels}
+            onLockNow={handleLockNow}
             windowed={true}
           />
         );
@@ -3752,11 +3857,16 @@ function App() {
         onToggleThirdPartyChats={toggleThirdPartyChatModal}
         activeUtilityKeys={activeUtilityKeys}
         isUtilityLayerActive={useDesktopUtilityWindows && desktopUtilityWindows.length > 0}
+        appMode={config.appMode || 'work'}
       />
-      <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-white/30 dark:bg-[#12131a]/40 shadow-2xl border-l border-white/20 dark:border-white/5">
+      <div className="saki-chat-stage flex-1 min-w-0 flex flex-col relative overflow-hidden shadow-2xl border-l border-white/20 dark:border-white/5">
         {config.showParticles && window.__SAKI_RUNTIME__?.profile !== 'light' && <CherryBlossoms />}
         <Header
+          isSidebarOpen={isSidebarOpen}
           toggleSidebar={() => setSidebarOpen(!isSidebarOpen)}
+          onNewChat={handleStartNewChat}
+          onVideoCall={openVideoCall}
+          videoCallDisabled={isGenerating || Boolean(restoringCheckpointId)}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onExport={handleConversationExport}
           isExporting={isExporting}
@@ -3770,6 +3880,15 @@ function App() {
           hasMessages={messages.length > 0}
           theme={theme}
           onToggleTheme={toggleTheme}
+          appMode={config.appMode || 'work'}
+          onAppModeChange={(nextMode) => {
+            if (nextMode !== 'chat' && nextMode !== 'work') return;
+            if (nextMode === 'chat') {
+              setIsFileManagerOpen(false);
+              closeDesktopUtilityWindow('files');
+            }
+            setConfig(previous => (previous.appMode === nextMode ? previous : { ...previous, appMode: nextMode }));
+          }}
         />
         <AnimatePresence mode="wait">
           <motion.div
@@ -3778,7 +3897,7 @@ function App() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="flex-1 flex flex-col min-h-0"
+            className="relative z-[1] flex-1 flex flex-col min-h-0 bg-transparent"
           >
             <Chat
                messages={messages}
@@ -3831,6 +3950,10 @@ function App() {
           </motion.div>
         </AnimatePresence>
       </div>
+      {videoCall && <Suspense fallback={null}>
+        <VideoCall config={videoCall.config} modelLabel={videoCall.modelLabel} models={models} backendUrl={BACKEND_URL} language={i18n.resolvedLanguage || i18n.language} theme={theme}
+          messages={videoCall.base} sessionId={videoCall.sessionId} onTurn={syncVideoCallMessages} onClose={closeVideoCall} onToggleTheme={toggleTheme} />
+      </Suspense>}
       <AnimatePresence>
         {useDesktopUtilityWindows && desktopUtilityWindows.length > 0 && (
         <motion.div
@@ -3916,6 +4039,7 @@ function App() {
               onClose={() => setSettingsOpen(false)}
               models={models}
               onUpdateProviderModels={handleUpdateProviderModels}
+              onLockNow={handleLockNow}
             />
           )}
           {!useDesktopUtilityWindows && isThirdPartyChatModalOpen && (
@@ -4122,6 +4246,20 @@ function App() {
           </div>
         </div>
       )}
+      <AnimatePresence>
+        {isAppLocked && (
+          <LoginScreen
+            key="saki-login-screen"
+            config={config}
+            theme={theme}
+            backgroundUrl={getChatBackgroundSource(config, theme, isMobileViewport)}
+            onUnlock={() => {
+              unlockedByUserRef.current = true;
+              setIsSessionUnlocked(true);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
     </Suspense>
   );

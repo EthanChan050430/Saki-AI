@@ -4,6 +4,7 @@ WORKDIR /build/frontend
 COPY frontend/package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
+COPY video-assets/characters/saki/live2d/ ../video-assets/characters/saki/live2d/
 ENV SAKI_BUILD_PROFILE=light
 RUN npm run build
 
@@ -21,6 +22,11 @@ WORKDIR /app
 COPY --from=dependencies --chown=node:node /app/backend/node_modules ./backend/node_modules
 COPY --chown=node:node backend/server.js ./backend/server.js
 COPY --chown=node:node backend/services ./backend/services
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && python3 -m venv /app/.venv-video-call \
+    && /app/.venv-video-call/bin/pip install --no-cache-dir -r backend/services/video-call-requirements.txt \
+    && rm -rf /var/lib/apt/lists/*
+ENV HF_HOME=/app/data/asr-cache
 COPY --chown=node:node data/global_config.example.json ./defaults/global_config.example.json
 COPY --from=frontend --chown=node:node /build/frontend/dist ./frontend/dist
 RUN mkdir -p /app/data && chown node:node /app/data

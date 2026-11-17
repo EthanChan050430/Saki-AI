@@ -127,17 +127,18 @@ function parseSearxngResponse(data, rankOffset = 0) {
     return { candidates, degraded, unresponsiveEngines };
 }
 
-async function fetchSearxngPage(baseUrl, query, page, timeout, extraParams = {}) {
+async function fetchSearxngPage(baseUrl, query, page, timeout, extraParams = {}, signal) {
     let response;
     const params = { q: query, format: 'json', language: 'all', pageno: page, ...extraParams };
     if (!extraParams.engines && !extraParams.categories) params.categories = 'general';
     try {
         response = await axios.get(`${baseUrl}/search`, {
             params,
-            timeout, maxContentLength: 2 * 1024 * 1024,
+            timeout, signal, maxContentLength: 2 * 1024 * 1024,
             headers: { Accept: 'application/json' },
         });
     } catch (error) {
+        signal?.throwIfAborted();
         const status = error.response?.status;
         if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') throw searchError('the SearxNG request timed out.', false);
         if (status === 403) throw searchError('SearxNG returned HTTP 403. Check access permissions and enable json in search.formats in the instance settings.yml.', false);
@@ -307,7 +308,7 @@ async function fetchSearxngCandidates(query, limit, config = {}, timeout = SEARC
         let data;
         try {
             batch.requestCount++;
-            data = await fetchSearxngPage(baseUrl, query, page, remaining);
+            data = await fetchSearxngPage(baseUrl, query, page, remaining, {}, options.signal);
             parsed = parseSearxngResponse(data, rankOffset);
         } catch (error) {
             if (!batch.candidates.length) throw error;
@@ -363,7 +364,7 @@ async function fetchSearxngCandidates(query, limit, config = {}, timeout = SEARC
                 const reqTimeout = req.shortTimeout ? Math.min(4500, remaining) : Math.min(5000, remaining);
                 try {
                     batch.requestCount++;
-                    const data = await fetchSearxngPage(baseUrl, req.query, 1, reqTimeout, req.extraParams);
+                    const data = await fetchSearxngPage(baseUrl, req.query, 1, reqTimeout, req.extraParams, options.signal);
                     const parsed = parseSearxngResponse(data, rankOffset);
                     rankOffset += data.results.length;
                     for (const candidate of parsed.candidates) {
@@ -427,7 +428,7 @@ async function probeSearxngInstance(searxngUrl, timeout = 8000) {
 async function fetchCandidates(query, limit, config = {}, timeout = SEARCH_TIMEOUT_MS, options = {}) {
     return getSearchEngine(config) === 'searxng'
         ? fetchSearxngCandidates(query, limit, config, timeout, options)
-        : { candidates: await fetchSearchCandidates(query, limit, timeout), warnings: [] };
+        : { candidates: await fetchSearchCandidates(query, limit, timeout, options.signal), warnings: [] };
 }
 
 function parseSearchResponse(data, requestId) {
@@ -487,7 +488,7 @@ function parseSearchResponse(data, requestId) {
     throw searchError('the retrieval service returned an unrecognized result format.');
 }
 
-async function fetchSearchCandidates(query, limit, timeout = SEARCH_TIMEOUT_MS) {
+async function fetchSearchCandidates(query, limit, timeout = SEARCH_TIMEOUT_MS, signal) {
     const id = randomUUID();
     let response;
     try {
@@ -495,13 +496,18 @@ async function fetchSearchCandidates(query, limit, timeout = SEARCH_TIMEOUT_MS) 
             jsonrpc: '2.0', id, method: 'tools/call',
             params: { name: 'web_search_exa', arguments: { query, numResults: Math.min(25, Math.max(8, limit * 2)) } },
         }, {
-            timeout,
+            timeout, signal,
             maxContentLength: 2 * 1024 * 1024,
             headers: { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' },
         });
     } catch (error) {
+        signal?.throwIfAborted();
         const status = error.response?.status;
-        if (status === 429) throw searchError('the retrieval service is rate limited. Please retry later.');
+        if (status === 429) {
+            const failure = searchError('the retrieval service is rate limited. Please retry later.', false);
+            failure.code = 'SEARCH_RATE_LIMITED';
+            throw failure;
+        }
         if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') throw searchError('the retrieval request timed out.');
         if (status === 400 || status === 401 || status === 403 || status === 422) {
             throw providerError(error.response?.data?.error?.message || error.response?.data?.message || `HTTP ${status}`);
@@ -572,6 +578,7 @@ async function searchReport(query, options = {}) {
     const enoughMatches = results => results.filter(result => result.matchType === 'direct').length >= Math.min(2, limit);
     let degradedSeen = false;
     while (queries.length && attempted.size < maxQueries) {
+        options.signal?.throwIfAborted();
         const searchQuery = queries.shift();
         const key = searchQuery.toLowerCase();
         if (attempted.has(key)) continue;
@@ -593,6 +600,7 @@ async function searchReport(query, options = {}) {
             if (batch.requestCount != null) report.searches[report.searches.length - 1].requestCount = batch.requestCount;
             if (batch.stopSearch) break;
         } catch (error) {
+            options.signal?.throwIfAborted();
             errors.push(error);
             report.searches.push({ query: searchQuery, status: 'failed' });
             report.warnings.push(error.message);
@@ -663,7 +671,27 @@ async function searchComplexQuery(query, options = {}) {
 }
 
 async function searchForAgent(query, options = {}) {
-    return searchReport(query, { ...options, readPages: options.readPages ?? true });
+    const searchOptions = { ...options, readPages: options.readPages ?? true };
+    const budget = Math.min(60000, Math.max(1, Number(options.timeoutMs) || 35000));
+    const deadline = Date.now() + budget;
+    try {
+        return await searchReport(query, searchOptions);
+    } catch (error) {
+        options.signal?.throwIfAborted();
+        const remaining = deadline - Date.now();
+        if (error.code !== 'SEARCH_RATE_LIMITED' || getSearchEngine(options.config) !== 'exa' ||
+            !String(options.config?.searxngUrl || '').trim() || remaining <= 0) throw error;
+        try {
+            const report = await searchReport(query, {
+                ...searchOptions, timeoutMs: remaining, config: { ...options.config, searchEngine: 'searxng' },
+            });
+            report.warnings.unshift('Exa rate limited the request; used the configured SearxNG instance.');
+            return report;
+        } catch {
+            options.signal?.throwIfAborted();
+            throw searchError('Exa is rate limited and the configured SearxNG fallback is unavailable.', false);
+        }
+    }
 }
 
 function formatSearchObservation(report) {

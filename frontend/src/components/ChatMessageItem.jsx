@@ -121,13 +121,18 @@ export const ChatMessageItem = memo(function ChatMessageItem({
     || visibleGeneratedFiles.length > 0;
   const isPendingRequestMessage = currentPendingRequest?.assistantMsgId
     && String(currentPendingRequest.assistantMsgId) === String(m.id);
+  // A call streams into the chat without touching the global composer state, so
+  // its own record status decides whether this message is still running.
+  const callActive = Boolean(isAssistant && m.videoCall && m.status === 'streaming');
+  const activeRun = (isGenerating && isLastMessage) || callActive;
   const showPendingState = isAssistant
     && !hasAssistantContent
-    && (isPendingRequestMessage || (isGenerating && isLastMessage))
+    && (isPendingRequestMessage || activeRun)
     && m.status !== 'interrupted'
     && m.status !== 'error'
-    && m.status !== 'done';
-  const hideToolbar = isAssistant && isGenerating && isLastMessage && showPendingState;
+    && m.status !== 'done'
+    && m.status !== 'cancelled';
+  const hideToolbar = isAssistant && activeRun && showPendingState;
 
   return (
     <div
@@ -217,7 +222,7 @@ export const ChatMessageItem = memo(function ChatMessageItem({
               ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_8px_24px_rgba(255,117,172,0.3)] rounded-tr-none rounded-2xl p-3 sm:p-4'
               : showPendingState
                 ? ''
-                : 'bg-white/85 dark:bg-[#181922]/85 border border-white/65 dark:border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)] backdrop-blur-xl rounded-tl-none rounded-2xl p-3 sm:p-4 text-gray-800 dark:text-[#f5f5f7]'
+                : 'bg-white/85 dark:bg-[#231b26]/85 border border-white/65 dark:border-pink-400/25 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(255,117,172,0.08)] backdrop-blur-xl rounded-tl-none rounded-2xl p-3 sm:p-4 text-gray-800 dark:text-[#f5f5f7]'
           }`}>
             {editingMsgIdx === idx ? (
               <div className="flex flex-col gap-4 pointer-events-auto w-full animate-in fade-in duration-200">
@@ -261,10 +266,10 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                       <AssistantPendingCard
                         mode={m.placeholderMode}
                         status={m.status}
-                        isGenerating={isGenerating && isLastMessage}
+                        isGenerating={activeRun}
                         getLocalText={getLocalText}
                       />
-                    ) : isAssistant && !hasAssistantContent && m.status === 'interrupted' ? (
+                    ) : isAssistant && !hasAssistantContent && (m.status === 'interrupted' || m.status === 'cancelled') ? (
                       <div className="py-3 text-sm text-[var(--text-secondary)]">
                         {getLocalText('这次生成已结束。', 'This generation was stopped.')}
                       </div>
@@ -277,13 +282,13 @@ export const ChatMessageItem = memo(function ChatMessageItem({
                         <AgentMessageParts
                           parts={m.parts || []}
                           streamingActions={m.streamingActions || []}
-                          isGenerating={isGenerating && isLastMessage}
+                          isGenerating={activeRun}
                           status={m.status}
                           durationMs={m.generationDurationMs}
                           renderText={(part) => (
                             <MessageContent
                               content={part.content}
-                              isGenerating={isGenerating && isLastMessage}
+                              isGenerating={activeRun}
                               onOpenSettings={onOpenSettings}
                             />
                           )}

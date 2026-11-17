@@ -74,9 +74,16 @@ export function calculateContextStatusFromMessages(messages = [], config = {}) {
   // A measured request belongs to its final assistant message. New user messages
   // and provider/model changes fall back to a clearly labelled estimate.
   const lastMessage = sourceMessages.at(-1);
+  const recorded = collectRecordedUsage(sourceMessages);
   const measured = lastMessage?.role === 'assistant' ? lastMessage.contextStatus : null;
   if (measured?.source === 'api' && measured.provider === config.provider && measured.model === config.model) {
-    return { ...measured, budgetTokens, percent: Math.min(100, Math.round(measured.usedTokens / budgetTokens * 100)) };
+    return {
+      ...measured,
+      budgetTokens,
+      percent: Math.min(100, Math.round(measured.usedTokens / budgetTokens * 100)),
+      totals: measured.totals || recorded.totals,
+      breakdown: measured.breakdown || recorded.breakdown,
+    };
   }
   const usedTokens = estimateContextTokenCount(formattedHistory);
   const autoCompressThreshold = Math.max(8000, Math.floor(budgetTokens * CONTEXT_AUTO_COMPRESS_RATIO));
@@ -96,6 +103,62 @@ export function calculateContextStatusFromMessages(messages = [], config = {}) {
     keptRecentMessages,
     compressedMessages: shouldCompress ? Math.max(0, sourceMessages.length - keptRecentMessages) : 0,
     updatedAt: new Date().toISOString(),
+    totals: recorded.totals,
+    breakdown: recorded.breakdown,
   };
 }
+
+/**
+ * Finds the newest recorded usage snapshot in a conversation.
+ *
+ * The backend stores the session-cumulative totals on every assistant message,
+ * so the newest one wins. A conversation written before this feature existed
+ * simply has no snapshot and the panel hides the usage block.
+ */
+export function collectRecordedUsage(messages = []) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const status = list[index]?.contextStatus;
+    const totals = status?.totals || list[index]?.usageTotals;
+    if (totals && typeof totals === 'object') {
+      return { totals, breakdown: status?.breakdown || null };
+    }
+  }
+  return { totals: null, breakdown: null };
+}
+
+/** 39875075 -> "39,875,075" (grouped, no locale surprises). */
+export function formatTokenCount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return '0';
+  return Math.round(number)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** 319000 -> "319K", 1600 -> "1.6K", 1000000 -> "1M", 820 -> "820". */
+export function formatCompactTokenCount(value) {
+  const number = Math.max(0, Number(value) || 0);
+  if (number >= 999500) return `${trimUnit(number / 1000000)}M`;
+  if (number >= 1000) return `${trimUnit(number / 1000)}K`;
+  return String(Math.round(number));
+}
+
+function trimUnit(value) {
+  if (value >= 100) return String(Math.round(value));
+  const text = value.toFixed(1);
+  return text.endsWith('.0') ? text.slice(0, -2) : text;
+}
+
+/**
+ * Share of the input that the provider served from its prompt cache.
+ * Returns null when no request has reported input tokens yet.
+ */
+export function calculateCacheHitRate(totals) {
+  const input = Number(totals?.inputTokens) || 0;
+  if (input <= 0) return null;
+  const cached = Number(totals?.cacheReadTokens) || 0;
+  return Math.min(100, Math.round((cached / input) * 100));
+}
+
 

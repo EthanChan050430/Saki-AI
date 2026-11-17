@@ -27,6 +27,9 @@ function publicPlugin(plugin, status = {}) {
 function registerPluginRoutes(app, {
     pluginService, marketplaceService, mcpManager,
     syncCombinedMcpServers, emitRealtimeEvent, upload,
+    // Installs and toggles persist code that runs on every later boot, so they are
+    // restricted to local clients (or a caller holding the agent auth token).
+    localAdminGuard = (req, res, next) => next(),
 }) {
     app.get('/api/plugins', async (req, res) => {
         try {
@@ -39,7 +42,7 @@ function registerPluginRoutes(app, {
         }
     });
 
-    app.patch('/api/plugins/:id/toggle', async (req, res) => {
+    app.patch('/api/plugins/:id/toggle', localAdminGuard, async (req, res) => {
         try {
             const { enabled } = req.body;
             if (typeof enabled !== 'boolean') {
@@ -54,7 +57,7 @@ function registerPluginRoutes(app, {
         }
     });
 
-    app.post('/api/plugins/:id/config', async (req, res) => {
+    app.post('/api/plugins/:id/config', localAdminGuard, async (req, res) => {
         try {
             const { config } = req.body;
             if (!config || typeof config !== 'object') {
@@ -69,7 +72,7 @@ function registerPluginRoutes(app, {
         }
     });
 
-    app.post('/api/plugins/install', upload.single('package'), async (req, res) => {
+    app.post('/api/plugins/install', localAdminGuard, upload.single('package'), async (req, res) => {
         try {
             let plugin = null;
             if (req.file) {
@@ -113,7 +116,7 @@ function registerPluginRoutes(app, {
         }
     });
 
-    app.post('/api/plugins/marketplace/install', async (req, res) => {
+    app.post('/api/plugins/marketplace/install', localAdminGuard, async (req, res) => {
         try {
             const { pluginId, config } = req.body;
             if (!pluginId) return res.status(400).json({ error: 'pluginId is required' });
@@ -137,7 +140,7 @@ function registerPluginRoutes(app, {
         }
     });
 
-    app.delete('/api/plugins/:id', async (req, res) => {
+    app.delete('/api/plugins/:id', localAdminGuard, async (req, res) => {
         try {
             await pluginService.uninstall(req.params.id);
             await syncCombinedMcpServers().catch(e => console.error('[Plugin] Error syncing MCP on uninstall:', e.message));

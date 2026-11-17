@@ -17,6 +17,12 @@ export function actionCategory(part) {
 
 export function actionState(part, active = false) {
   const output = String(part.observation ?? '').trim();
+  // Call tools report their outcome explicitly; an interrupted reply must not
+  // keep a finished tool spinning forever.
+  const explicit = String(part.data?.status || '').toLowerCase();
+  if (explicit === 'cancelled') return 'interrupted';
+  if (explicit === 'error') return 'error';
+  if (explicit === 'completed') return 'done';
   if (/^(?:Approval required|Waiting for approval)/i.test(output)) return 'approval';
   if (/^(?:Error\b|MCP Error\b|Permission denied\b|Command failed\b|.*?exit code [1-9]\d*\b)/i.test(output)) return 'error';
   if (/^Skipped:/i.test(output)) return 'skipped';
@@ -24,6 +30,7 @@ export function actionState(part, active = false) {
   if (actionKind(part) === 'terminal' && /^(?:STDOUT|STDERR):/i.test(output)) return active ? 'running' : 'interrupted';
   if (active && actionKind(part) === 'terminal' && !/^Command (?:succeeded|failed)/i.test(output)) return 'running';
   if (output || part.fileMetadata) return 'done';
+  if (active && explicit === 'running') return 'running';
   return active ? 'running' : 'interrupted';
 }
 

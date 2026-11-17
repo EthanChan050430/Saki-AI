@@ -1,3 +1,5 @@
+const { parseModelToolMarkup } = require('./modelToolMarkup');
+
 // One catalog drives both prompt discovery and executable tool parsing.
 const BUILTIN_TOOLS = [
     ['search', ['query'], 'Search the web for current information, external pages, or factual lookup. Include the key entities and relationships; quote exact names when useful. Supports space-separated multi-tag keyword queries (for covering multiple independent tags), site:host, -site:host and excluded terms. Reports match levels (direct, background, weak), missing terms, page-read status and retrieval warnings. Domain filters remain enforced, so omit them when broader coverage is intended. Refine or simplify keywords if results are incomplete. For verifying a disputed or uncertain factual claim across multiple sources, use verifyClaim. Do not search for greetings or tasks answerable from provided context. Never submit private content.', 'query'],
@@ -169,6 +171,7 @@ function parseToolCalls(response, registry) {
     // A quoted example in prose, reasoning, or a Markdown code block is not an action.
     const text = String(response || '');
     const calls = [];
+    const callRanges = [];
     const startPattern = /(?:(?:Tool|工具)[:：]\s*([\w.:-]+)\s*\(|^\s*([\w.:-]+)\s*\(|<([\w.:-]+)(?:\s+([^>]*))?>)|(^[ \t]*(?:`{3,}|~{3,})[^\n]*)/gmi;
     let match;
     while ((match = startPattern.exec(text))) {
@@ -223,6 +226,7 @@ function parseToolCalls(response, registry) {
         }
         const tool = registry.get(String(name || '').toLowerCase());
         if (!tool) continue;
+        callRanges.push([match.index, startPattern.lastIndex]);
         try {
             const args = parsedArgs || splitArguments(rawArgs);
             const rawTokens = parsedArgs ? [] : splitArguments(rawArgs, false);
@@ -246,7 +250,15 @@ function parseToolCalls(response, registry) {
             calls.push({ name: tool.name, rawArgs, parsedArgs: [], error: error.message, end: startPattern.lastIndex });
         }
     }
-    return calls;
+    if (!registry.has('search')) return calls;
+    const taggedSearches = parseModelToolMarkup(text).searches;
+    const queries = new Set(calls.filter(call => call.name === 'search').map(call => call.parsedArgs[0]));
+    for (const { query, start, end } of taggedSearches) {
+        if (callRanges.some(([from, to]) => start >= from && end <= to)) continue;
+        if (!queries.has(query)) calls.push({ name: 'search', rawArgs: query, parsedArgs: [query], end });
+        queries.add(query);
+    }
+    return calls.sort((a, b) => a.end - b.end);
 }
 
 function parseMcpArguments(args, tool) {

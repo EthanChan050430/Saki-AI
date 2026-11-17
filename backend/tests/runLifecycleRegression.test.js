@@ -94,6 +94,7 @@ test('persistSessionRecord and Agent writes share the lock so steering is not lo
     const c = lifecycleContext({
         path, SESSIONS_DIR: '/sessions', preserveSteeringMessages,
         safeReadJsonFile: async () => JSON.parse(JSON.stringify(saved)),
+        writeSessionFile: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); },
         fs: { writeJson: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); } },
         hasPendingRequest: Boolean, mergePreservedStoryGlassConversationMessages: incoming => incoming,
         shouldPruneEmptyHistorySession: () => false, getHistory: async () => [], saveHistory: async () => {},
@@ -233,6 +234,7 @@ test('finalizeChatRunSession and repairStalePendingSession clear orphaned pendin
         resolveFinalPendingRequest,
         isStalePendingSession,
         safeReadJsonFile: async () => JSON.parse(JSON.stringify(saved)),
+        writeSessionFile: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); },
         fs: { writeJson: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); } },
         hasPendingRequest: (p) => Boolean(p && typeof p === 'object' && p.assistantMsgId),
         mergePreservedStoryGlassConversationMessages: incoming => incoming,

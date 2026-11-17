@@ -1,9 +1,9 @@
 <div align="center">
 
-# Saki AI Agent
-### 本地优先的 AI 工作区：代码、文件、研究与长期协作
+# Saki AI
+### 开源、本地优先的个人 AI Agent 工作区
 
-Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Coding
+支持本地与云端多模型 · 读写代码与终端 · 自动快照回滚 · MCP 与插件扩展
 
 [English](README.md) · **简体中文**
 
@@ -21,43 +21,38 @@ Local-first AI Workspace · Model Choice · Recoverable Workflows · Beyond Codi
 
 </div>
 
-**Saki AI 是面向中文用户、本地优先的 AI 工作区。** 在一个图形界面中连接本地或云端模型，让 Agent 处理项目代码、工作区文件和终端任务，并把研究、文档、PPT、长期记忆与 QQ 工作流整合到日常协作中。
+**Saki AI 是一个运行在你自己电脑上的开源 AI Agent 工作区。** 它把本地大模型（Ollama、LM Studio）和主流云端模型（DeepSeek、Claude、OpenAI、Gemini、通义、Kimi 等）放进同一个可视化界面，直接帮你改代码、管文件、跑终端命令、做深度研究、生成 PPT 和处理日常文档。
 
-以 **Codex、Claude Code 等编程智能体**所代表的任务式协作为参照，Saki 的重点不是宣称编程能力超越它们，而是提供一个**不绑定单一模型、覆盖编程之外场景、可在本机管理和回退任务的个人 AI 工作区**。当前界面由本地 Web 服务提供；Windows 便携版通过 EXE 启动服务并打开浏览器，并非原生桌面 GUI。
+如果你喜欢 **Claude Code、Codex** 这类 Agent 直接下场干活的协作方式，但希望**有图形界面、不绑定单一模型、改坏了能随时一键回滚（无需 Git），并且能处理写代码之外的办公与研究任务**——Saki 就是为此设计的。
 
-**[下载 Windows 便携版](https://github.com/EthanChan050430/Saki-AI/releases/latest)** · [快速开始](#快速开始) · [低资源部署](docs/deployment.md) · [插件说明](docs/plugin-marketplace.md)
+**[下载 Windows 便携版](https://github.com/EthanChan050430/Saki-AI/releases/latest)** · [快速开始](#快速开始) · [低资源部署](docs/deployment.md) · [插件市场](docs/plugin-marketplace.md)
 
-> **关键词**：Desktop AI Agent · Coding Agent · Local-first · Ollama / LM Studio · MCP · 工作区检查点 · 长期记忆 · 中文研究与办公
+https://github.com/user-attachments/assets/283a9c57-3d0d-473e-bba6-f1969d2420b1
 
+## 界面预览
 
+**多模型工作区**：读写本地文件、执行终端、查看代码 Diff，支持跨会话长期记忆。
+![Saki AI 工作区 — 本地优先、多模型协作与长期记忆](.github/assets/saki-workspace-current.png)
 
-https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
+**插件市场与 MCP 扩展**：一键安装功能插件、MCP 工具与专属 Skills。
+![Saki AI 插件市场 — 发现功能插件、MCP 工具与专属 Skills](.github/assets/saki-extensions-current.png)
 
-## 看见 Saki
+**实时角色视频通话**：支持语音对话、实时字幕与摄像头视觉输入。
+![Saki 视频通话演示 — 实时角色与语音互动](.github/assets/saki-video-call-poster.png)
 
-把灵感、模型与工具，放进属于你的工作区。
-
-![Saki AI 工作区 — 本地优先、多模型协作与长期记忆](.github/assets/saki-workspace-poster.png)
-
-用功能插件、MCP 工具与专属 Skills，拓展日常工作流。
-
-![Saki AI 插件市场 — 发现功能插件、MCP 工具与专属 Skills](.github/assets/saki-extensions-poster.png)
-
-## 从桌面出发，继续探索
-
-给 AI 工作流添一点新能力，也把视野延伸到服务器。沿着这两个入口，发现 Saki 的更多可能。
+## 生态与衍生项目
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <a href="https://github.com/EthanChan050430/saki-plugins"><img src=".github/assets/explore-extensions-zh.svg" width="640" alt="拓展市场 — 探索 saki-plugins 插件仓库" /></a>
-      <p>发现功能插件、MCP 工具与 Skills，为日常任务拓展能力。Saki AI 的插件市场可直接下载安装仓库中的功能插件，也可以从示例开始开发自己的插件。</p>
-      <p><a href="https://github.com/EthanChan050430/saki-plugins"><strong>逛逛拓展市场 · 查看仓库 ↗</strong></a></p>
+      <a href="https://github.com/EthanChan050430/saki-plugins"><img src=".github/assets/explore-extensions-zh.svg" width="640" alt="saki-plugins — Saki AI 插件、MCP 与 Skills 仓库" /></a>
+      <p>在 Saki 内置插件市场直接下载安装插件，或基于示例快速开发你自己的插件与 Skills。</p>
+      <p><a href="https://github.com/EthanChan050430/saki-plugins"><strong>浏览 saki-plugins 仓库 ↗</strong></a></p>
     </td>
     <td width="50%" valign="top">
-      <a href="https://github.com/EthanChan050430/Saki-Panel"><img src=".github/assets/explore-saki-panel-zh.svg" width="640" alt="Saki Panel — 探索带有 AI 助手的开源服务器运维面板" /></a>
-      <p>从个人桌面走向服务器工作区。在一个 Web 控制台管理 Minecraft、Steam、Docker 与常规进程，让 Saki 结合日志、文件和节点指标协助排障。</p>
-      <p><a href="https://github.com/EthanChan050430/Saki-Panel"><strong>认识 Saki Panel · 查看仓库 ↗</strong></a></p>
+      <a href="https://github.com/EthanChan050430/Saki-Panel"><img src=".github/assets/explore-saki-panel-zh.svg" width="640" alt="Saki Panel — 带 AI 助手的开源服务器运维面板" /></a>
+      <p>带 AI 助手的开源服务器面板。在 Web 控制台管理 Minecraft、Steam、Docker 与常规进程，结合日志与监控指标辅助排障。</p>
+      <p><a href="https://github.com/EthanChan050430/Saki-Panel"><strong>了解 Saki Panel ↗</strong></a></p>
     </td>
   </tr>
 </table>
@@ -68,11 +63,12 @@ https://github.com/user-attachments/assets/91ac7121-2a01-4751-a0c3-bc257e097b0e
 - **直接上手干活**：读写项目文件、执行终端命令，每次工具调用和代码改动都摆在界面上。
 - **改坏了能退**：每轮任务开始前自动给工作区拍快照，终端里的增删改也算在内。点一下回到任意一轮，不用 Git。
 - **跑着也能插话**：任务执行中随时补充要求，后续需求排队，可改可撤。
+- **视频通话**：与实时角色语音交流，支持字幕和可选的摄像头输入。详见[视频通话说明](docs/video-call.md)。
 - **记得住你**：跨会话长期记忆，偏好和项目约定不用每次重讲。
 - **写代码之外**：PDF / Office 文档问答、多来源深度研究、PPT 生成与导出、声明核查。
 - **故事酒杯**：给 Saki 讲个故事，她会调一杯属于这个故事的鸡尾酒，生成可分享的卡片。
 - **能扩展**：MCP、Skills、插件市场；可接 QQ 机器人、Stable Diffusion 绘图、GPT-SoVITS 语音。
-- **够轻**：生产模式一个进程一个端口，数据存本地 JSON，不用装数据库。
+- **够轻**：基于本地 Web 服务架构，生产模式一个进程一个端口，数据存本地 JSON，不用装数据库；Windows 便携版内置 Node.js，解压双击即用并自动打开浏览器。
 
 ## 快速开始
 

@@ -48,9 +48,13 @@ function createHostedTaskTestContext({ tempDir, runAgentLoopImpl, tasks = [] } =
         remove: (filePath) => fsp.rm(filePath, { force: true }),
     };
 
+    // Sessions are now written through the atomic, versioned store.
+    const writeSessionFile = async (filePath, data) => fsMock.writeJson(filePath, data);
+
     const context = vm.createContext({
         path,
         fs: fsMock,
+        writeSessionFile,
         console,
         SESSIONS_DIR: sessionsDir,
         BACKGROUND_RUNS: new Map(),

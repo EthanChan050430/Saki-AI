@@ -326,6 +326,26 @@ test('transport failures throw sanitized errors rather than empty search results
     await assert.rejects(search.searchWeb('Python'), /timed out/u);
 });
 
+test('Agent search uses configured SearxNG when Exa returns 429 without retrying Exa', async t => {
+    const query = 'Python asyncio cancellation';
+    const primary = t.mock.method(axios, 'post', async () => {
+        throw Object.assign(new Error('Rate limited'), { response: { status: 429 } });
+    });
+    const backup = t.mock.method(axios, 'get', async (url, options) => {
+        assert.equal(url, 'http://localhost:8080/search');
+        assert.equal(options.params.q, query);
+        return { data: { results: [good()] } };
+    });
+    const config = { searchEngine: 'exa', searxngUrl: 'http://localhost:8080' };
+    const report = await search.searchForAgent(query, { config, limit: 1, perQueryLimit: 1, maxQueries: 1, readPages: false });
+    assert.equal(report.results[0].engine, 'searxng');
+    assert.equal(primary.mock.callCount(), 1);
+    assert.equal(backup.mock.callCount(), 1);
+    assert.match(report.warnings[0], /configured SearxNG/);
+    backup.mock.mockImplementation(async () => { throw new Error('offline'); });
+    await assert.rejects(search.searchForAgent(query, { config, readPages: false }), /configured SearxNG fallback is unavailable/);
+});
+
 test('MCP errors, CAPTCHA HTML, malformed data and unmatched IDs are not no-results', async t => {
     const mock = t.mock.method(axios, 'post');
     for (const response of [

@@ -7,11 +7,13 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Plus, Paperclip, ChevronDown, ChevronUp, Bot, User, Terminal, Square, Search, Globe, Server, Download, Activity, Copy, Volume2, RotateCcw, Check, X, FileDiff, Undo2, HardDrive, Brain, Presentation, Mic, MicOff, FileText, Shield, Music2, Play, Pause, Trash2, PencilLine, Sparkles, ListChecks, Cpu, ArrowLeft, Image, ArrowUp, Feather, BookOpen, ArrowUpRight } from 'lucide-react';
 import WorkspaceSelector from './WorkspaceSelector';
+import MobileControlHub from './MobileControlHub';
 import AgentMessageParts, { ThinkingBlock } from './AgentActivity';
 import CodeChangesSummary from './CodeChangesSummary';
 import CheckpointRestoreBar from './CheckpointRestoreBar';
 import { checkpointOwners } from '../utils/checkpoints';
 import { localize, localizeWith, isChineseLanguage, isJapaneseLanguage } from '../utils/localize';
+import { formatTokenCount, formatCompactTokenCount, calculateCacheHitRate } from '../utils/contextUsage';
 import { normalizeEscapedMarkdown } from '../utils/markdownText';
 import ErrorBoundary from './ErrorBoundary';
 import ChatMessageItem from './ChatMessageItem';
@@ -1696,6 +1698,7 @@ export default function Chat({
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage || i18n.language || 'en-US';
   const getLocalText = (zhText, enText, jaText) => localizeWith(uiLanguage, zhText, enText, jaText);
+  const isChatMode = (config?.appMode || 'work') === 'chat';
   const permissionMode = config?.agentPermissionMode === AGENT_PERMISSION_MODE_FULL
     ? AGENT_PERMISSION_MODE_FULL
     : AGENT_PERMISSION_MODE_DEFAULT;
@@ -1736,6 +1739,7 @@ export default function Chat({
   const [showFeatureMenu, setShowFeatureMenu] = useState(false);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showMobileHub, setShowMobileHub] = useState(false);
   const [modelDetails, setModelDetails] = useState(null);
   const [modelProviderFilter, setModelProviderFilter] = useState(config.provider || 'ollama');
   const [isDragOverlayVisible, setIsDragOverlayVisible] = useState(false);
@@ -1774,7 +1778,7 @@ export default function Chat({
       window.visualViewport?.removeEventListener('resize', updatePopupBottom);
       window.visualViewport?.removeEventListener('scroll', updatePopupBottom);
     };
-  }, [showModelMenu, showPermissionMenu, showFeatureMenu, files.length, useStoryGlass, queue?.items?.length, input]);
+  }, [showModelMenu, showPermissionMenu, showFeatureMenu, showMobileHub, files.length, useStoryGlass, queue?.items?.length, input]);
   const composingRef = useRef(false);
   const restoredOptionsRef = useRef(null);
   const storyGlassModeChangeRef = useRef(onStoryGlassModeChange);
@@ -1794,6 +1798,9 @@ export default function Chat({
   const contextCompressed = Boolean(contextStatus?.compressed);
   const contextEstimated = Boolean(contextStatus?.estimated);
   const contextNearCompression = contextStatus?.state === 'near-compression';
+  const contextBreakdown = contextStatus?.breakdown || null;
+  const usageTotals = contextStatus?.totals || null;
+  const cacheHitRate = usageTotals ? calculateCacheHitRate(usageTotals) : null;
   const contextTone = contextPercent >= 90
     ? 'text-rose-600 dark:text-rose-400 !border-rose-400/60'
     : contextPercent >= 75
@@ -2967,7 +2974,9 @@ export default function Chat({
               getLocalText={getLocalText}
             />
           )}
-          <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
+          {!isChatMode && (
+            <CodeChangesSummary key={currentChatId || 'new-chat'} messages={messages} workspacePath={config?.workspacePath || ''} />
+          )}
           {(queue?.items?.length > 0 || queueStorageError) && (
             <section aria-label={getLocalText('消息队列', 'Message queue')} className="mb-3 rounded-2xl border border-[var(--control-border)] bg-[var(--control-bg)] p-3 text-xs text-[var(--text-dark)]">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -3082,21 +3091,21 @@ export default function Chat({
               </div>
             )}
             <div
-              className="flex w-full flex-wrap md:flex-nowrap items-center gap-1.5 mb-1 px-1 shrink-0 overflow-visible pb-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap"
+              className="flex w-full flex-nowrap items-center gap-1.5 mb-1 px-1 shrink-0 overflow-visible pb-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap"
               data-onboarding-id="chat-mode-bar"
               onWheel={handleModeBarWheel}
             >
               <div className="relative group shrink-0">
                 <FloatingPopover
-                  width={256}
+                  width={288}
                   align="start"
                   toggleOnClick
                   content={({ arrowLeft }) => (
                     <>
-                      <div className="rounded-xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 text-xs text-[var(--text-dark)] shadow-xl backdrop-blur-xl">
+                      <div className="w-full rounded-xl border border-[var(--control-border)] bg-[var(--popup-bg)] p-3 text-xs text-[var(--text-dark)] shadow-xl backdrop-blur-xl">
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <span className="font-bold">{getLocalText('背景信息', 'Background')}</span>
-                          <span className={`font-bold ${contextPercent >= 90 ? 'text-rose-600' : contextPercent >= 75 ? 'text-amber-600' : 'text-sky-600'}`}>
+                          <span className="font-bold">{getLocalText('背景信息', 'Background', '背景情報')}</span>
+                          <span className={`font-bold tabular-nums ${contextPercent >= 90 ? 'text-rose-600' : contextPercent >= 75 ? 'text-amber-600' : 'text-sky-600'}`}>
                             {contextStatus ? `${contextPercent}%` : '--'}
                           </span>
                         </div>
@@ -3106,9 +3115,86 @@ export default function Chat({
                             style={{ width: `${contextStatus ? contextPercent : 0}%` }}
                           />
                         </div>
-                        <div className="mt-2 leading-relaxed text-[var(--text-secondary)]">
-                          {contextTooltip}
+
+                        <div className="mt-2.5 space-y-1">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[var(--text-secondary)]">{getLocalText('上下文已用', 'Context used', 'コンテキスト使用量')}</span>
+                            <span className="font-semibold tabular-nums">
+                              {contextStatus
+                                ? `${contextEstimated ? '~' : ''}${formatCompactTokenCount(contextUsedTokens)} / ${formatCompactTokenCount(contextBudgetTokens)}`
+                                : '--'}
+                            </span>
+                          </div>
+                          {contextBreakdown && (
+                            <>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('系统提示词', 'System prompt', 'システムプロンプト')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">~{formatCompactTokenCount(contextBreakdown.systemTokens)}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('工具定义', 'Tool definitions', 'ツール定義')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">~{formatCompactTokenCount(contextBreakdown.toolTokens)}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('对话消息', 'Conversation', '会話メッセージ')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">~{formatCompactTokenCount(contextBreakdown.messageTokens)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
+
+                        {(contextCompressed || contextNearCompression) && (
+                          <div className="mt-2 rounded-lg bg-[var(--surface-inset)] px-2 py-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                            {contextCompressed
+                              ? getLocalText(
+                                  `已压缩较早背景，保留最近 ${contextStatus?.keptRecentMessages || 0} 条消息。`,
+                                  `Earlier background compressed; ${contextStatus?.keptRecentMessages || 0} recent messages kept.`,
+                                  `古い背景を圧縮しました（直近 ${contextStatus?.keptRecentMessages || 0} 件を保持）。`,
+                                )
+                              : getLocalText('接近自动压缩阈值。', 'Near the auto-compression threshold.', '自動圧縮のしきい値に近づいています。')}
+                          </div>
+                        )}
+
+                        {usageTotals && (
+                          <>
+                            <div className="my-2.5 border-t border-[var(--control-border)]" />
+                            <div className="mb-1.5 flex items-center justify-between gap-2">
+                              <span className="font-bold">{getLocalText('用量', 'Usage', '使用量')}</span>
+                              <span className="text-[10px] text-[var(--text-secondary)]">{getLocalText('本会话累计', 'this session', 'このセッション累計')}</span>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('Token 用量', 'Total tokens', '合計トークン')}</span>
+                                <span className="font-semibold tabular-nums">{usageTotals.approximate ? '≈' : ''}{formatTokenCount(usageTotals.totalTokens)}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('缓存命中', 'Cache hit', 'キャッシュヒット')}</span>
+                                <span className="font-semibold tabular-nums">{cacheHitRate === null ? '--' : `${cacheHitRate}%`}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('未缓存输入', 'Uncached input', '未キャッシュ入力')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">{formatTokenCount(usageTotals.uncachedInputTokens)}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('缓存读取', 'Cache read', 'キャッシュ読み取り')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">{formatTokenCount(usageTotals.cacheReadTokens)}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-3 pl-2">
+                                <span className="text-[var(--text-secondary)]">{getLocalText('输出', 'Output', '出力')}</span>
+                                <span className="tabular-nums text-[var(--text-secondary)]">{formatTokenCount(usageTotals.outputTokens)}</span>
+                              </div>
+                            </div>
+                            {usageTotals.approximate && (
+                              <div className="mt-1.5 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                                {getLocalText(
+                                  '升级前的轮次只记录了每次请求，合计为近似值。',
+                                  'Turns before this update recorded only the last request per turn; the total is approximate.',
+                                  '更新前のターンは各リクエストのみ記録していたため、合計は概算です。',
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                       <div
                         className="absolute top-full h-3 w-3 -translate-x-1/2 -translate-y-1 rotate-45 rounded-[3px] bg-[var(--popup-bg)] shadow-[0_10px_25px_rgba(15,23,42,0.12)]"
@@ -3146,7 +3232,27 @@ export default function Chat({
                   </div>
                 </div>
               </div>
-              <div className="relative shrink-0" ref={modelMenuRef} data-onboarding-id="chat-model-switcher">
+              <MobileControlHub
+                open={showMobileHub}
+                onOpenChange={setShowMobileHub}
+                config={config}
+                setConfig={setConfig}
+                models={models}
+                modelProviderLogos={MODEL_PROVIDER_LOGOS}
+                modelProviderOrder={MODEL_PROVIDER_ORDER}
+                getChatProviderName={getChatProviderName}
+                uiLanguage={uiLanguage}
+                backendUrl={backendUrl}
+                isChatMode={isChatMode}
+                isGenerating={isGenerating}
+                permissionMode={permissionMode}
+                permissionDefaultMode={AGENT_PERMISSION_MODE_DEFAULT}
+                permissionFullMode={AGENT_PERMISSION_MODE_FULL}
+                onOpenSettings={onOpenSettings}
+                getLocalText={getLocalText}
+                t={t}
+              />
+              <div className="relative hidden md:block shrink-0" ref={modelMenuRef} data-onboarding-id="chat-model-switcher">
                 <button
                   type="button"
                   onClick={() => {
@@ -3299,8 +3405,13 @@ export default function Chat({
                   </div>
                 )}
               </div>
-              <WorkspaceSelector backendUrl={backendUrl} config={config} setConfig={setConfig} disabled={isGenerating} getLocalText={getLocalText} />
-              <div className="relative shrink-0" ref={permissionMenuRef}>
+              {!isChatMode && (
+                <div className="hidden md:block shrink-0">
+                  <WorkspaceSelector backendUrl={backendUrl} config={config} setConfig={setConfig} disabled={isGenerating} getLocalText={getLocalText} />
+                </div>
+              )}
+              {!isChatMode && (
+              <div className="relative hidden md:block shrink-0" ref={permissionMenuRef}>
                 <button
                   type="button"
                   disabled={isGenerating}
@@ -3353,6 +3464,7 @@ export default function Chat({
                   </div>
                 )}
               </div>
+              )}
               <div className="relative shrink-0" ref={featureMenuRef}>
                 <button
                   type="button"
@@ -3449,16 +3561,18 @@ export default function Chat({
 
               {showPlusMenu && (
                 <div className="saki-popup absolute bottom-full left-0 mb-2 w-48 bg-[var(--popup-bg)] dark:bg-[#181922]/95 rounded-2xl shadow-2xl border border-[var(--control-border)]  overflow-hidden py-2 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-200 z-[100]">
-                  <button
-                    onClick={() => {
-                      setShowPlusMenu(false);
-                      onOpenFileManager?.();
-                    }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-dark)]  hover:bg-[#ff75ac]/10 dark:hover:bg-[#ff75ac]/15 hover:text-[#ff75ac] transition-colors"
-                  >
-                    <Server size={18} className="text-[var(--text-tertiary)] group-hover:text-blue-500" />
-                    <span className="font-bold">{t('workspace')}</span>
-                  </button>
+                  {!isChatMode && (
+                    <button
+                      onClick={() => {
+                        setShowPlusMenu(false);
+                        onOpenFileManager?.();
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-dark)]  hover:bg-[#ff75ac]/10 dark:hover:bg-[#ff75ac]/15 hover:text-[#ff75ac] transition-colors"
+                    >
+                      <Server size={18} className="text-[var(--text-tertiary)] group-hover:text-blue-500" />
+                      <span className="font-bold">{t('workspace')}</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setShowPlusMenu(false);

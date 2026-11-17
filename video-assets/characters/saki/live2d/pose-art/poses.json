@@ -1,0 +1,169 @@
+{
+  "drawings": [
+    {
+      "id": "left-up",
+      "label": "左转抬头",
+      "angles": [
+        -30,
+        30,
+        0
+      ],
+      "src": "pose-art/Turn_Left_Up.png",
+      "fit": [
+        1,
+        -0.0008,
+        -0.0004
+      ]
+    },
+    {
+      "id": "up",
+      "label": "抬头",
+      "angles": [
+        0,
+        30,
+        0
+      ],
+      "src": "pose-art/Look_Up.png",
+      "fit": [
+        1,
+        -0.0008,
+        0.0008
+      ]
+    },
+    {
+      "id": "right-up",
+      "label": "右转抬头",
+      "angles": [
+        30,
+        30,
+        5
+      ],
+      "src": "pose-art/Turn_Right_Up.png",
+      "fit": [
+        1,
+        -0.0012,
+        -0.0004
+      ]
+    },
+    {
+      "id": "left",
+      "label": "左转头",
+      "angles": [
+        -30,
+        0,
+        0
+      ],
+      "src": "pose-art/Turn_Left.png",
+      "fit": [
+        1,
+        -0.0004,
+        -0.0008
+      ]
+    },
+    {
+      "id": "neutral",
+      "label": "正面",
+      "angles": [
+        0,
+        0,
+        0
+      ],
+      "src": "Saki_Neutral.png",
+      "fit": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "right",
+      "label": "右转头",
+      "angles": [
+        30,
+        0,
+        0
+      ],
+      "src": "pose-art/Turn_Right.png",
+      "fit": [
+        1,
+        -0.0008,
+        -0.0004
+      ]
+    },
+    {
+      "id": "left-down",
+      "label": "左转低头",
+      "angles": [
+        -30,
+        -30,
+        0
+      ],
+      "src": "pose-art/Turn_Left_Down.png",
+      "fit": [
+        1,
+        -0.00159,
+        -0.0004
+      ]
+    },
+    {
+      "id": "down",
+      "label": "低头",
+      "angles": [
+        0,
+        -30,
+        0
+      ],
+      "src": "pose-art/Look_Down.png",
+      "fit": [
+        1,
+        -0.0012,
+        0.0004
+      ]
+    },
+    {
+      "id": "right-down",
+      "label": "右转低头",
+      "angles": [
+        30,
+        -30,
+        5
+      ],
+      "src": "pose-art/Turn_Right_Down.png",
+      "fit": [
+        1,
+        -0.00558,
+        -0.00199
+      ]
+    },
+    {
+      "id": "tilt-left",
+      "label": "左歪头",
+      "angles": [
+        0,
+        0,
+        -15
+      ],
+      "src": "pose-art/Tilt_Left.png",
+      "fit": [
+        1,
+        -0.00279,
+        -0.0004
+      ]
+    },
+    {
+      "id": "tilt-right",
+      "label": "右歪头",
+      "angles": [
+        0,
+        0,
+        15
+      ],
+      "src": "pose-art/Tilt_Right.png",
+      "fit": [
+        1,
+        0.0,
+        -0.0004
+      ]
+    }
+  ]
+}

@@ -228,20 +228,100 @@ class MCPManager {
         return status;
     }
 
-    async callTool(serverName, toolName, args) {
+    /**
+     * Calls one MCP tool with a deadline and optional cancellation.
+     *
+     * An MCP server is a third-party process. Without a deadline a single hung
+     * server blocks the agent turn forever, because the transport promise never
+     * settles and the run cannot be cancelled from the UI. The timeout is applied
+     * here rather than in the tool dispatch so every caller inherits it.
+     *
+     * `timeoutMs: 0` disables the deadline (callers that manage their own clock).
+     * `signal` cancels the wait; the in-flight request is left to the server, which
+     * keeps the client transport reusable instead of tearing it down mid-frame.
+     */
+    async callTool(serverName, toolName, args, options = {}) {
         const clientInfo = this.acquire(serverName);
         if (!clientInfo) {
             throw new Error(`MCP Server "${serverName}" not found or not initialized.`);
         }
+
+        const timeoutMs = normalizeMcpTimeout(options.timeoutMs);
+        const signal = options.signal;
+        const cleanup = [];
+
         try {
-            return await clientInfo.client.callTool({
+            if (signal?.aborted) throw mcpAbortError(serverName, toolName);
+
+            const call = clientInfo.client.callTool({
                 name: toolName,
                 arguments: args
             });
+            // The loser of the race may still reject later; keep it handled.
+            call.catch(() => {});
+            const racers = [call];
+
+            if (timeoutMs > 0) {
+                racers.push(new Promise((_, reject) => {
+                    const timer = setTimeout(() => {
+                        reject(mcpTimeoutError(serverName, toolName, timeoutMs));
+                    }, timeoutMs);
+                    // Always cleared in `finally`; not unref'd so a pending deadline
+                    // still keeps a short-lived process alive until it settles.
+                    cleanup.push(() => clearTimeout(timer));
+                }));
+            }
+
+            if (signal) {
+                racers.push(new Promise((_, reject) => {
+                    const onAbort = () => reject(mcpAbortError(serverName, toolName));
+                    signal.addEventListener('abort', onAbort, { once: true });
+                    cleanup.push(() => signal.removeEventListener('abort', onAbort));
+                }));
+            }
+
+            return await Promise.race(racers);
         } finally {
+            for (const dispose of cleanup) {
+                try {
+                    dispose();
+                } catch {
+                    // Cleanup must never mask the original failure.
+                }
+            }
             this.release(clientInfo);
         }
     }
 }
 
-module.exports = new MCPManager();
+const DEFAULT_MCP_TOOL_TIMEOUT_MS = 180000;
+
+function normalizeMcpTimeout(value) {
+    const configured = Number(process.env.SAKI_MCP_TIMEOUT_MS);
+    const fallback = Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_MCP_TOOL_TIMEOUT_MS;
+    if (value === undefined || value === null) return fallback;
+    const requested = Number(value);
+    if (!Number.isFinite(requested) || requested < 0) return fallback;
+    return Math.min(requested, 24 * 60 * 60 * 1000);
+}
+
+function mcpTimeoutError(serverName, toolName, timeoutMs) {
+    return Object.assign(
+        new Error(`MCP tool "${toolName}" on server "${serverName}" did not respond within ${timeoutMs} ms.`),
+        { code: 'MCP_TOOL_TIMEOUT', serverName, toolName, timeoutMs },
+    );
+}
+
+function mcpAbortError(serverName, toolName) {
+    return Object.assign(
+        new Error(`MCP tool "${toolName}" on server "${serverName}" was cancelled.`),
+        { code: 'MCP_TOOL_ABORTED', serverName, toolName },
+    );
+}
+
+const manager = new MCPManager();
+manager.MCPManager = MCPManager;
+manager.DEFAULT_MCP_TOOL_TIMEOUT_MS = DEFAULT_MCP_TOOL_TIMEOUT_MS;
+manager.normalizeMcpTimeout = normalizeMcpTimeout;
+
+module.exports = manager;

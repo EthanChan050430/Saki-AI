@@ -8,7 +8,7 @@ let engineState = {
   status: STATUS_IDLE,
   progressText: '',
   percent: 0,
-  sampleRate: 22050,
+  sampleRate: 16000,
   numSpeakers: 1,
   error: null,
 };
@@ -115,7 +115,7 @@ export function initLocalTts() {
         status: STATUS_READY,
         progressText: '本地语音模型已就绪',
         percent: 100,
-        sampleRate: data.sampleRate || 22050,
+        sampleRate: data.sampleRate || 16000,
         numSpeakers: data.numSpeakers || 1,
         error: null,
       });
@@ -179,7 +179,7 @@ export async function playFloat32Audio(samples, sampleRate, shouldAbort) {
   if (!activeAudioCtx || activeAudioCtx.sampleRate !== sampleRate) {
     if (activeAudioCtx) {
       try {
-        await activeAudioCtx.close();
+        await activeAudioCtx.close?.();
       } catch (error) {
         console.warn('Local TTS audio context close failed:', error);
       }
@@ -187,7 +187,7 @@ export async function playFloat32Audio(samples, sampleRate, shouldAbort) {
     activeAudioCtx = new AudioCtx({ sampleRate });
   }
   if (activeAudioCtx.state === 'suspended') {
-    await activeAudioCtx.resume();
+    await activeAudioCtx.resume?.();
   }
   if (shouldAbort && shouldAbort()) return;
 

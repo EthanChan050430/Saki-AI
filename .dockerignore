@@ -15,5 +15,10 @@ MEMORY.md
 SESSION-STATE.md
 ssl
 .tmp
+.venv-video-call
 **/apps.json
 frontend/public/assets/animate
+video-assets/characters/saki/live2d/*.psd
+video-assets/characters/saki/live2d/*.cmo3
+video-assets/characters/saki/live2d/parts
+video-assets/characters/saki/live2d/tracking

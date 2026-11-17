@@ -67,9 +67,52 @@ bash deploy.sh stop
 | `QQBOT_AUTO_CONNECT` | 未设置/`0` | 不自动连接 QQ；需要时显式设为 `1` 并配置机器人依赖 |
 | `SAKI_BROWSER_IDLE_MS` | `60000` | 浏览器抓取后空闲多久关闭共享浏览器 |
 | `PORT` / `AGENT_HOST` | `5480` / `127.0.0.1` | 监听地址 |
+| `AGENT_AUTH_TOKEN` | 启动时随机生成 | 自动化/远程客户端调用受限接口时携带的令牌；不设置则每次启动都换新值 |
+| `SAKI_ALLOWED_ORIGINS` | 空 | 反向代理对外域名，逗号分隔；只有列在这里的来源才被视为可信来源 |
+| `SAKI_MCP_TIMEOUT_MS` | `180000` | 单次 MCP 工具调用上限；`0` 关闭上限 |
 | `SAKI_DATA_DIR` | 项目内 `data/` | 聊天、配置、上传等持久数据目录 |
 | `SAKI_MEMORY_WORKSPACE_DIR` | 项目根目录 | 长期记忆文件目录；设置自定义数据目录时默认放到其中的 `workspace-memory/` |
 | `CHECKPOINT_STORE_DIR` | `~/.saki-ai/checkpoints` | 检查点存储目录；检查点功能保留 |
+
+## 谁可以改动本机设置
+
+Saki 是「本机优先」的服务：默认只监听 `127.0.0.1`。一旦设置 `AGENT_HOST=0.0.0.0` 让局域网访问，就存在两类截然不同的权限：
+
+**普通使用**（对话、读文件、看历史、预览成果）任何能访问端口的客户端都可以进行，与原来的行为一致。
+
+**持久化设置**只允许来自本机、或携带 `AGENT_AUTH_TOKEN` 的请求：
+
+- `POST /api/config`（API Key、权限模式等）
+- `POST /api/mcp/config`（会写成开机后自动执行的命令）
+- 插件安装/切换/卸载、Skill 安装/保存/删除
+- 定时任务的新增与删除
+
+被拒绝时返回 `403`，响应体带 `code: "LOCAL_ADMIN_ONLY"`。这样做的原因：这些操作的影响会跨会话存续，远程使用者不应该借一次对话获得长期驻留的权限；而对话本身在局域网内仍然是可用的。
+
+**远程读取**配置时，凭据字段一律返回 `[redacted]`（`apiKey`、各家 `*ApiKey`、`customDrawingKey`、`copilotToken`、第三方机器人 `botToken`/`appSecret`/`clientSecret`、MCP `env` 值、`--api-key` 形式的参数）。界面仍能正常渲染，非敏感项照常显示。若把 `[redacted]` 原样保存回去，服务端会保留原有密钥，不会清空。
+
+需要让局域网内的自动化脚本改配置时，设置固定令牌并在请求头携带：
+
+```sh
+# .env
+AGENT_AUTH_TOKEN=<一段足够长的随机字符串>
+
+curl -X POST http://192.168.1.15:5480/api/mcp/config \
+  -H "x-agent-auth-token: <同上>" -H "content-type: application/json" \
+  -d '{"mcpServers":{}}'
+```
+
+反向代理对外提供域名时，浏览器发出的 `Origin` 不再是 `127.0.0.1`，需要显式登记，否则上述设置接口会拒绝：
+
+```sh
+SAKI_ALLOWED_ORIGINS=https://saki.example.com
+```
+
+反向代理本身在本机监听时，普通对话接口不受影响。注意：把整个应用暴露到公网等于把终端与文件读写一并暴露，请先确认这符合你的使用场景。
+
+## 会话文件的可靠性
+
+会话保存走「临时文件 → fsync → 改名」的原子替换，并写入 `version` 字段；读取时会按版本迁移（当前 `v1`），若主文件损坏则自动回退到最近一次未完成写入留下的临时文件，并在日志中提示恢复来源。因此强杀进程或断电不会再留下无法解析的会话文件。
 
 关键词搜索不提供向量语义相似度；静态抓取无法完整读取纯 JS 网页。Office/PDF/PPT 和终端仍可使用，对应任务会临时增加资源消耗；PPT 截图需要单独安装浏览器并配置 `BROWSER_PATH`。云端 API 或远程 Ollama 可避免在本机运行推理服务。
 

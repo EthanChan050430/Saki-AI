@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Cpu, Terminal, Shield, ExternalLink, RefreshCw, CheckCircle2, Search, Image, ChevronDown, UserCircle, Palette, Plus, Globe, Bot, Volume2, Mic, Music2, Trash2, Brain } from 'lucide-react';
+import { X, Cpu, Terminal, Shield, ExternalLink, RefreshCw, CheckCircle2, Search, Image, ChevronDown, UserCircle, Palette, Plus, Globe, Bot, Volume2, Mic, Music2, Trash2, Brain, Lock, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import ImageCropperModal from './ImageCropperModal';
 import botAvatar from '../head.png';
@@ -20,6 +20,12 @@ import { CHAT_BACKGROUNDS, getChatBackgroundPreset, getChatBackgroundSource, sel
 import { localizeWith } from '../utils/localize';
 import { fetchProviderModels, normalizeCopilotModelName } from '../utils/modelRefresh';
 import {
+  clearRememberedPassword,
+  hasLoginPassword,
+  readRememberedPassword,
+  writeRememberedPassword,
+} from '../utils/loginAuth';
+import {
   getLocalTtsState,
   subscribeLocalTtsStatus,
   initLocalTts,
@@ -27,7 +33,7 @@ import {
   playFloat32Audio,
 } from '../utils/localTtsEngine';
 
-export default function SettingsModal({ config, setConfig, onClose, models, onUpdateProviderModels, windowed = false }) {
+export default function SettingsModal({ config, setConfig, onClose, models, onUpdateProviderModels, onLockNow, windowed = false }) {
   const { t, i18n } = useTranslation();
   const backgroundPreset = getChatBackgroundPreset(config);
   const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
@@ -550,6 +556,16 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
   };
 
   const [localTtsStatus, setLocalTtsStatus] = useState(() => getLocalTtsState());
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+
+  const handleLoginPasswordChange = (value) => {
+    setConfig(prev => ({ ...prev, loginPassword: value }));
+    if (!value) {
+      clearRememberedPassword();
+    } else if (readRememberedPassword().remember) {
+      writeRememberedPassword(value, true);
+    }
+  };
 
   useEffect(() => {
     return subscribeLocalTtsStatus(setLocalTtsStatus);
@@ -921,7 +937,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                     </div>
                     <button
                       onClick={() => setConfig({...config, copilotToken: ''})}
-                      className="text-xs text-red-500 font-medium hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors border border-red-50"
+                      className="text-xs text-red-500 dark:text-red-400 font-medium hover:bg-red-50 dark:hover:bg-red-500/10 px-3 py-1.5 rounded-lg transition-colors border border-red-100 dark:border-red-500/20"
                     >
                       {t('relogin')}
                     </button>
@@ -947,12 +963,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                 </label>
                 <select
                   id="search-provider"
-                  className="w-full border rounded-lg px-3 py-2 text-sm bg-[var(--surface-bg)]"
+                  className="w-full border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg px-3 py-2 text-sm bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] outline-none focus:border-[#ff75ac] focus:ring-1 focus:ring-[#ff75ac]/30"
                   value={config.searchEngine === 'searxng' ? 'searxng' : 'exa'}
                   onChange={event => setConfig({ ...config, searchEngine: event.target.value })}
                 >
-                  <option value="exa">{getLocalText('默认（Exa 托管搜索）', 'Default (Exa hosted search)', 'デフォルト（Exa ホスト検索）')}</option>
-                  <option value="searxng">SearxNG</option>
+                  <option value="exa" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">{getLocalText('默认（Exa 托管搜索）', 'Default (Exa hosted search)', 'デフォルト（Exa ホスト検索）')}</option>
+                  <option value="searxng" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">SearxNG</option>
                 </select>
               </div>
               {config.searchEngine === 'searxng' && (
@@ -986,12 +1002,12 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                     'バックエンドから接続できる URL を入力し、settings.yml の search.formats で json を有効にしてください。失敗時に自動で切り替えません。'
                   )}</p>
                   {searxngTestState.error && (
-                    <div className="mt-2 text-xs text-red-500 bg-red-50/60 border border-red-200/70 rounded-lg px-3 py-2">
+                    <div className="mt-2 text-xs text-red-500 dark:text-red-400 bg-red-50/60 dark:bg-red-500/10 border border-red-200/70 dark:border-red-500/30 rounded-lg px-3 py-2">
                       {searxngTestState.error}
                     </div>
                   )}
                   {searxngTestState.result && (
-                    <div className="mt-2 text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200/80 rounded-lg px-3 py-2 space-y-1">
+                    <div className="mt-2 text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50/70 dark:bg-emerald-500/10 border border-emerald-200/80 dark:border-emerald-500/30 rounded-lg px-3 py-2 space-y-1">
                       <div className="font-medium flex items-center gap-1.5">
                         <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
                         {getLocalText(
@@ -1141,7 +1157,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                           </button>
                         </div>
                         <select
-                          className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] font-mono"
+                          className="w-full border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] font-mono"
                           value={config.customDrawingModel || ''}
                           onChange={(e) => setConfig({...config, customDrawingModel: e.target.value})}
                         >
@@ -1163,7 +1179,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                      <div className="relative">
                        <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{t('select_drawing_model')}</label>
                        <select
-                         className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] appearance-none pr-10"
+                         className="w-full border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] appearance-none pr-10 cursor-pointer"
                          value={config.drawingModel ? `${config.drawingProvider}:${config.drawingModel}` : ''}
                          onChange={(e) => {
                            const val = e.target.value;
@@ -1335,7 +1351,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">GPT {getLocalText('模型', 'Model', 'モデル')}</label>
                       <select
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
+                        className="w-full border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsGptModel || ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -1351,7 +1367,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">SoVITS {getLocalText('模型', 'Model', 'モデル')}</label>
                       <select
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] focus:ring-2 focus:ring-saki-pink outline-none"
+                        className="w-full border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg px-2 py-1.5 text-xs bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] focus:ring-2 focus:ring-saki-pink outline-none"
                         value={config.sovitsSovitsModel || ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -1457,7 +1473,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
               <Palette size={16} />
               {t('interface_custom')}
             </h4>
-            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-4">
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border border-[var(--surface-border-subtle)] space-y-4">
               <div className="flex items-center justify-between pb-2 border-b border-[var(--surface-border-subtle)]">
                 <div className="flex items-center gap-2">
                   <Globe size={16} className="text-[var(--text-tertiary)]" />
@@ -1465,18 +1481,23 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                     <div className="text-sm font-bold text-[var(--text-dark)]">{t('language')}</div>
                   </div>
                 </div>
-                <select
-                  value={i18n.language}
-                  onChange={(e) => { localStorage.setItem('saki_user_lang', e.target.value); i18n.changeLanguage(e.target.value); }}
-                  className="border rounded-lg px-2 py-1.5 text-xs outline-none bg-[var(--surface-bg)] min-w-[120px]"
-                >
-                  <option value="zh-CN">简体中文</option>
-                  <option value="zh-TW">繁體中文</option>
-                  <option value="en-US">English (US)</option>
-                  <option value="en-GB">English (UK)</option>
-                  <option value="ja">日本語</option>
-                  <option value="fr">Français</option>
-                </select>
+                <div className="relative">
+                  <select
+                    value={i18n.language}
+                    onChange={(e) => { localStorage.setItem('saki_user_lang', e.target.value); i18n.changeLanguage(e.target.value); }}
+                    className="border border-[var(--surface-border-subtle)] dark:border-white/10 rounded-lg pl-3 pr-7 py-1.5 text-xs outline-none bg-[var(--surface-bg)] dark:bg-[var(--surface-bg-strong)] text-[var(--text-dark)] min-w-[130px] appearance-none cursor-pointer focus:border-[#ff75ac] focus:ring-1 focus:ring-[#ff75ac]/30 transition-colors shadow-sm"
+                  >
+                    <option value="zh-CN" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">简体中文</option>
+                    <option value="zh-TW" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">繁體中文</option>
+                    <option value="en-US" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">English (US)</option>
+                    <option value="en-GB" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">English (UK)</option>
+                    <option value="ja" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">日本語</option>
+                    <option value="fr" className="bg-[var(--surface-bg-strong)] text-[var(--text-dark)] dark:bg-[#24252e] dark:text-[#f5f5f7]">Français</option>
+                  </select>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--text-tertiary)]">
+                    <ChevronDown size={14} />
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center justify-between pb-2 border-b border-[var(--surface-border-subtle)]">
@@ -1543,7 +1564,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                           {config.userAvatar && config.userAvatar !== '/assets/head_user.png' && (
                             <button
                               onClick={() => setConfig({...config, userAvatar: '/assets/head_user.png'})}
-                              className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                              className="text-[11px] text-red-500 dark:text-red-400 bg-[var(--surface-bg)] border border-red-100 dark:border-red-500/30 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/15 font-bold transition-all active:scale-95"
                             >
                               {t('restore_default')}
                             </button>
@@ -1601,7 +1622,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                           {config.aiAvatar && (
                             <button
                               onClick={() => setConfig({...config, aiAvatar: ''})}
-                              className="text-[11px] text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-all active:scale-95"
+                              className="text-[11px] text-red-500 dark:text-red-400 bg-[var(--surface-bg)] border border-red-100 dark:border-red-500/30 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/15 font-bold transition-all active:scale-95"
                             >
                               {t('restore_default')}
                             </button>
@@ -1664,7 +1685,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                       {backgroundPreset !== 'auto' && (
                         <button
                           onClick={() => setConfig(previous => selectChatBackground(previous, 'auto'))}
-                          className="text-xs text-red-500 bg-[var(--surface-bg)] border border-red-100 px-3 py-1.5 rounded-lg hover:bg-red-50 font-medium"
+                          className="text-xs text-red-500 dark:text-red-400 bg-[var(--surface-bg)] border border-red-100 dark:border-red-500/30 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/15 font-medium transition-colors"
                         >
                           {t('restore_default')}
                         </button>
@@ -1702,10 +1723,84 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
 
           <section>
             <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Lock size={16} />
+              {getLocalText('登录密码保护', 'Login Password Lock', 'ログインパスワード保護')}
+            </h4>
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border border-[var(--surface-border-subtle)] space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-[var(--text-dark)]">
+                    {getLocalText('启动与进入验证密码', 'Access Password on Entry', '起動時のログインパスワード')}
+                  </div>
+                  <div className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed">
+                    {getLocalText(
+                      '设置密码后，每次打开或刷新 SAKI-AI 都会先弹出液态玻璃登录锁屏界面，留空则关闭保护。',
+                      'When set, opening or refreshing SAKI-AI requires this password on the liquid-glass lock screen. Leave empty to disable.',
+                      'パスワードを設定すると、SAKI-AI を開くたびにログイン認証画面が表示されます。空欄で無効になります。'
+                    )}
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                  hasLoginPassword(config)
+                    ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-[var(--surface-inset)] text-[var(--text-tertiary)]'
+                }`}>
+                  {hasLoginPassword(config)
+                    ? getLocalText('已启用密码保护', 'Enabled', '有効')
+                    : getLocalText('未设置密码', 'Not set', '未設定')}
+                </span>
+              </div>
+
+              <div className="relative">
+                <input
+                  type={showLoginPassword ? 'text' : 'password'}
+                  value={config.loginPassword || ''}
+                  onChange={(event) => handleLoginPasswordChange(event.target.value)}
+                  placeholder={getLocalText('输入登录密码（留空表示不启用）', 'Enter login password (leave blank to disable)', 'ログインパスワードを入力（空欄で無効）')}
+                  aria-label={getLocalText('登录密码', 'Login password', 'ログインパスワード')}
+                  autoComplete="new-password"
+                  className="w-full border rounded-lg px-3 py-2 pr-10 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPassword(prev => !prev)}
+                  aria-label={showLoginPassword
+                    ? getLocalText('隐藏密码', 'Hide password', 'パスワードを隠す')
+                    : getLocalText('显示密码', 'Show password', 'パスワードを表示')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-dark)] transition-colors"
+                >
+                  {showLoginPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+
+              {hasLoginPassword(config) && (
+                <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => onLockNow?.()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#ff75ac]/35 bg-[#ff75ac]/10 px-3 py-1.5 text-xs font-semibold text-[#ff75ac] transition-all hover:bg-[#ff75ac] hover:text-white"
+                  >
+                    <Lock size={12} />
+                    {getLocalText('立即锁定', 'Lock Now', '今すぐロック')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleLoginPasswordChange('')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 dark:border-red-500/30 bg-[var(--surface-bg)] px-3 py-1.5 text-xs font-semibold text-red-500 dark:text-red-400 transition-colors hover:bg-red-50 dark:hover:bg-red-500/15"
+                  >
+                    {getLocalText('清除密码', 'Clear Password', 'パスワードを削除')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Trash2 size={16} />
               {getLocalText('\u7f13\u5b58\u6e05\u7406', 'Cache Cleanup')}
             </h4>
-            <div className="bg-red-50 rounded-xl p-4 border border-red-100 space-y-4">
+            <div className="bg-red-50 dark:bg-red-500/10 rounded-xl p-4 border border-red-100 dark:border-red-500/20 space-y-4">
               <div>
                 <div className="text-sm font-bold text-[var(--text-dark)]">
                   {getLocalText('\u6e05\u7a7a QQ \u673a\u5668\u4eba\u7f13\u5b58\u6587\u4ef6', 'Clear QQ Bot Cache Files')}
@@ -1726,7 +1821,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
               </div>
 
               {cacheCleanupMessage && (
-                <div className={`rounded-lg border px-3 py-2 text-xs ${cacheCleanupError ? 'border-red-200 bg-[var(--surface-bg)] text-red-600' : 'border-emerald-200 bg-[var(--surface-bg)] text-emerald-700'}`}>
+                <div className={`rounded-lg border px-3 py-2 text-xs ${cacheCleanupError ? 'border-red-200 dark:border-red-500/30 bg-[var(--surface-bg)] text-red-600 dark:text-red-400' : 'border-emerald-200 dark:border-emerald-500/30 bg-[var(--surface-bg)] text-emerald-700 dark:text-emerald-400'}`}>
                   {cacheCleanupMessage}
                 </div>
               )}
@@ -1735,7 +1830,7 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                 <button
                   onClick={clearQQBotCache}
                   disabled={isClearingCache}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${isClearingCache ? 'cursor-not-allowed bg-[var(--surface-inset)] text-[var(--text-secondary)]' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-100'}`}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${isClearingCache ? 'cursor-not-allowed bg-[var(--surface-inset)] text-[var(--text-secondary)]' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-100 dark:shadow-none'}`}
                 >
                   {isClearingCache ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
                   {isClearingCache ? getLocalText('\u6b63\u5728\u6e05\u7406...', 'Clearing...') : getLocalText('\u6e05\u9664\u7f13\u5b58', 'Clear Cache')}

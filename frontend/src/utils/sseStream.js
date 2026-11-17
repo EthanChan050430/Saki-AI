@@ -49,11 +49,15 @@ export async function readSSEStream(response, onEvent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let streamDone = false;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        streamDone = true;
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -85,6 +89,13 @@ export async function readSSEStream(response, onEvent) {
       if (stopReceived) break;
     }
   } finally {
+    if (!streamDone) {
+      try {
+        await reader.cancel?.();
+      } catch {
+        // Ignore cancel errors on already-closed or aborted streams.
+      }
+    }
     reader.releaseLock?.();
   }
 }

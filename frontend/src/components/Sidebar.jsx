@@ -42,6 +42,7 @@ export default function Sidebar({
   onToggleThirdPartyChats,
   activeUtilityKeys = [],
   isUtilityLayerActive = false,
+  appMode = 'work',
 }) {
   const { t, i18n } = useTranslation();
   const ui = getFeatureLocale(i18n.resolvedLanguage || i18n.language);
@@ -162,7 +163,7 @@ export default function Sidebar({
         handleMobileClose();
       },
     },
-  ];
+  ].filter((action) => !(appMode === 'chat' && action.key === 'files'));
   const [hoveredUtilityKey, setHoveredUtilityKey] = useState(null);
   const hoveredUtilityIndex = utilityActions.findIndex((action) => action.key === hoveredUtilityKey);
 

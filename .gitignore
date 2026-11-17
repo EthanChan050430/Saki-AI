@@ -28,30 +28,45 @@ ssl/
 *.pem
 
 # Data & Privacy
-data/global_config.json
-data/sessions/
-data/reports/
-data/uploads/
-data/Trash/
-data/files/
-data/memories/
-data/working_memory/
-data/models-cache/
-data/skills/
-data/plugins/
-data/*.json
+data/*
 !data/global_config.example.json
 memory/
 MEMORY.md
 SESSION-STATE.md
+
+# Non-project Docs, Research & Recovery
+.acl-recovery/
+analysis/
+research/
+server.fixed.js
+*.bak
+
+# Promotional Video & Live2D Demo Platform (keep only call avatar runtime)
+video-assets/*
+!video-assets/characters/
+video-assets/characters/*
+!video-assets/characters/saki/
+video-assets/characters/saki/*
+!video-assets/characters/saki/live2d/
+video-assets/characters/saki/live2d/*.psd
+video-assets/characters/saki/live2d/*.cmo3
+video-assets/characters/saki/live2d/*.cmd
+video-assets/characters/saki/live2d/*.cjs
+video-assets/characters/saki/live2d/README.md
+video-assets/characters/saki/live2d/Saki_Painting.png
+video-assets/characters/saki/live2d/parts/
+video-assets/characters/saki/live2d/parts.json
+video-assets/characters/saki/live2d/tracking/
 
 # Logs & Workspace
 *.log
 __pycache__/
 *.pyc
 .tmp/
+.venv-video-call/
 .vscode/
 .idea/
 .DS_Store
 
 .playwright-mcp/
+frontend/public/tts-wasm/sherpa-onnx-wasm-main-tts.data

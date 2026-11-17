@@ -63,6 +63,9 @@ function ToolTarget({ part }) {
     draw: local('生成图片', 'Generate image'), composemusic: local('创作音乐', 'Compose music'),
     diagram: local('绘制图表', 'Render diagram'), manage_hosted_tasks: local('管理定时任务', 'Manage scheduled tasks'),
     savememory: local('保存记忆', 'Save memory'), searchskills: local('查找技能', 'Find skills'),
+    showcallcomponent: local('展示内容', 'Show content'), closecallcomponent: local('收起内容', 'Close content'),
+    viewcallcamera: local('查看摄像头', 'View camera'), recallcallcontext: local('回忆通话资料', 'Recall call context'),
+    browsecall: local('浏览网页', 'Browse'),
   };
   const range = kind === 'readfile' || kind === 'editfile';
   return <>
