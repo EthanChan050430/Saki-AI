@@ -31,6 +31,7 @@
   let playback=null, blinkAt=-Infinity, previousTime=0;
   let front=null, body=null, lastFrame="", staticBodyPainted=false, nextDraw=0;
   let staticBodyLight="";
+  let callPose=null;
   let wave=null, neutralForWave=null;
   const waveStarts=new Map();
   const handSides=["left","right"];
@@ -170,6 +171,7 @@
 
   function paintPose(item) {
     staticBodyPainted=false;
+    callPose=null;
     image.src=item.src;
     image.alt="Saki · "+item.label;
     const [scale,x,y]=mode==="motion"?item.fit:[1,0,0];
@@ -593,11 +595,11 @@
       mix(noseGrid[row+1][col][i],noseGrid[row+1][col+1][i],yaw-col),pitch-row));
   }
   window.sakiFaceAnchor=()=>{
-    const roll=trackedFace.amount?trackedFace.values[2]*trackedFace.amount:0;
+    const roll=callPose?.roll??(trackedFace.amount?trackedFace.values[2]*trackedFace.amount:0);
     const angles=trackedFace.amount?{...current,z:0}:current;
     let total=0,x=0,y=0,span=0;
     const features=Array.from({length:4},()=>[0,0]);
-    for(const {name,weight} of stencil(angles)) {
+    for(const {name,weight} of callPose?.slots??stencil(angles)) {
       const marks=model.angledExpressions?.[name];
       if(!marks) continue;
       total+=weight;
@@ -625,16 +627,29 @@
       features:features.map(project),
     };
   };
-  function showTransition(now,arms,expression,roll,hasFace,tail,coarseMesh,lighting) {
+  function showTransition(now,arms,expression,{roll,hasFace,tail,coarseMesh,lighting,angleKey,frameKey}) {
     if(!body) return false;
+    const slots=stencil(hasFace?{...current,z:0}:current).map(pose=>({
+      ...pose,base:cachedFrame(pose.name).image,
+    }));
+    let pose={slots,angleKey,roll,yaw:current.x,pitch:current.y};
+    if(slots.some(slot=>!slot.base)) {
+      // Keep the painted pose while a new angle loads, but keep animating its face.
+      if(!callPose) return false;
+      pose=callPose;
+    }
+    const {yaw,pitch}=pose;
+    expression={...expression,yaw,pitch};
     const useExpressions=angledExpressions&&
       (Math.min(...expression.eyes)<.91||Math.abs(expression.gaze)+Math.abs(expression.gazeY)>.027||expression.mouth>.02||expression.pout>.02);
-    const active=stencil(hasFace?{...current,z:0}:current).map(pose=>({
-      ...pose,base:cachedFrame(pose.name).image,
-      face:useExpressions?angledExpressions.texture(pose.name):null,
+    const active=pose.slots.map(slot=>({
+      ...slot,face:useExpressions?angledExpressions.texture(slot.name):null,
     }));
-    if(active.some(item=>!item.base||(!callMode&&item.face?.pending))) return false;
-    if(!poseBlend&&window.sakiTransitionMotion) poseBlend=window.createSakiPoseBlend(window.sakiTransitionMotion,lattice);
+    if(!callMode&&active.some(item=>item.face?.pending)) return false;
+    if(!poseBlend&&window.sakiTransitionMotion) poseBlend=window.createSakiPoseBlend?.(window.sakiTransitionMotion,lattice);
+    const key=pose.angleKey+":"+frameKey+":"+Number(Boolean(poseBlend))+":"+active.map(item=>Number(Boolean(item.face?.image))).join("");
+    if(key===lastFrame) return true;
+    if(callMode) callPose=pose;
     const total=active.reduce((sum,item)=>sum+item.weight,0);
     const size=stageSize, seam=Math.round(lattice.cut*size/lattice.width);
     const staticBody=callMode&&!arms.length&&!tail&&!playback;
@@ -651,7 +666,7 @@
     if(!keepBody) ctx.drawImage(body,0,lattice.cut,lattice.width,lattice.width-lattice.cut,0,seam,size,size-seam);
     staticBodyPainted=staticBody;
     staticBodyLight=lighting;
-    const rotating=poseBlend&&Math.abs(roll)>=(coarseMesh ? .38 : .08);
+    const rotating=poseBlend&&Math.abs(pose.roll)>=(coarseMesh ? .38 : .08);
     const top=rotating?upper:ctx;
     if(rotating) {
       top.globalAlpha=1;
@@ -673,12 +688,13 @@
       angledExpressions.drawFeatures(top,active,expression);
       top.restore();
     }
-    if(rotating) ctx.drawImage(poseBlend.roll(upperCanvas,roll,coarseMesh),0,0,size,seam);
+    if(rotating) ctx.drawImage(poseBlend.roll(upperCanvas,pose.roll,coarseMesh),0,0,size,seam);
     paintArms(arms,tail);
     if(lighting) window.paintSakiCallCanvasLight(ctx,size,keepBody?seam:size,lighting);
     ctx.restore();
     canvas.hidden=false;
     image.hidden=true;
+    lastFrame=key;
     return true;
   }
   function advancePlayback(now) {
@@ -767,15 +783,13 @@
       const lighting=callMode?window.sakiCallCanvasLightKey?.()||"":"";
       const emotionPrecision=quality==="lite"?30:quality==="balanced"?50:100;
       const emotionKey=[...blinking,gaze,gazeY,openness].map(v=>Math.round(v*emotionPrecision)).join(",");
-      if(!centered||pout>.02){
+      if(callPose||!centered||pout>.02){
         const anglePrecision=quality==="lite"?2:quality==="balanced"?4:quality==="full"?8:20;
         const angleKey=[current.x,current.y,confidence?trackedRoll:current.z].map(v=>Math.round(v*anglePrecision)).join(",");
-        const name=quality+":"+lighting+":"+angleKey+":"+emotionKey+","+Math.round(pout*emotionPrecision)+(playback?":"+Math.floor(now/40):"")+waveKey;
-        if(name===lastFrame) return;
-        if(showTransition(now,arms,expression,trackedRoll,confidence>0,tail,callMode&&quality!=="full",lighting)) {
-          lastFrame=name;
-          return;
-        }
+        const frameKey=quality+":"+lighting+":"+emotionKey+","+Math.round(pout*emotionPrecision)+(playback?":"+Math.floor(now/40):"")+waveKey;
+        if(showTransition(now,arms,expression,{
+          roll:trackedRoll,hasFace:confidence>0,tail,coarseMesh:callMode&&quality!=="full",lighting,angleKey,frameKey,
+        })) return;
         if(!callMode) return;
       }
       if(front) {

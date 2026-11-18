@@ -34,7 +34,7 @@ function browserRecognizer(t) {
   const instances = []
   globalThis.SpeechRecognition = class {
     constructor() { this.starts = []; instances.push(this) }
-    start(track) { this.starts.push(track) }
+    start(...args) { this.starts.push(args) }
     abort() { this.aborted = true }
   }
   t.after(() => { globalThis.SpeechRecognition = saved })
@@ -54,7 +54,7 @@ test('browser recognition streams drafts and sends each final once without calli
   assert.equal(recognition.lang, 'zh-CN')
   assert.equal(recognition.continuous, true)
   assert.equal(recognition.interimResults, true)
-  assert.deepEqual(recognition.starts, [h.track])
+  assert.deepEqual(recognition.starts, [[]])
 
   const echo = result('Saki 的声音', true)
   recognition.onresult({ results: [echo, result('你好')] })
@@ -70,7 +70,7 @@ test('browser recognition streams drafts and sends each final once without calli
   recognition.onerror({ error: 'no-speech' })
   recognition.onend()
   t.mock.timers.tick(180)
-  assert.deepEqual(recognition.starts, [h.track, h.track])
+  assert.deepEqual(recognition.starts, [[], []])
   recognition.onresult({ results: [result('挂断时说的话', true)] })
   h.controller.abort()
   t.mock.timers.tick(250)
@@ -80,15 +80,53 @@ test('browser recognition streams drafts and sends each final once without calli
   assert.equal(requests, 0)
 })
 
-test('browser failure does not hand the microphone to the server', t => {
+test('browser recognition retries network errors before reporting failure without calling the server', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const instances = browserRecognizer(t)
   let requests = 0
   const h = harness(t, async () => { requests++ })
   startCallMic({ ...h.options, mode: 'browser', isEcho: () => false, onDraft: () => {} })
-  instances[0].onerror({ error: 'network' })
+  const recognition = instances[0]
+  for (const delay of [400, 800]) {
+    const starts = recognition.starts.length
+    recognition.onerror({ error: 'network' })
+    recognition.onend()
+    t.mock.timers.tick(delay - 1)
+    assert.equal(recognition.starts.length, starts)
+    t.mock.timers.tick(1)
+    assert.equal(recognition.starts.length, starts + 1)
+    assert.deepEqual(h.errors, [])
+  }
+  recognition.onerror({ error: 'network' })
   assert.deepEqual(h.errors, ['network'])
-  assert.equal(instances[0].aborted, true)
+  assert.equal(recognition.aborted, true)
   assert.equal(requests, 0)
+})
+
+test('a successful result restores the browser retry budget and muting cancels the next retry', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  startCallMic({ ...h.options, mode: 'browser', isEcho: () => false, onDraft: () => {} })
+  const recognition = instances[0]
+  recognition.onerror({ error: 'network' })
+  recognition.onend()
+  t.mock.timers.tick(400)
+  recognition.onresult({ results: [result('Hello', true)] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.texts, ['Hello'])
+
+  recognition.onerror({ error: 'network' })
+  recognition.onend()
+  t.mock.timers.tick(400)
+  assert.equal(recognition.starts.length, 3)
+
+  recognition.onerror({ error: 'network' })
+  recognition.onend()
+  h.controller.abort()
+  t.mock.timers.tick(800)
+  assert.equal(recognition.starts.length, 3)
+  assert.deepEqual(h.errors, [])
 })
 
 test('server mode uses only the server and never opens a recorder if disabled', async t => {

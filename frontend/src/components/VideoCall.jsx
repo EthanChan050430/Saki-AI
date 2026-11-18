@@ -37,6 +37,8 @@ const micPermission = ['请允许浏览器使用麦克风。', 'Allow microphone
 const callMicErrors = {
   'not-allowed': micPermission,
   'audio-capture': ['无法读取麦克风，请检查设备连接或使用键盘。', 'Could not read the microphone. Check the device or use the keyboard.', 'マイクを使用できません。接続を確認するか、キーボードを使ってください。'],
+  network: ['无法连接浏览器语音识别服务。请检查网络，或在设置中切换到服务器识别。', 'Could not connect to the browser speech recognition service. Check your connection or switch to Server recognition in Settings.', 'ブラウザーの音声認識サービスに接続できません。ネットワークを確認するか、設定でサーバー音声認識に切り替えてください。'],
+  'service-not-allowed': ['当前浏览器禁用了语音识别服务。可使用键盘，或在设置中切换到服务器识别。', 'Speech recognition is disabled in this browser. Use the keyboard or switch to Server recognition in Settings.', 'このブラウザーでは音声認識サービスが無効です。キーボードを使うか、設定でサーバー音声認識に切り替えてください。'],
   unsupported: ['当前浏览器不支持语音识别。可使用键盘，或在设置中选择服务器识别。', 'This browser does not support speech recognition. Use the keyboard or select Server recognition in Settings.', 'このブラウザーは音声認識に対応していません。キーボードを使うか、設定でサーバー音声認識を選んでください。'],
   'server-unavailable': ['服务器语音识别不可用。可在设置中切换到浏览器识别。', 'Server speech recognition is unavailable. You can switch to browser recognition in Settings.', 'サーバー音声認識を利用できません。設定でブラウザー音声認識に切り替えられます。'],
 }

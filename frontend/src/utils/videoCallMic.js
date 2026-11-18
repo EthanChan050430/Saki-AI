@@ -24,6 +24,7 @@ const VOICED_TO_START = 2
 const QUIET_TO_STOP = 6
 const MAX_FRAMES = 188
 const MIN_FRAMES = 2
+const BROWSER_NETWORK_RETRY_DELAYS = [400, 800]
 
 export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, isEcho, onSpeech, onDraft, onText, onError }) {
   if (signal.aborted) return
@@ -50,6 +51,8 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   try { recognition = new Recognition() } catch { onError('start-failed'); return }
 
   let sendTimer, restartTimer, committed = '', finalCount = 0
+  let networkFailures = 0
+  let retryDelay = 180
   const dispatch = () => {
     clearTimeout(sendTimer)
     if (!committed || signal.aborted) return
@@ -73,11 +76,13 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   }
   const start = () => {
     if (signal.aborted) return
-    const track = stream?.getAudioTracks()[0]
-    if (track?.readyState === 'live') {
-      try { recognition.start(track); return } catch { /* Older implementations can use the default microphone. */ }
+    retryDelay = 180
+    try {
+      recognition.start()
+    } catch (error) {
+      const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+      browserFailed(denied ? 'not-allowed' : 'start-failed')
     }
-    try { recognition.start() } catch { browserFailed('start-failed') }
   }
 
   recognition.lang = lang
@@ -85,6 +90,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   recognition.interimResults = true
   recognition.onresult = event => {
     if (signal.aborted) return
+    networkFailures = 0
     const drafts = []
     let hasNewFinal = false
     for (let i = finalCount; i < event.results.length; i += 1) {
@@ -104,14 +110,19 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     if (committed && !draft) sendTimer = setTimeout(dispatch, 250)
   }
   recognition.onerror = ({ error }) => {
-    if (error !== 'aborted' && error !== 'no-speech') browserFailed(error)
+    if (error === 'aborted' || error === 'no-speech') return
+    if (error === 'network' && networkFailures < BROWSER_NETWORK_RETRY_DELAYS.length) {
+      retryDelay = BROWSER_NETWORK_RETRY_DELAYS[networkFailures++]
+      return
+    }
+    browserFailed(error)
   }
   recognition.onend = () => {
     if (signal.aborted) return
     dispatch()
     finalCount = 0
     onDraft('')
-    if (!signal.aborted) restartTimer = setTimeout(start, 180)
+    if (!signal.aborted) restartTimer = setTimeout(start, retryDelay)
   }
   signal.addEventListener('abort', stop, { once: true })
   start()
