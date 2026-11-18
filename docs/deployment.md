@@ -20,7 +20,7 @@ node scripts/launch.cjs
 
 发布包只复制程序和空白配置模板，不包含现有聊天、密钥、上传文件、检查点或 SSL 私钥。升级时停止旧服务、备份并保留数据目录，建议通过 `.env` 的 `SAKI_DATA_DIR`、`SAKI_MEMORY_WORKSPACE_DIR`、`CHECKPOINT_STORE_DIR` 使用固定绝对路径。已有原生安装的 `MEMORY.md`、`SESSION-STATE.md`、`memory/` 默认仍位于项目根目录，迁移时也应保留。
 
-轻量构建省略 `assets/animate` 下约 **437 MiB** 的逐帧动画，保留静态角色及表情；不会自动预加载这些动画。图表引擎、截图导出、Office/PDF 解析、PPT 生成和浏览器驱动在实际使用时加载。
+轻量构建省略 `assets/animate` 下约 **437 MiB** 的旧版逐帧动画。首页 Saki 的 WebP 动画随包提供，可在「设置 → 界面自定义 → 首页 Saki 动画」中开启。图表引擎、截图导出、Office/PDF 解析、PPT 生成和浏览器驱动在实际使用时加载。
 
 ## 直接从源码启动
 
@@ -61,7 +61,7 @@ bash deploy.sh stop
 
 | 配置 | 生产默认 | 作用 |
 | --- | --- | --- |
-| `SAKI_PROFILE` | `light` | 轻量模式；`standard` 保留动画及浏览器抓取默认行为 |
+| `SAKI_PROFILE` | `light` | 服务器运行模式，影响向量检索、浏览器抓取和樱花粒子的默认行为 |
 | `SAKI_EMBEDDINGS` | light 为 `keyword` | 关键词记忆搜索；`lazy` 首次需要时加载向量模型；`warm` 显式预热 |
 | `SAKI_CRAWLER` | light 为 `static` | HTTP 抓取，不启动 Chromium；`browser` 使用已安装的 Chrome/Edge 渲染 JS |
 | `SAKI_HEAP_MB` | `384` | 启动器设置的 V8 老生代堆上限，**不是进程或整机 RAM 上限** |

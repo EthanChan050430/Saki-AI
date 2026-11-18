@@ -72,6 +72,7 @@ const MOBILE_BREAKPOINT = 768;
 const UTILITY_WINDOW_LIMIT = 4;
 const MODEL_SETTINGS_LINK = 'agent://settings/models';
 const CALL_MIC_MODE_KEY = 'saki_video_call_mic_mode';
+const SAKI_ANIMATIONS_KEY = 'saki_home_animations';
 const ONBOARDING_STORAGE_KEY = 'agent_onboarding_completed_v1';
 const CHARACTER_ACTIVITY_ANIMATIONS = new Set([
   'bartending',
@@ -600,6 +601,14 @@ function App() {
   const changeCallMicMode = mode => {
     setCallMicMode(mode);
     try { localStorage.setItem(CALL_MIC_MODE_KEY, mode); } catch { /* Keep the choice for this session. */ }
+  };
+  const [sakiAnimationsEnabled, setSakiAnimationsEnabled] = useState(() => {
+    try { return localStorage.getItem(SAKI_ANIMATIONS_KEY) === 'true'; }
+    catch { return false; }
+  });
+  const changeSakiAnimations = enabled => {
+    setSakiAnimationsEnabled(enabled);
+    try { localStorage.setItem(SAKI_ANIMATIONS_KEY, String(enabled)); } catch { /* Keep the choice for this session. */ }
   };
   const videoCallRef = useRef(null);
   const [contextStatus, setContextStatus] = useState(null);
@@ -3938,6 +3947,8 @@ function App() {
             setConfig={setConfig}
             callMicMode={callMicMode}
             onChangeCallMicMode={changeCallMicMode}
+            sakiAnimationsEnabled={sakiAnimationsEnabled}
+            onChangeSakiAnimations={changeSakiAnimations}
             onClose={() => closeDesktopUtilityWindow('settings')}
             models={models}
             onUpdateProviderModels={handleUpdateProviderModels}
@@ -4221,6 +4232,8 @@ function App() {
               setConfig={setConfig}
               callMicMode={callMicMode}
               onChangeCallMicMode={changeCallMicMode}
+              sakiAnimationsEnabled={sakiAnimationsEnabled}
+              onChangeSakiAnimations={changeSakiAnimations}
               onClose={() => setSettingsOpen(false)}
               models={models}
               onUpdateProviderModels={handleUpdateProviderModels}
@@ -4351,7 +4364,8 @@ function App() {
           </div>
         </div>
       )}
-      <CharacterView lowResourceMode={window.__SAKI_RUNTIME__?.profile === 'light' || window.__SAKI_RUNTIME__?.animations === false}
+      <CharacterView
+        lowResourceMode={!sakiAnimationsEnabled}
         currentExpression={currentExpression}
         isOpen={isCharacterViewOpen}
         setIsOpen={setCharacterViewOpen}

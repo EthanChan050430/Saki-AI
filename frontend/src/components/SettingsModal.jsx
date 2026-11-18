@@ -36,7 +36,10 @@ import {
   playFloat32Audio,
 } from '../utils/localTtsEngine';
 
-export default function SettingsModal({ config, setConfig, callMicMode, onChangeCallMicMode, onClose, models, onUpdateProviderModels, onLockNow, windowed = false }) {
+export default function SettingsModal({
+  config, setConfig, callMicMode, onChangeCallMicMode, sakiAnimationsEnabled, onChangeSakiAnimations,
+  onClose, models, onUpdateProviderModels, onLockNow, windowed = false,
+}) {
   const { t, i18n } = useTranslation();
   const backgroundPreset = getChatBackgroundPreset(config);
   const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
@@ -1629,6 +1632,30 @@ export default function SettingsModal({ config, setConfig, callMicMode, onChange
                   className={`w-10 h-5 rounded-full transition-all relative ${config.showParticles ? 'bg-pink-400' : 'bg-[var(--surface-inset)]'}`}
                 >
                   <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${config.showParticles ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-4 pb-2 border-b border-[var(--surface-border-subtle)]">
+                <div>
+                  <div className="text-sm font-bold text-[var(--text-dark)]">
+                    {getLocalText('首页 Saki 动画', 'Home Saki animations', 'ホームの Saki アニメーション')}
+                  </div>
+                  <div className="text-[10px] text-[var(--text-secondary)]">
+                    {getLocalText(
+                      '开启后播放待机和互动动画。关闭后使用轻量静态显示。',
+                      'Play idle and interaction animations when enabled. Turn off for lightweight static images.',
+                      'オンにすると待機時や操作時にアニメーションを再生します。オフでは静止画を表示します。',
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={sakiAnimationsEnabled}
+                  aria-label={getLocalText('首页 Saki 动画', 'Home Saki animations', 'ホームの Saki アニメーション')}
+                  onClick={() => onChangeSakiAnimations(!sakiAnimationsEnabled)}
+                  className={`w-10 h-5 shrink-0 rounded-full transition-all relative ${sakiAnimationsEnabled ? 'bg-pink-400' : 'bg-[var(--surface-inset)]'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 rounded-full bg-[var(--surface-bg)] transition-all ${sakiAnimationsEnabled ? 'left-6' : 'left-1'}`} />
                 </button>
               </div>
               <div>

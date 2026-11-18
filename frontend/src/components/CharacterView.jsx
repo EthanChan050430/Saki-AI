@@ -324,7 +324,7 @@ const CharacterView = ({
     const isEdgeMode = mode === 'edge-left' || mode === 'edge-right';
     const variants = isEdgeMode ? EDGE_IDLE_VARIANTS : mode === 'pet' ? FULL_IDLE_VARIANTS : DOCKED_IDLE_VARIANTS;
     const baseIdle = variants[0];
-    if (!variants.includes(idleAnimName)) {
+    if (!variants.includes(idleAnimName) || (lowResourceMode && idleAnimName !== baseIdle)) {
       setIdleAnimName(baseIdle);
       return undefined;
     }
@@ -874,7 +874,7 @@ const CharacterView = ({
             alt="Saki"
             draggable={false}
             onError={() => {
-              if (visualAsset.animName) {
+              if (visualAsset.isAnimated) {
                 setWebpFailed((prev) => ({ ...prev, [visualAsset.animName]: true }));
               }
             }}
