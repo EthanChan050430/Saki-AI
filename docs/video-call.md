@@ -17,6 +17,8 @@
 
 ## 本机转写依赖
 
+Linux 上执行 `bash deploy.sh start` 或 `node scripts/launch.cjs` 时，启动器用系统的 `python3` 和 venv 软件包安装转写依赖。原生部署首次下载模型需要访问 Hugging Face，也可用 `SAKI_ASR_MODEL` 指向已有的 CTranslate2 模型目录。Docker 镜像默认在构建时带上 Whisper Base。
+
 仓库根目录执行：
 
 ```powershell
@@ -27,11 +29,13 @@ python -m venv .venv-video-call
 可选后端环境变量：
 
 - `SAKI_ASR_PYTHON`：指定 Python 可执行文件；默认优先使用仓库中的 `.venv-video-call`。
+- `SAKI_ASR_PREWARM=1`：在后台预加载转写模型。Docker 和 `deploy.sh` 默认启用。
+- `SAKI_ASR_ENABLED=0`：停用服务端转写。
 - `SAKI_ASR_DEVICE`：`auto`（默认）/`cuda`/`cpu`。`auto` 会先尝试 GPU，初始化失败才退回 CPU。
 - `SAKI_ASR_MODEL`：强制两侧使用同一模型，覆盖下面的分设备默认值。
 - `SAKI_ASR_GPU_MODEL`（默认 `small`）、`SAKI_ASR_CPU_MODEL`（默认 `base`）：分设备模型。GPU 上 `small` 比 CPU 上的 `base` 更快也更准。`turbo`/`large-v3`/`medium` 也可以选，但 Whisper 的编码器固定按 30 秒窗口计算，`turbo` 在本机实测约 650 ms/条（`small` 约 230 ms）而中英混合准确率没有提升，因此不作默认。
 - `SAKI_ASR_GPU_COMPUTE_TYPE`（默认 `float16`）、`SAKI_ASR_CPU_COMPUTE_TYPE`（默认 `int8`）。
-- `SAKI_ASR_THREADS`：CPU 解码线程数，默认 `min(8, CPU 数-1)`；超过 8 线程反而变慢。
+- `SAKI_ASR_THREADS`：CPU 解码线程数，轻量部署默认 1，其他部署按可用核心数计算，最多 8。
 - `SAKI_ASR_BEAM`：束搜索宽度，默认 1（最快）。
 - `SAKI_ASR_LANGUAGE_MODE`：`auto`（默认）/`client`。`auto` 不锁定语种，让 Whisper 自己判断——中英混说时这是准确率的关键；`client` 则强制使用前端传来的界面语种（旧行为）。
 - `SAKI_ASR_PROMPT`：覆盖解码提示词；设为空字符串可完全关闭提示词。
@@ -43,6 +47,8 @@ python -m venv .venv-video-call
 首次使用且没有缓存时需要下载模型。Docker 构建包含转写依赖，缓存位于数据卷的 `asr-cache`。
 
 ### 延迟与准确率取向
+
+`GET /api/video-call/transcribe/ready` 返回 `starting`、`ready` 或 `unavailable`。识别服务启动失败时，查看后端的 `[VideoCall] ASR worker stopped` 日志，里面包含 Python 异常或工作进程退出原因。
 
 采集端 64 ms 一帧：2 帧有声即开始（前 320 ms 预录缓冲保证不丢字），6 帧静音结束，结束前裁掉多余的尾部静音再上传；判断结束用 0.78 倍阈值的迟滞，避免把句尾的轻声辅音切掉。
 

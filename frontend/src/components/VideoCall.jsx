@@ -71,13 +71,16 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
     cores: navigator.hardwareConcurrency,
     memory: navigator.deviceMemory,
     saveData: navigator.connection?.saveData,
+    downlink: navigator.connection?.downlink,
+    rtt: navigator.connection?.rtt,
+    startBalanced: true,
   }))
-  quality.setCompact(compact)
   const panelTarget = callPanelPosition(panels, compact)
   const activeSide = panels[sheetSide] ? sheetSide : sheetSide === 'left' ? 'right' : 'left'
   const activePanel = panels[activeSide]
   const dualPanels = Boolean(panels.left && panels.right)
   const [additionalModels, setAdditionalModels] = useState([])
+  const [requestedModels, setRequestedModels] = useState(false)
   const [text, setText] = useState('')
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
@@ -98,11 +101,12 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
   const dialog = useRef(null), stage = useRef(null), avatar = useRef(null), cameraVideo = useRef(null), picker = useRef(null), composer = useRef(null)
   const fullscreenExitAt = useRef(-Infinity)
   const updateMicLevel = level => dialog.current?.style.setProperty('--call-mic-level', `${Math.round(level * 100)}%`)
-  const runtime = useRef({ phase: 'listening', turn: null, mic: true, camera: null, requestingCamera: false, heard: -Infinity, alive: true, uploads: null,
+  const runtime = useRef(null)
+  runtime.current ??= { phase: 'listening', turn: null, mic: true, camera: null, requestingCamera: false, heard: -Infinity, alive: true, uploads: null,
     panels: { left: null, right: null }, panelReady: false, compact, panelTarget: 0,
     // Component events outlive a single turn: restoring them from chat records
     // keeps an earlier table or slide deck retrievable after a refresh.
-    componentHistory: restoredComponentHistory(messages), eventSequence: 0 })
+    componentHistory: restoredComponentHistory(messages), eventSequence: 0 }
   const history = useRef(null), transcript = useRef([])
   // The whole supplied conversation stays available for retrieval; the backend
   // decides how much of it enters the prompt.
@@ -111,10 +115,6 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
   const motion = useMemo(() => createVideoCallMotion(), [])
   const scenePointer = useRef(null)
   const voice = useMemo(() => createVideoCallVoice({ config, backendUrl }), [config, backendUrl])
-  useEffect(() => {
-    const otherRoom = new Image()
-    otherRoom.src = callRooms[theme === 'light' ? 'dark' : 'light']
-  }, [theme])
   useLayoutEffect(() => {
     const state = runtime.current
     quality.setCompact(compact)
@@ -276,6 +276,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
   }, [previewPos, previewZoomed])
 
   useEffect(() => {
+    if (!requestedModels) return
     const controller = new AbortController()
     fetch(`${backendUrl}/api/video-call/models`, {
       method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
@@ -285,7 +286,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
           .map(item => ({ ...item, name: normalizedModel(item.provider, item.id) })))
       }).catch(() => {})
     return () => controller.abort()
-  }, [backendUrl, config])
+  }, [backendUrl, config, requestedModels])
 
   function recordPanelChange(before, after, source) {
     const state = runtime.current
@@ -387,11 +388,8 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
     const node = dialog.current
     if (!node.open) node.showModal()
     void voice.prime()
-    // Load the speech engine while the call is connecting so the first sentence
-    // does not wait for worker/model startup on top of its own synthesis.
-    void voice.warm()
     let connectedAt = null
-    let raf, nextPose = -Infinity, lastStatus = -Infinity, isAvatarReady = false
+    let raf, warmVoice, nextPose = -Infinity, lastStatus = -Infinity, isAvatarReady = false
     const markAvatarReady = () => {
       if (isAvatarReady || !state.alive) return
       isAvatarReady = true
@@ -400,6 +398,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       connectedAt = Date.now()
       setElapsed(0)
       setAvatarReady(true)
+      warmVoice = setTimeout(() => { void voice.warm() }, 1500)
     }
     const clock = setInterval(() => {
       if (connectedAt !== null) setElapsed(Math.floor((Date.now() - connectedAt) / 1000))
@@ -443,6 +442,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       state.alive = false
       clearInterval(clock)
       clearTimeout(readyFallback)
+      clearTimeout(warmVoice)
       cancelAnimationFrame(raf)
       window.removeEventListener('message', message)
       document.removeEventListener('visibilitychange', resetFrames)
@@ -785,12 +785,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       setMic(false)
       setError(message)
     }
-    const recognition = Recognition ? new Recognition() : {}
-    if (Recognition) {
-      recognition.lang = lang
-      recognition.continuous = true
-      recognition.interimResults = true
-    }
+    let recognition
     let live = true, speakTimer, restartTimer, committed = '', lastResult = 0, stream, stopMeter = () => {}
     const isListening = () => live && state.alive && state.mic
     const dispatch = () => {
@@ -799,7 +794,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       committed = ''
       void sendRef.current(value, true)
     }
-    recognition.onresult = event => {
+    const onResult = event => {
       if (!isListening()) return
       let draft = ''
       let latestFinal = ''
@@ -820,7 +815,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       clearTimeout(speakTimer)
       if (committed && !draft) speakTimer = setTimeout(dispatch, 350)
     }
-    recognition.onerror = event => {
+    const onRecognitionError = event => {
       if (!isListening() || event.error === 'aborted' || event.error === 'no-speech') return
       disable(event.error === 'not-allowed' ? micPermission : ['语音识别暂不可用，可以打开键盘继续。', 'Speech recognition is unavailable. Open the keyboard to continue.', '音声認識を利用できません。キーボードで続けられます。'])
     }
@@ -828,6 +823,15 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       if (!isListening()) return
       if (!Recognition) { disable(['本地语音服务未就绪，可以打开键盘继续。', 'Local speech recognition is not ready. Open the keyboard to continue.', 'ローカル音声認識の準備ができていません。キーボードで続けられます。']); return }
       try {
+        if (!recognition) {
+          recognition = new Recognition()
+          recognition.lang = lang
+          recognition.continuous = true
+          recognition.interimResults = true
+          recognition.onresult = onResult
+          recognition.onerror = onRecognitionError
+          recognition.onend = onRecognitionEnd
+        }
         const track = stream?.getAudioTracks()[0]
         if (track?.readyState === 'live') {
           try { recognition.start(track); return } catch { /* Keep the stream for the input meter when falling back. */ }
@@ -835,7 +839,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
         recognition.start()
       } catch { disable(['无法启动语音识别，可以打开键盘继续。', 'Could not start speech recognition. Open the keyboard to continue.', '音声認識を開始できませんでした。キーボードで続けられます。']) }
     }
-    recognition.onend = () => {
+    const onRecognitionEnd = () => {
       if (!isListening()) return
       clearTimeout(speakTimer)
       dispatch()
@@ -895,7 +899,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       micController.abort()
       stopMeter()
       updateMicLevel(0)
-      recognition.abort?.()
+      recognition?.abort()
       stream?.getTracks().forEach(track => track.stop())
       setInterim('')
     }
@@ -963,7 +967,7 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
       onPointerCancel={onSceneRelease} onLostPointerCapture={onSceneRelease}>
     <div className="call-room" />
     <div className="call-vignette" />
-    <iframe className="call-avatar" ref={avatar} title={l('Saki 实时角色', 'Saki live avatar', 'Saki ライブアバター')} src={`${base}saki-avatar/Saki_Preview.html?mode=call&view=full`} />
+    <iframe className="call-avatar" ref={avatar} title={l('Saki 实时角色', 'Saki live avatar', 'Saki ライブアバター')} src={`${base}saki-avatar/Saki_Preview.html?mode=call&view=full&v=2`} />
     <div className={`call-connecting${avatarReady ? ' is-hidden' : ''}`} aria-hidden={avatarReady} role="status" aria-live="polite">
       <div className="call-connecting-backdrop" />
       <div className="call-connecting-card">
@@ -1003,7 +1007,10 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
           aria-haspopup="listbox"
           aria-expanded={modelDropdownOpen}
           className={`call-glass-btn call-model-pill ${modelDropdownOpen ? 'is-open' : ''}`}
-          onClick={() => setOpenMenu(current => current === 'model' ? null : 'model')}
+          onClick={() => {
+            setRequestedModels(true)
+            setOpenMenu(current => current === 'model' ? null : 'model')
+          }}
         >
           <span className="call-model-icon" aria-hidden="true">
             <Bot size={19} strokeWidth={1.8} />

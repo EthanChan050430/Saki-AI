@@ -47,6 +47,8 @@
     function loadSheet(url,width,height) {
       return new Promise((resolve,reject)=>{
         const image=new Image();
+        image.fetchPriority="low";
+        image.decoding="async";
         image.onload=()=>image.naturalWidth===width&&image.naturalHeight===height?
           resolve(image):reject(new Error("Unexpected reaction atlas dimensions"));
         image.onerror=reject;
@@ -69,12 +71,14 @@
         const {duration,count}=manifest?.[name]??{};
         if(!Number.isFinite(duration)||duration<700||duration>3200||
           !Number.isSafeInteger(count)||count<10||count>80) return;
-        const sheets=await Promise.all(Array.from({length:Math.ceil(count/capacity)},(_,sheet)=>
-          loadSheet(`${root}${name}-${sheet+1}.webp?v=${version}`,width*columns,height*rows)));
+        const sheets=[];
+        for(let sheet=1;sheet<=Math.ceil(count/capacity);sheet++) {
+          sheets.push(await loadSheet(`${root}${name}-${sheet}.webp?v=${version}`,width*columns,height*rows));
+        }
         clips.set(name,{duration,count,sheets,width,height,columns,capacity});
         announce();
       };
-      await Promise.allSettled(touchNames.map(loadClip));
+      for(const name of touchNames) await loadClip(name).catch(()=>{});
       return loadClip;
     }
 

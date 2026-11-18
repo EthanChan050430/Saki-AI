@@ -32,6 +32,19 @@ function installDependencies(directory, { full = false, dev = false, force = fal
     runNpm(args, directory);
     fs.writeFileSync(marker, fingerprint);
 }
+function prepareVideoCallAsr() {
+    if (process.env.SAKI_ASR_ENABLED === '0' || process.env.SAKI_ASR_PYTHON) return;
+    const venv = path.join(root, '.venv-video-call');
+    const python = path.join(venv, 'bin/python');
+    if (spawnSync(python, ['-c', 'import faster_whisper, opencc'], { stdio: 'ignore' }).status === 0) return;
+    console.log('[VideoCall] Installing speech recognition dependencies.');
+    if (fs.existsSync(python) || spawnSync('python3', ['-m', 'venv', venv], { stdio: 'inherit' }).status === 0) {
+        const requirements = path.join(root, 'backend/services/video-call-requirements.txt');
+        if (spawnSync(python, ['-m', 'pip', 'install', '-r', requirements], { stdio: 'inherit' }).status === 0) return;
+    }
+    console.warn('[VideoCall] Speech setup failed. Install Python and its venv package, then run this launcher again.');
+}
+
 function prepare({ rebuild = false, install = true, force = false, full = false, installBackend = true } = {}) {
     const dist = path.resolve(process.env.SAKI_FRONTEND_DIST || path.join(root, 'frontend/dist'));
     if (rebuild || !fs.existsSync(path.join(dist, 'index.html'))) {
@@ -43,7 +56,10 @@ function prepare({ rebuild = false, install = true, force = false, full = false,
         runNpm(['run', 'build'], frontend,
             { ...process.env, SAKI_BUILD_OUT_DIR: dist, SAKI_BUILD_PROFILE: full ? 'standard' : 'light' });
     }
-    if (install && installBackend) installDependencies(path.join(root, 'backend'), { full, force });
+    if (install && installBackend) {
+        installDependencies(path.join(root, 'backend'), { full, force });
+        if (process.platform === 'linux') prepareVideoCallAsr();
+    }
     return dist;
 }
 function main(args = process.argv.slice(2)) {

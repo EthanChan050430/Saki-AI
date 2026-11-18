@@ -1,11 +1,12 @@
 const intervals = { full: 1000 / 30, balanced: 1000 / 24, lite: 1000 / 20 }
 const levels = ['lite', 'balanced', 'full']
 
-export function createVideoCallQuality({ compact, cores, memory, saveData }) {
+export function createVideoCallQuality({ compact, cores, memory, saveData, downlink, rtt, startBalanced = false }) {
   const weak = (cores > 0 && cores <= 4) || (memory > 0 && memory <= 4)
+  const slowConnection = (downlink > 0 && downlink < 6) || rtt > 220
   const maxCeiling = isCompact => weak || saveData ? 0 : isCompact ? 1 : 2
   let ceiling = maxCeiling(compact)
-  let level = ceiling
+  let level = startBalanced ? Math.min(ceiling, 1) : ceiling
   let previous, windowStart, total = 0, late = 0, frames = 0
   let busyWindows = 0, smoothWindows = 0
 
@@ -63,6 +64,6 @@ export function createVideoCallQuality({ compact, cores, memory, saveData }) {
     setCompact,
     get level() { return levels[level] },
     get interval() { return intervals[levels[level]] },
-    get compactAssets() { return ceiling < 2 },
+    get compactAssets() { return ceiling < 2 || slowConnection },
   }
 }

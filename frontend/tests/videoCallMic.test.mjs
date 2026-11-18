@@ -25,6 +25,7 @@ function harness(t, fetcher) {
   return { controller, options, nodes, audios, texts, statuses, errors, speech }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
+const readyResponse = { ok: true, json: async () => ({ state: 'ready' }) }
 const loud = (count, amplitude = .1) => Array.from({ length: count }, () => ({ data: new Float32Array(1024).fill(amplitude) }))
 
 // Exercise the capture protocol with actual PCM samples, including startup and cancellation.
@@ -39,7 +40,7 @@ test('local microphone waits for model readiness, transcribes PCM and cleans up'
   await tick()
   assert.deepEqual(h.statuses, ['starting'])
   assert.equal(h.nodes.length, 0)
-  ready({ ok: true })
+  ready(readyResponse)
   await started
   const port = h.nodes[0].port
   for (let i = 0; i < 8; i++) port.onmessage({ data: new Float32Array(1024).fill(.1) })
@@ -60,15 +61,31 @@ test('hanging up during local model startup never opens a recorder', async t => 
   const started = startLocalCallMic(h.options)
   await tick()
   h.controller.abort()
-  ready({ ok: true })
+  ready(readyResponse)
   await started
   assert.equal(h.nodes.length, 0)
   assert.equal(h.audios[0].state, 'closed')
   assert.deepEqual(h.texts, [])
 })
 
+test('readiness keeps polling during warm-up and aborts on hang-up', async t => {
+  let requests = 0
+  const h = harness(t, async () => {
+    requests++
+    return { ok: true, json: async () => ({ state: 'starting' }) }
+  })
+  const started = startLocalCallMic(h.options)
+  await tick()
+  assert.equal(requests, 1)
+  assert.equal(h.nodes.length, 0)
+  h.controller.abort()
+  await started
+  assert.equal(h.audios[0].state, 'closed')
+  assert.equal(requests, 1)
+})
+
 test('failed transcription reports failure for browser fallback', async t => {
-  const h = harness(t, async url => ({ ok: url.endsWith('/ready') }))
+  const h = harness(t, async url => url.endsWith('/ready') ? readyResponse : { ok: false })
   await startLocalCallMic(h.options)
   const port = h.nodes[0].port
   for (let i = 0; i < 4; i++) port.onmessage({ data: new Float32Array(1024).fill(.1) })
@@ -84,7 +101,7 @@ test('failed transcription reports failure for browser fallback', async t => {
 function recorder(t) {
   const uploaded = []
   const h = harness(t, async (url, options) => {
-    if (url.endsWith('/ready')) return { ok: true }
+    if (url.endsWith('/ready')) return readyResponse
     uploaded.push(options.body.length)
     return { ok: true, json: async () => ({ text: '' }) }
   })

@@ -76,7 +76,7 @@
   [data-call] #frame[data-framing=full][data-compact]{width:94vh}
   [data-call] #frame[data-lighting=light]{filter:url(#call-light-light)}
   [data-call] #frame[data-lighting=dark]{filter:url(#call-light-dark)}
-  [data-call-quality=lite] #frame[data-lighting]{filter:none}
+  :is([data-call-quality=lite],[data-call-quality=balanced]) #frame[data-lighting]{filter:none}
   [data-call] #call-walk{z-index:4;pointer-events:none}
   [data-call] #frame[data-framing=full] #call-reaction{height:60.606%;z-index:3;pointer-events:none}
   [data-call] #frame[data-reaction] :is(#stage,#pose-image){visibility:hidden}
@@ -162,7 +162,7 @@
 <script src="Saki_HandRig.js?v=eye-gesture-1" defer></script>
 <script src="Saki_Wave.js?v=call-quality-1" defer></script>
 <script src="Saki_AngledExpressions.js?v=call-touch-1" defer></script>
-<script src="Saki_TransitionMotion.js?v=clear-turn-1" defer></script>
+<script src="Saki_TransitionMotion.js?v=clear-turn-1" async fetchpriority="low"></script>
 <script src="Saki_PoseBlend.js?v=call-quality-1" defer></script>
 <script src="Saki_Legs.js?v=full-body-2" defer></script>
 <script src="Saki_Preview.js?v=call-quality-1" defer></script>

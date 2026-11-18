@@ -51,6 +51,8 @@ bash deploy.sh logs
 bash deploy.sh stop
 ```
 
+从源码更新视频通话时，先执行 `node scripts/launch.cjs --prepare --build` 重建前端，再运行 `bash deploy.sh restart`。Linux 原生部署需要系统 Python 的 venv 软件包来准备离线转写环境。
+
 后台脚本只启动一个后端进程，记录 PID，检查健康状态；启动失败会返回错误。启动器本身及 `npm` 在前台启动时仍可能存在少量包装进程；后台模式不保留 npm/Vite 进程。日志在 `.deploy/backend.log`，长期运行建议配置系统日志轮换或使用 systemd。开发热更新仍可使用 `npm install`、`npm run install-all` 和 `npm run dev`，这会运行开发服务器，端口为 `5482`。
 
 ## 配置及功能取舍
@@ -137,7 +139,7 @@ docker compose down
 
 Compose 默认资源配额为 **1 CPU / 768 MiB**，V8 堆上限 **384 MiB**，日志最多两份各 5 MB；这些是可调整配额，不是满足所有任务的最低配置。可通过 `SAKI_CPUS`、`SAKI_MEMORY_LIMIT`、`SAKI_HEAP_MB` 调整。图片、PDF、浏览器截图、大型工作区检查点会增加峰值，必要时提高配额。Docker 的构建阶段不受运行容器配额约束；同样推荐在其他机器构建后传输镜像。
 
-Docker 默认不包含 QQ Bot 构建产物、Chrome、Python、Git 或本地推理服务；需要这些工具时应扩展镜像。对 Windows 低配机器，原生 Node 运行可省去 Docker Desktop 的额外开销。
+Docker 带有视频通话的 Python 转写环境。镜像构建时从 Hugging Face 下载 Whisper Base，运行时直接加载镜像中的模型。若计划自行提供模型，可以用构建参数 `SAKI_ASR_BUNDLE_MODEL=0` 跳过镜像内置模型，再通过 `SAKI_ASR_MODEL` 配置模型位置。
 
 ## 验证和观测
 

@@ -47,8 +47,7 @@
   const target={x:0,y:0,z:0}, current={...target};
   const frameAssets=new Map();
   const lattice=model.transition;
-  const poseBlend=window.sakiTransitionMotion &&
-    window.createSakiPoseBlend?.(window.sakiTransitionMotion,lattice);
+  let poseBlend;
   const angledExpressions=model.angledExpressions &&
     window.createSakiAngledExpressions?.(model.angledExpressions,lattice);
   const upperCanvas=document.createElement("canvas");
@@ -107,12 +106,12 @@
   });
 
   function showFraming() {
-    const full=fullBody&&mode==="motion"&&Boolean(legRig);
+    const full=fullBody&&mode==="motion"&&(callMode||Boolean(legRig));
     $("frame").dataset.framing=full?"full":"half";
     $("view-full").setAttribute("aria-pressed",String(fullBody));
     $("view-half").setAttribute("aria-pressed",String(!fullBody));
     $("leg-controls").hidden=!full;
-    legsStage.hidden=!full;
+    legsStage.hidden=!full||!legRig;
   }
   for(const framing of ["full","half"]) {
     $("view-"+framing).addEventListener("click",()=>{
@@ -438,7 +437,10 @@
     $("message").hidden=false;
   });
   image.addEventListener("load",()=>$("message").hidden=true);
-  paintPose(neutral);
+  if(callMode) {
+    image.hidden=true;
+    showFraming();
+  } else paintPose(neutral);
   controlsFor(0,0,0);
 
   function load(src) {
@@ -538,7 +540,7 @@
     frameAssets.set(name,entry);
     load(lattice.folder+name+".webp?v=clear-turn-1").then(asset=>{
       entry.image=asset;
-      angledExpressions?.texture(name);
+      if(!callMode) angledExpressions?.texture(name);
     }).catch(()=>{
       $("message").textContent="过渡帧无法载入。请将 transition-frames 文件夹与预览页放在一起。";
       $("message").hidden=false;
@@ -631,7 +633,8 @@
       ...pose,base:cachedFrame(pose.name).image,
       face:useExpressions?angledExpressions.texture(pose.name):null,
     }));
-    if(active.some(item=>!item.base||item.face?.pending)) return false;
+    if(active.some(item=>!item.base||(!callMode&&item.face?.pending))) return false;
+    if(!poseBlend&&window.sakiTransitionMotion) poseBlend=window.createSakiPoseBlend(window.sakiTransitionMotion,lattice);
     const total=active.reduce((sum,item)=>sum+item.weight,0);
     const size=stageSize, seam=Math.round(lattice.cut*size/lattice.width);
     const staticBody=callMode&&!arms.length&&!tail&&!playback;
@@ -768,17 +771,23 @@
         const anglePrecision=quality==="lite"?2:quality==="balanced"?4:quality==="full"?8:20;
         const angleKey=[current.x,current.y,confidence?trackedRoll:current.z].map(v=>Math.round(v*anglePrecision)).join(",");
         const name=quality+":"+lighting+":"+angleKey+":"+emotionKey+","+Math.round(pout*emotionPrecision)+(playback?":"+Math.floor(now/40):"")+waveKey;
-        if(name!==lastFrame && showTransition(now,arms,expression,trackedRoll,confidence>0,tail,quality==="lite",lighting)) lastFrame=name;
-      } else if(front) {
+        if(name===lastFrame) return;
+        if(showTransition(now,arms,expression,trackedRoll,confidence>0,tail,callMode&&quality!=="full",lighting)) {
+          lastFrame=name;
+          return;
+        }
+        if(!callMode) return;
+      }
+      if(front) {
         const sway=read("ParamHairBack");
         const rest=emotionKey===emotionPrecision+","+emotionPrecision+",0,0,0"&&sway===0;
         const key=lighting+":"+emotionKey+","+Math.round(sway*100)+waveKey;
         if(key!==lastFrame) {
-          if(rest&&!arms.length&&!tail&&!lighting) paintPose(neutral);
+          if(rest&&!arms.length&&!tail&&!lighting&&!callMode) paintPose(neutral);
           else {
             staticBodyPainted=false;
             ctx.clearRect(0,0,stageSize,stageSize);
-            if(arms.length && rest) {
+            if(arms.length && rest && neutralForWave) {
               ctx.drawImage(neutralForWave,0,0,stageSize,stageSize);
             } else {
               tails(sway);
@@ -798,13 +807,14 @@
       }
     }
   }
-  Promise.all([window.createSakiWave(),load(neutral.src)]).then(([gesture,portrait])=>{
+  const loadWave=()=>Promise.all([window.createSakiWave(),callMode?null:load(neutral.src)]).then(([gesture,portrait])=>{
     wave=gesture;
     neutralForWave=portrait;
     stopWave();
   }).catch(()=>{
     for(const button of Object.values(waveButtons)) button.title="挥手素材无法载入";
   });
+  if(!callMode) void loadWave();
   window.createSakiLegRig().then(rig=>{
     legRig=rig;
     legRig(legContext,legMotion.map(leg=>leg.pose));
@@ -818,10 +828,12 @@
   load(lattice.folder+"body.webp").then(sheet=>{
     body=sheet;
     const center=lattice.steps/2;
-    for(const step of [center-1,center,center+1]) {
-      cachedFrame(step+"_"+center);
-      cachedFrame(center+"_"+step);
-      cachedFrame("t"+step);
+    if(!callMode) {
+      for(const step of [center-1,center,center+1]) {
+        cachedFrame(step+"_"+center);
+        cachedFrame(center+"_"+step);
+        cachedFrame("t"+step);
+      }
     }
   }).catch(()=>{
     $("message").textContent="动作素材无法载入。";
@@ -835,7 +847,8 @@
     front={body,overlay};
     for(const part of parts) sprites.set(part.id,part);
     controlsFor(target.x,target.y,target.z);
-    if(!callMode) requestAnimationFrame(frame);
+    if(callMode) setTimeout(loadWave,1600);
+    else requestAnimationFrame(frame);
   }).catch(()=>{
     $("message").textContent="正面表情素材无法载入。";
     $("message").hidden=false;

@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -118,7 +120,7 @@ const proxyConfig = {
   '/files': createBackendProxy(),
 }
 
-const avatarRoot = path.join(projectRoot, 'video-assets', 'characters', 'saki', 'live2d')
+const avatarRoot = process.env.SAKI_AVATAR_DIR || path.join(projectRoot, 'video-assets', 'characters', 'saki', 'live2d')
 const avatarResources = /^(?:Saki_(?:Preview\.html|Neutral\.png|[A-Za-z]+\.js)|(?:pose-art|transition-frames|expression-art|gesture-art)\/[\w.-]+\.(?:png|webp)|(?:walk|reaction)-art(?:-lite)?\/(?:manifest\.json|(?:left|right|head|skirt|think-(?:chin|tilt|nod))-\d+\.webp))$/
 const avatarTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.webp': 'image/webp' }
 
@@ -142,20 +144,25 @@ function callAvatarAssets() {
       })
     },
     closeBundle() {
-      if (!fs.existsSync(avatarRoot)) return
+      if (!fs.existsSync(path.join(avatarRoot, 'Saki_Preview.html'))) throw new Error(`Missing Live2D assets in ${avatarRoot}`)
       fs.mkdirSync(outDir, { recursive: true })
-      try {
-        fs.cpSync(avatarRoot, outDir, {
-          recursive: true,
-          force: false,
-          errorOnExist: false,
-          filter: source => {
-            const relative = path.relative(avatarRoot, source).split(path.sep).join('/')
-            return !relative || /^(?:pose-art|transition-frames|expression-art|gesture-art|(?:walk|reaction)-art(?:-lite)?)$/.test(relative) || avatarResources.test(relative)
-          },
+      fs.cpSync(avatarRoot, outDir, {
+        recursive: true,
+        filter: source => {
+          const relative = path.relative(avatarRoot, source).split(path.sep).join('/')
+          return !relative || /^(?:pose-art|transition-frames|expression-art|gesture-art|(?:walk|reaction)-art(?:-lite)?)$/.test(relative) || avatarResources.test(relative)
+        },
+      })
+      const preview = path.join(outDir, 'Saki_Preview.html')
+      const html = fs.readFileSync(preview, 'utf8').replace(/(<script src=")(Saki_[A-Za-z]+\.js)(?:\?[^"]*)?"/g,
+        (_, opening, file) => {
+          const version = createHash('sha256').update(fs.readFileSync(path.join(outDir, file))).digest('hex').slice(0, 12)
+          return `${opening}${file}?v=${version}"`
         })
-      } catch (err) {
-        if (err.code !== 'EBUSY' && err.code !== 'EPERM') throw err
+      fs.writeFileSync(preview, html)
+      for (const file of ['Saki_Preview.html', 'Saki_TransitionMotion.js']) {
+        const target = path.join(outDir, file)
+        fs.writeFileSync(`${target}.gz`, gzipSync(fs.readFileSync(target)))
       }
     },
   }

@@ -16,34 +16,46 @@ function resolvePython() {
 }
 
 function createVideoCallAsr() {
-    let worker, ready, info;
+    let worker, ready, info, stopWorker;
+    let retryAt = 0;
     let sequence = 0;
     const jobs = new Map();
     const unavailable = () => new Error('本地语音识别未就绪');
+    const canStart = () => process.env.SAKI_ASR_ENABLED !== '0' && Date.now() >= retryAt;
 
     function start() {
         if (ready) return ready;
+        if (!canStart()) return Promise.reject(unavailable());
         ready = new Promise((resolve, reject) => {
             const child = spawn(resolvePython(), ['-u', process.env.SAKI_ASR_SCRIPT || SCRIPT], {
-                windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
+                windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
             });
             worker = child;
             const rows = createInterface({ input: child.stdout });
+            let stderr = '';
+            child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
             // First use may download and warm a model, so this budget is generous.
-            const timer = setTimeout(() => child.kill(), 180000);
-            const stop = () => {
+            const timer = setTimeout(() => stop('startup timed out'), 180000);
+            const stop = reason => {
                 if (worker !== child) return;
                 clearTimeout(timer);
+                if (reason) {
+                    if (!info) retryAt = Date.now() + 30_000;
+                    console.warn(`[VideoCall] ASR worker stopped: ${reason}${stderr.trim() ? '\n' + stderr.trim() : ''}`);
+                }
                 info = undefined;
                 reject(unavailable());
-                ready = worker = null;
+                ready = worker = stopWorker = null;
                 for (const job of jobs.values()) job.reject(unavailable());
                 jobs.clear();
                 rows.close();
+                if (child.exitCode === null && child.signalCode === null) child.kill();
             };
-            child.once('error', stop);
-            child.once('exit', stop);
-            child.stdin.on('error', stop);
+            stopWorker = stop;
+            child.once('error', error => stop(error.message));
+            // Wait for stderr before logging a process exit.
+            child.once('close', (code, signal) => stop(signal || `exit ${code}`));
+            child.stdin.on('error', () => {});
             rows.on('line', line => {
                 let value;
                 try { value = JSON.parse(line); } catch { return; }
@@ -66,17 +78,17 @@ function createVideoCallAsr() {
     return {
         warm: start,
         status: () => info,
+        readiness() {
+            if (info) return { state: 'ready', ...info };
+            if (!canStart()) return { state: 'unavailable' };
+            void start().catch(() => {});
+            return { state: 'starting' };
+        },
         // The worker holds a loaded model and its stdin open, so shutdown has to
         // be explicit or the process (and any test runner) never exits.
         stop() {
-            const child = worker;
-            ready = worker = null;
-            info = undefined;
-            for (const job of jobs.values()) job.reject(unavailable());
-            jobs.clear();
-            if (!child) return;
-            child.stdin.end();
-            child.kill();
+            stopWorker?.();
+            retryAt = 0;
         },
         async transcribe(buffer, language, signal) {
             await start();

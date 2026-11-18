@@ -15058,11 +15058,8 @@ app.get('/api/video-call/artifact', async (req, res) => {
         res.json({ preview: String(await parseFile(filename)).slice(0, 6500) });
     } catch { res.sendStatus(404); }
 });
-app.get('/api/video-call/transcribe/ready', async (_req, res) => {
-    try {
-        await callAsr.warm();
-        res.json(callAsr.status() || {});
-    } catch { res.sendStatus(503); }
+app.get('/api/video-call/transcribe/ready', (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(callAsr.readiness());
 });
 app.post('/api/video-call/transcribe', express.raw({ type: 'application/octet-stream', limit: '400kb' }), async (req, res) => {
     if (!Buffer.isBuffer(req.body) || req.body.length < 3200 || req.body.length % 2) return res.sendStatus(400);
@@ -15735,6 +15732,8 @@ server.listen(port, AGENT_HOST, () => {
     loadQQBotSessionMap().catch(error => console.error('[QQBridge] Failed to load session map:', error.message));
     syncHostedTaskSessionsToHistory();
 
+    if (process.env.SAKI_ASR_PREWARM === '1') callAsr.readiness();
+
     // Cleanup of expired short-term buffers may run automatically; promotion
     // and offline reflection are manual-only actions in Memory Manager.
     backgroundTimers.push(setInterval(() => {
@@ -15759,6 +15758,7 @@ async function shutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
     memoryCaptureQueue.stop();
+    callAsr.stop();
     for (const timer of backgroundTimers) clearInterval(timer);
     const deadline = setTimeout(() => process.exit(1), 10000);
     deadline.unref();

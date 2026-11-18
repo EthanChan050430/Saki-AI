@@ -19,6 +19,7 @@ testable without loading a model.
 import base64
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import time
@@ -134,13 +135,19 @@ def positive_number(name, default):
 def cpu_threads():
     """Benchmarks on a 24-thread machine peak around eight threads and degrade
     past that, so cap the fan-out instead of grabbing every core."""
-    return int(positive_number("SAKI_ASR_THREADS", min(8, max(2, (os.cpu_count() or 2) - 1))))
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 2)
+    default = 1 if os.environ.get("SAKI_PROFILE") == "light" else min(8, max(1, cores - 1))
+    return max(1, int(positive_number("SAKI_ASR_THREADS", default)))
 
 
 def candidates():
     """Ordered (model, device, compute_type) attempts, best accuracy first."""
     device = (os.environ.get("SAKI_ASR_DEVICE") or "auto").strip().lower()
     forced = (os.environ.get("SAKI_ASR_MODEL") or "").strip()
+    bundled = Path(__file__).resolve().parents[2] / "asr-models" / "base"
+    cpu_model = (os.environ.get("SAKI_ASR_CPU_MODEL") or "").strip()
+    if not cpu_model:
+        cpu_model = str(bundled) if bundled.is_dir() else "base"
     attempts = []
     if device in ("auto", "cuda", "gpu"):
         attempts.append((
@@ -150,7 +157,7 @@ def candidates():
         ))
     if device in ("auto", "cpu"):
         attempts.append((
-            forced or (os.environ.get("SAKI_ASR_CPU_MODEL") or "base").strip() or "base",
+            forced or cpu_model,
             "cpu",
             (os.environ.get("SAKI_ASR_CPU_COMPUTE_TYPE") or "int8").strip() or "int8",
         ))
@@ -158,6 +165,7 @@ def candidates():
 
 
 def load(attempts, threads):
+    import ctranslate2
     from faster_whisper import WhisperModel
     from huggingface_hub.errors import LocalEntryNotFoundError
 
@@ -166,14 +174,20 @@ def load(attempts, threads):
     for name, device, compute_type in attempts:
         options = {"device": device, "compute_type": compute_type, "cpu_threads": threads}
         try:
+            if device == "cuda" and not ctranslate2.get_cuda_device_count():
+                raise RuntimeError("no CUDA device available")
             try:
-                return WhisperModel(name, local_files_only=True, **options), device, name
+                model = WhisperModel(name, local_files_only=True, **options)
             except LocalEntryNotFoundError:
                 if offline:
                     raise
-                return WhisperModel(name, **options), device, name
+                model = WhisperModel(name, **options)
+            warmup(model)
+            return model, device, name
         except Exception as error:  # missing CUDA libs, unsupported compute type, no cache
             problems.append(f"{name}/{device}/{compute_type}: {error}")
+        finally:
+            model = None
     raise RuntimeError("; ".join(problems) or "no usable speech recognition backend")
 
 
@@ -183,14 +197,11 @@ def warmup(model):
     import numpy as np
 
     silence = np.zeros(SAMPLE_RATE // 2, dtype=np.float32)
-    try:
-        segments, _ = model.transcribe(
-            silence, language="zh", beam_size=1, without_timestamps=True,
-            condition_on_previous_text=False, vad_filter=False, no_speech_threshold=0.9,
-        )
-        for _ in segments:
-            pass
-    except Exception:
+    segments, _ = model.transcribe(
+        silence, language="zh", beam_size=1, without_timestamps=True,
+        condition_on_previous_text=False, vad_filter=False, no_speech_threshold=0.9,
+    )
+    for _ in segments:
         pass
 
 
@@ -315,7 +326,6 @@ def main():
     threads = cpu_threads()
     started = time.time()
     model, device, name = load(candidates(), threads)
-    warmup(model)
     beam = int(positive_number("SAKI_ASR_BEAM", 1))
     send({
         "ready": True, "device": device, "model": name,

@@ -27,6 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
     && /app/.venv-video-call/bin/pip install --no-cache-dir -r backend/services/video-call-requirements.txt \
     && rm -rf /var/lib/apt/lists/*
 ENV HF_HOME=/app/data/asr-cache
+ARG SAKI_ASR_BUNDLE_MODEL=1
+RUN if [ "$SAKI_ASR_BUNDLE_MODEL" = 1 ]; then \
+        /app/.venv-video-call/bin/python -c "from faster_whisper.utils import download_model; download_model('base', output_dir='/app/asr-models/base')" && \
+        rm -rf /app/data/asr-cache; \
+    fi
+ENV SAKI_ASR_PREWARM=1
 COPY --chown=node:node data/global_config.example.json ./defaults/global_config.example.json
 COPY --from=frontend --chown=node:node /build/frontend/dist ./frontend/dist
 RUN mkdir -p /app/data && chown node:node /app/data

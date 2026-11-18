@@ -31,6 +31,15 @@ test('the frame budget backs off under sustained pressure and recovers gradually
   assert.equal(quality.level, 'balanced')
 })
 
+test('cold calls start balanced and slower connections keep the lighter assets', () => {
+  const quality = createVideoCallQuality({ cores: 12, memory: 8, startBalanced: true, downlink: 3 })
+  assert.equal(quality.level, 'balanced')
+  assert.equal(quality.compactAssets, true)
+  for (let t = 0; t < 9500; t += 16) quality.sample(t)
+  assert.equal(quality.level, 'full')
+  assert.equal(quality.compactAssets, true)
+})
+
 test('resetting after a hidden tab avoids counting the paused time as a slow frame', () => {
   const quality = createVideoCallQuality({ compact: true, cores: 8 })
   quality.sample(0)

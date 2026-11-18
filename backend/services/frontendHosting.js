@@ -22,6 +22,20 @@ function mountFrontend(app, runtime) {
         });
     };
     app.get(['/', '/index.html'], serveIndex);
+    app.get(['/saki-avatar/Saki_Preview.html', '/saki-avatar/Saki_TransitionMotion.js'], (req, res, next) => {
+        res.vary('Accept-Encoding');
+        if (req.acceptsEncodings('gzip', 'identity') !== 'gzip' || req.headers.range) return next();
+        const compressed = path.join(runtime.frontendDist, req.path + '.gz');
+        if (!fs.existsSync(compressed)) return next();
+        return res.sendFile(compressed, {
+            acceptRanges: false,
+            headers: {
+                'Content-Type': req.path.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+                'Content-Encoding': 'gzip',
+                'Cache-Control': 'no-cache',
+            },
+        });
+    });
     app.use(express.static(runtime.frontendDist, {
         index: false, maxAge: '1h',
         setHeaders(res, filePath) {
@@ -30,6 +44,7 @@ function mountFrontend(app, runtime) {
                 res.setHeader('CDN-Cache-Control', 'no-store');
                 return;
             }
+            if (path.basename(filePath) === 'Saki_Preview.html') res.setHeader('Cache-Control', 'no-cache');
             if (/[-.][a-zA-Z0-9_-]{8,}\.(js|css)$/.test(path.basename(filePath))) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         },
     }));

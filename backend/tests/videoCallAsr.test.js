@@ -50,10 +50,12 @@ const audio = value => Buffer.from(value);
 test('worker readiness is cached and reported, transcripts round-trip', { skip: !pythonWorks && 'python unavailable' }, async t => {
     const asr = stubWorker(t);
     assert.equal(asr.status(), undefined);
+    assert.deepEqual(asr.readiness(), { state: 'starting' });
     const [first, second] = await Promise.all([asr.warm(), asr.warm()]);
     assert.deepEqual(first, { device: 'cpu', model: 'stub', loadMs: 1 });
     assert.equal(first, second, 'concurrent warm-up must share one worker');
     assert.equal(asr.status().model, 'stub');
+    assert.deepEqual(asr.readiness(), { state: 'ready', ...first });
     const controller = new AbortController();
     assert.equal(await asr.transcribe(audio('hello'), 'zh', controller.signal), 'echo:hello');
 });

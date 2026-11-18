@@ -22,13 +22,14 @@ try {
     runNpm(['run', 'build'], buildDir, {
         ...process.env, SAKI_BUILD_PROFILE: full ? 'standard' : 'light',
         SAKI_BUILD_OUT_DIR: path.join(target, 'frontend/dist'), SAKI_PUBLIC_DIR: path.join(root, 'frontend/public'),
+        SAKI_AVATAR_DIR: path.join(root, 'video-assets/characters/saki/live2d'),
     });
 } finally {
     fs.rmSync(buildDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 for (const file of ['backend/server.js', 'backend/services', 'backend/package.json', 'backend/package-lock.json',
     'scripts/launch.cjs', 'scripts/health.cjs', 'package.json', 'package-lock.json', 'start.bat', 'start-hidden.vbs',
-    'deploy.sh', 'configure.bat', 'configure.ps1', 'README.md', 'LICENSE', '.env.example', 'data/global_config.example.json', 'docs/deployment.md']) {
+    'deploy.sh', 'configure.bat', 'configure.ps1', 'README.md', 'LICENSE', '.env.example', 'data/global_config.example.json', 'docs/deployment.md', 'docs/video-call.md']) {
     const source = path.join(root, file);
     if (!fs.existsSync(source)) continue;
     const destination = path.join(target, file);

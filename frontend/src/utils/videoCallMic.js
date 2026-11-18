@@ -39,11 +39,27 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
   signal.addEventListener('abort', close, { once: true })
   const prepare = async () => {
     onStatus('starting')
-    // First use can load/download the local model; match the worker startup budget.
-    const response = await fetch(`${backendUrl}/api/video-call/transcribe/ready`, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(185000)]),
-    })
-    if (!response.ok) throw new Error('本机语音服务启动失败。')
+    const startup = AbortSignal.any([signal, AbortSignal.timeout(185000)])
+    while (!startup.aborted) {
+      const response = await fetch(`${backendUrl}/api/video-call/transcribe/ready`, {
+        cache: 'no-store', signal: startup,
+      })
+      if (!response.ok) throw new Error('本机语音服务启动失败。')
+      const { state } = await response.json()
+      if (state === 'ready' || state === undefined) return
+      if (state !== 'starting') throw new Error('本机语音服务启动失败。')
+      startup.throwIfAborted()
+      await new Promise(resolve => {
+        const done = () => {
+          clearTimeout(timer)
+          startup.removeEventListener('abort', done)
+          resolve()
+        }
+        const timer = setTimeout(done, 1500)
+        startup.addEventListener('abort', done, { once: true })
+      })
+    }
+    startup.throwIfAborted()
   }
   try {
     await Promise.all([audio.audioWorklet.addModule(`${base}assets/video-call/mic-capture.js`), prepare()])
@@ -54,7 +70,11 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     await audio.resume()
     if (signal.aborted) { close(); return }
     onStatus('listening')
-  } catch (error) { close(); throw error }
+  } catch (error) {
+    close()
+    if (!signal.aborted) throw error
+    return
+  }
   const echoCancellation = stream.getAudioTracks()[0]?.getSettings()?.echoCancellation
   let lead = [], utterance = [], voiced = 0, quiet = 0, started = false, pending = Promise.resolve()
   let floor = .006
