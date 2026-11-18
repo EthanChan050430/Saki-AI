@@ -286,5 +286,60 @@ test('/api/chat and /api/chat/stream/:chatId/stop finalize sessions before relea
     const chatRoute = section("app.post('/api/chat',", '// ── Background-run management routes');
     const stopRoute = section("app.post('/api/chat/stream/:chatId/stop',", '// ── End background-run management routes');
     assert.match(chatRoute, /finalizeChatRunSession/);
+    assert.match(chatRoute, /shouldContinue:\s*isTurnActive/);
     assert.match(stopRoute, /finalizeChatRunSession/);
+});
+
+test('late out-of-order client save cannot resurrect pendingRequest or overwrite finalized stopped/done reply', async () => {
+    let saved = {
+        messages: [
+            { role: 'user', id: 'u1', content: 'hello' },
+            { role: 'assistant', id: 'a1', parts: [{ type: 'text', content: 'partial' }], status: 'interrupted', runOutcome: 'stopped' },
+        ],
+        pendingRequest: null,
+        source: 'web',
+    };
+    let historyList = [{ id: 'chat-race', isPending: false, pendingType: null }];
+    const c = lifecycleContext({
+        path,
+        SESSIONS_DIR: '/sessions',
+        preserveSteeringMessages,
+        applyFinalOutcomeToMessages,
+        resolveFinalPendingRequest,
+        isStalePendingSession,
+        safeReadJsonFile: async () => JSON.parse(JSON.stringify(saved)),
+        writeSessionFile: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); },
+        fs: { writeJson: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); } },
+        hasPendingRequest: (p) => Boolean(p && typeof p === 'object' && p.assistantMsgId),
+        mergePreservedStoryGlassConversationMessages: incoming => incoming,
+        shouldPruneEmptyHistorySession: () => false,
+        getHistory: async () => JSON.parse(JSON.stringify(historyList)),
+        saveHistory: async (next) => { historyList = JSON.parse(JSON.stringify(next)); },
+        createSessionSummary: ({ chatId, pendingRequest }) => ({
+            id: chatId,
+            isPending: Boolean(pendingRequest),
+            pendingType: pendingRequest?.type || null,
+        }),
+        emitRealtimeEvent: () => {},
+    });
+    vm.runInContext(
+        section('function persistSessionRecord(options)', 'function withRunSessionWrite(')
+        + section('async function persistSessionRecordLocked(', 'async function loadQQBotSessionMap('),
+        c
+    );
+
+    await c.persistSessionRecord({
+        chatId: 'chat-race',
+        messages: [
+            { role: 'user', id: 'u1', content: 'hello' },
+            { role: 'assistant', id: 'a1', parts: [], status: 'pending' },
+        ],
+        pendingRequest: { type: 'chat', message: 'hello', assistantMsgId: 'a1' },
+    });
+
+    assert.equal(saved.pendingRequest, null);
+    assert.equal(saved.messages[1].status, 'interrupted');
+    assert.equal(saved.messages[1].runOutcome, 'stopped');
+    assert.equal(saved.messages[1].parts[0].content, 'partial');
+    assert.equal(historyList[0].isPending, false);
 });

@@ -12,9 +12,10 @@ const rootKey = root => process.platform === 'win32' ? path.resolve(root).toLowe
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class CheckpointService {
-    constructor({ storeDir, excludePaths = [] }) {
+    constructor({ storeDir, excludePaths = [], isChatRunning = null }) {
         this.storeDir = path.resolve(storeDir);
         this.excludePaths = [this.storeDir, ...excludePaths.map(value => path.resolve(value))];
+        this.isChatRunning = typeof isChatRunning === 'function' ? isChatRunning : null;
         this.hashCache = new Map();
         this.workspaceLocks = new Map();
         this.workspaceContext = new AsyncLocalStorage();
@@ -54,7 +55,14 @@ class CheckpointService {
     pruneWorkspaceLocks() {
         for (const [lockKey, bucket] of this.workspaceLocks.entries()) {
             for (const [token, lease] of bucket.entries()) {
-                if (lease?.isActive && !lease.isActive()) {
+                const inactiveByProbe = Boolean(lease?.isActive && !lease.isActive());
+                const inactiveByRunner = Boolean(
+                    lease?.kind !== 'restore'
+                    && lease?.chatId
+                    && typeof this.isChatRunning === 'function'
+                    && !this.isChatRunning(lease.chatId)
+                );
+                if (inactiveByProbe || inactiveByRunner) {
                     bucket.delete(token);
                 }
             }
@@ -87,14 +95,20 @@ class CheckpointService {
     }
 
     async acquireWorkspaces(roots, options = {}) {
-        const { kind = 'run', chatId = null, label = '', isActive = null, waitMs = 500 } = options;
+        const { kind = 'run', chatId = null, label = '', isActive = null, waitMs = 2500 } = options;
         const keys = [...new Map(roots.map(root => [rootKey(root), path.resolve(root)])).values()];
         const outer = keys.filter(key => !keys.some(parent => parent !== key && inside(parent, key)));
         const deadline = Date.now() + Math.max(0, waitMs);
         let conflicts = this.findBlockingWorkspaceLocks(outer, kind);
         while (conflicts.length && conflicts.every(item => item.kind === 'prepare') && Date.now() < deadline) {
+            if (typeof isActive === 'function' && !isActive()) {
+                throw failure('任务已停止，已取消工作区锁定。', 499);
+            }
             await sleep(25);
             conflicts = this.findBlockingWorkspaceLocks(outer, kind);
+        }
+        if (typeof isActive === 'function' && !isActive()) {
+            throw failure('任务已停止，已取消工作区锁定。', 499);
         }
         if (conflicts.length) throw this.workspaceConflictError(conflicts);
 
@@ -157,12 +171,20 @@ class CheckpointService {
         } finally { await fs.unlink(temporary).catch(() => {}); }
     }
 
-    async scan(root) {
+    assertShouldContinue(shouldContinue, message = '任务已停止，已取消创建检查点。') {
+        if (typeof shouldContinue === 'function' && !shouldContinue()) {
+            throw failure(message, 499);
+        }
+    }
+
+    async scan(root, shouldContinue = null) {
         const entries = [];
         const walk = async (directory, prefix = '') => {
+            this.assertShouldContinue(shouldContinue);
             const children = await fs.readdir(directory, { withFileTypes: true });
             children.sort((a, b) => a.name.localeCompare(b.name));
             for (const child of children) {
+                this.assertShouldContinue(shouldContinue);
                 const relative = prefix ? `${prefix}/${child.name}` : child.name;
                 const absolute = path.join(directory, child.name);
                 if (this.excluded(absolute, relative)) continue;
@@ -189,7 +211,8 @@ class CheckpointService {
         return JSON.stringify([entry.type, entry.mode, entry.mtimeMs, entry.ctimeMs, entry.size, entry.target]);
     }
 
-    async storeFile(root, entry) {
+    async storeFile(root, entry, shouldContinue = null) {
+        this.assertShouldContinue(shouldContinue);
         const source = path.join(root, entry.path);
         const cached = this.hashCache.get(source);
         const stamp = this.fingerprint(entry);
@@ -201,6 +224,7 @@ class CheckpointService {
         const handle = await fs.promises.open(temporary, 'wx', 0o600);
         try {
             for await (const chunk of fs.createReadStream(source)) {
+                this.assertShouldContinue(shouldContinue);
                 hash.update(chunk);
                 let offset = 0;
                 while (offset < chunk.length) offset += (await handle.write(chunk, offset, chunk.length - offset)).bytesWritten;
@@ -223,16 +247,21 @@ class CheckpointService {
         return digest;
     }
 
-    async capture(root) {
+    async capture(root, shouldContinue = null) {
+        this.assertShouldContinue(shouldContinue);
         await this.assertParents(root);
+        this.assertShouldContinue(shouldContinue);
         const rootStat = await fs.lstat(root).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
         if (rootStat && (!rootStat.isDirectory() || rootStat.isSymbolicLink())) throw failure('工作区根目录已被替换，无法安全创建检查点。');
         await fs.ensureDir(path.join(this.storeDir, 'records'), { mode: 0o700 });
         await fs.ensureDir(path.join(this.storeDir, 'objects'), { mode: 0o700 });
         await fs.ensureDir(path.join(this.storeDir, 'temporary'), { mode: 0o700 });
-        const entries = await this.scan(root);
-        for (const entry of entries) if (entry.type === 'file') entry.hash = await this.storeFile(root, entry);
-        const verified = await this.scan(root);
+        const entries = await this.scan(root, shouldContinue);
+        for (const entry of entries) {
+            this.assertShouldContinue(shouldContinue);
+            if (entry.type === 'file') entry.hash = await this.storeFile(root, entry, shouldContinue);
+        }
+        const verified = await this.scan(root, shouldContinue);
         if (entries.length !== verified.length || entries.some((entry, index) => entry.path !== verified[index].path || this.fingerprint(entry) !== this.fingerprint(verified[index]))) {
             throw failure('创建检查点时工作区文件发生变化，请等待其他写入完成后重试。');
         }
@@ -243,7 +272,8 @@ class CheckpointService {
         return { id: record.id, messageId: record.messageId, createdAt: record.createdAt, workspacePath: record.root };
     }
 
-    async ensure({ chatId, messageId, root, beforeMessages, userMessage }) {
+    async ensure({ chatId, messageId, root, beforeMessages, userMessage, shouldContinue = null }) {
+        this.assertShouldContinue(shouldContinue);
         const id = this.turnId(chatId, messageId);
         const existing = await fs.readJson(this.recordPath(id)).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
         if (existing) {
@@ -253,8 +283,9 @@ class CheckpointService {
         const record = {
             version: 1, id, chatId: String(chatId), messageId: String(messageId), root,
             createdAt: new Date().toISOString(), beforeMessages, userMessage,
-            entries: await this.capture(root),
+            entries: await this.capture(root, shouldContinue),
         };
+        this.assertShouldContinue(shouldContinue);
         await this.atomicJson(this.recordPath(id), record);
         return this.descriptor(record);
     }

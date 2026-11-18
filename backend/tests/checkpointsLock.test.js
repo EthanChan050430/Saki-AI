@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs-extra');
 
 const { CheckpointService } = require('../services/checkpoints');
-const { createCheckpointRestoreHandler } = require('../services/checkpointSessions');
+const { prepareTurnCheckpoint, createCheckpointRestoreHandler } = require('../services/checkpointSessions');
 
 function createMockRes() {
     return {
@@ -181,5 +181,55 @@ describe('CheckpointService workspace locks and restore', () => {
         assert.match(res.body.error, /当前对话仍有任务运行/);
 
         await fs.remove(tmpRoot);
+    });
+
+    it('prunes stopped prepare/agent locks via isChatRunning and aborts prepareTurnCheckpoint promptly when stopped', async () => {
+        const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'saki-cp-stop-prepare-'));
+        try {
+            const storeDir = path.join(tmpRoot, 'store');
+            const workDir = path.join(tmpRoot, 'workspace');
+            await fs.ensureDir(workDir);
+            await fs.writeFile(path.join(workDir, 'a.txt'), 'initial', 'utf8');
+
+            const runningChats = new Set(['1794978152817']);
+            const service = new CheckpointService({
+                storeDir,
+                isChatRunning: id => runningChats.has(String(id)),
+            });
+
+            const baseline = await service.ensure({
+                chatId: '1794978152817',
+                messageId: 'u0',
+                root: workDir,
+                beforeMessages: [],
+                userMessage: { role: 'user', id: 'u0', content: 'first' },
+            });
+
+            // Simulate a prepare lease left behind after the task stopped.
+            const stalePrepare = await service.acquireWorkspace(workDir, {
+                kind: 'prepare',
+                chatId: '1794978152817',
+                label: 'stopped prepare',
+            });
+            runningChats.delete('1794978152817');
+
+            // Both restore and a subsequent prepare must immediately prune the stopped lease and succeed.
+            await service.restore({ id: baseline.id, chatId: '1794978152817', commit: async () => {} });
+            stalePrepare.release();
+
+            let active = false;
+            await assert.rejects(
+                () => service.withWorkspace(workDir, async () => prepareTurnCheckpoint(service, {
+                    chatId: '1794978152817',
+                    root: workDir,
+                    history: [{ role: 'user', id: 'u1', content: 'second' }],
+                    shouldContinue: () => active,
+                }), { kind: 'prepare', chatId: '1794978152817', isActive: () => active }),
+                err => err.statusCode === 499
+            );
+            assert.equal(service.workspaceLocks.size, 0);
+        } finally {
+            await fs.remove(tmpRoot);
+        }
     });
 });

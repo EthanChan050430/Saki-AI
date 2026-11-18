@@ -1691,11 +1691,33 @@ function App() {
   const syncChatState = (nextMessages, nextPendingRequest = null) => {
     setMessages(nextMessages);
     latestMessagesRef.current = nextMessages;
+    pendingRef.current = nextPendingRequest;
     setCurrentPendingRequest(nextPendingRequest);
     setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
     if (currentChatId) {
       persistChatState(currentChatId, nextMessages, nextPendingRequest);
     }
+  };
+
+  const applyTurnRemovalState = (group) => {
+    const nextMessages = [...(latestMessagesRef.current || [])];
+    nextMessages.splice(group.start, group.end - group.start);
+    const activePending = pendingRef.current;
+    const removedAssistantId = group.assistantMessage?.id;
+    const removedPending = Boolean(
+      activePending
+      && (
+        (removedAssistantId !== undefined && removedAssistantId !== null && String(activePending.assistantMsgId) === String(removedAssistantId))
+        || (!isGenerating && !(runningRef.current && !runningRef.current.stopped) && !bgPollRef.current && !activePending.approvalRequest)
+      )
+    );
+    const nextPendingRequest = removedPending ? null : activePending;
+    if (removedPending) {
+      pendingRef.current = null;
+      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    }
+    syncChatState(nextMessages, nextPendingRequest);
+    return { nextMessages, nextPendingRequest };
   };
 
   const rollbackAssistantEffects = async (assistantMessage, userMessage, action = 'edit') => {
@@ -1704,28 +1726,38 @@ function App() {
       if (!window.confirm(getLocalText(
         `继续${actionLabel}将撤回此轮及之后的对话，并完整恢复工作区文件和目录（包括终端修改与删除）；不会影响 Git 元数据、工作区外文件或会话记录。此操作不可直接撤销，确定继续吗？`,
         `Continuing will rewind this turn and later conversation and fully restore workspace files and folders, including terminal edits and deletions. Git metadata, files outside the workspace, and session records are excluded. This cannot be directly undone. Continue?`
-      ))) return false;
+      ))) return { ok: false, restoredByCheckpoint: false };
+      const chatId = currentChatId;
+      checkpointRestoreRef.current = true;
+      setRestoringCheckpointId(userMessage.checkpoint.id);
       try {
-        const result = await restoreCheckpoint(BACKEND_URL, currentChatId, userMessage.checkpoint.id);
-        setMessages(result.messages);
-        latestMessagesRef.current = result.messages;
-        setCurrentPendingRequest(null);
-        pendingRef.current = null;
-        resumeQueueAfterRewind(currentChatId, true);
-        setContextStatus(calculateContextStatusFromMessages(result.messages, config));
+        const result = await restoreCheckpoint(BACKEND_URL, chatId, userMessage.checkpoint.id);
+        if (currentChatIdRef.current === chatId) {
+          setMessages(result.messages);
+          latestMessagesRef.current = result.messages;
+          setCurrentPendingRequest(null);
+          pendingRef.current = null;
+          resumeQueueAfterRewind(chatId, true);
+          setDeepReadingData(null);
+          setContextStatus(calculateContextStatusFromMessages(result.messages, config));
+          setConfig(previous => ({ ...previous, workspacePath: result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath }));
+        }
         refreshHistory();
-        return true;
+        return { ok: true, restoredByCheckpoint: true, result };
       } catch (error) {
         window.alert(`${getLocalText('工作区还原失败，对话未撤回', 'Workspace restore failed; the conversation was not rewound')}: ${error.message}`);
-        return false;
+        return { ok: false, restoredByCheckpoint: false };
+      } finally {
+        checkpointRestoreRef.current = false;
+        setRestoringCheckpointId(null);
       }
     }
     const payloads = createRollbackPayloads(assistantMessage);
-    if (payloads.length === 0) return true;
+    if (payloads.length === 0) return { ok: true, restoredByCheckpoint: false };
     if (!window.confirm(getLocalText(
       '继续操作将尝试回溯此轮产生的文件更改，但旧对话没有完整工作区检查点，无法保证恢复目录操作或终端更改。确定继续吗？',
       'Continue to roll back file changes from this turn? This older conversation has no full workspace checkpoint, so directory operations and terminal changes cannot be guaranteed to be restored.'
-    ))) return false;
+    ))) return { ok: false, restoredByCheckpoint: false };
 
     const results = await Promise.allSettled(
       payloads.map(payload => axios.post(`${BACKEND_URL}/api/files/rollback`, payload))
@@ -1735,10 +1767,10 @@ function App() {
     if (failures.length > 0) {
       console.error('Failed to rollback one or more generated files:', failures);
       window.alert(getLocalText('有部分文件回溯失败，请检查工作区。', 'Some generated files could not be rolled back. Please check the workspace.'));
-      return false;
+      return { ok: false, restoredByCheckpoint: false };
     }
 
-    return true;
+    return { ok: true, restoredByCheckpoint: false };
   };
 
   const getMessageGroupAtIndex = (messageIndex) => {
@@ -1781,19 +1813,20 @@ function App() {
         }
         if (data.type === 'session-updated') {
           refreshHistory();
-          if (data.chatId && currentChatId === data.chatId && !isGenerating) {
+          if (data.chatId && currentChatId === data.chatId && !isGenerating && !(runningRef.current && !runningRef.current.stopped) && !bgPollRef.current) {
             const res = await axios.get(`${BACKEND_URL}/api/history/${data.chatId}`);
-            if (currentChatIdRef.current !== data.chatId || runningRef.current || loadingChatRef.current) return;
+            if (currentChatIdRef.current !== data.chatId || (runningRef.current && !runningRef.current.stopped) || loadingChatRef.current || bgPollRef.current) return;
             const loadedMessages = res.data.messages || [];
             const safePending = sanitizeLoadedPendingRequest({
               messages: loadedMessages,
               pendingRequest: res.data.pendingRequest || null,
               isRunning: false,
             });
+            const effectivePending = safePending?.approvalRequest ? safePending : null;
             setMessages(loadedMessages);
             latestMessagesRef.current = loadedMessages;
-            pendingRef.current = safePending;
-            setCurrentPendingRequest(safePending);
+            pendingRef.current = effectivePending;
+            setCurrentPendingRequest(effectivePending);
             setContextStatus(calculateContextStatusFromMessages(loadedMessages, config));
           }
         }
@@ -2129,7 +2162,7 @@ function App() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.text || `Server error: ${response.status}`);
+        throw new Error(errorData.text || errorData.error || `Server error: ${response.status}`);
       }
 
       if (options.useWeb) {
@@ -2381,6 +2414,7 @@ function App() {
   const handleStartNewChat = () => {
     detachChatRun();
     setDeepReadingData(null);
+    pendingRef.current = null;
     setCurrentPendingRequest(null);
     const newChatId = Date.now().toString();
     currentChatIdRef.current = newChatId;
@@ -2454,31 +2488,22 @@ function App() {
   };
 
   const handleDeleteMessage = async (idx) => {
-    if (isGenerating || checkpointRestoreRef.current) return;
+    if (isGenerating || (runningRef.current && !runningRef.current.stopped) || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group) return;
 
-    if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
-      if (!didRollback) return;
+    if (group.assistantMessage || group.userMessage?.checkpoint?.id) {
+      const rollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
+      if (!rollback.ok) return;
+      if (rollback.restoredByCheckpoint) return;
     }
 
-    const nextMessages = [...(latestMessagesRef.current || [])];
-    nextMessages.splice(group.start, group.end - group.start);
-    const nextPendingRequest = currentPendingRequest?.assistantMsgId === group.assistantMessage?.id
-      ? null
-      : currentPendingRequest;
-
-    if (currentPendingRequest && !nextPendingRequest) {
-      pendingRef.current = null;
-      resumeQueueAfterRewind(currentChatIdRef.current, true);
-    }
-    syncChatState(nextMessages, nextPendingRequest);
+    applyTurnRemovalState(group);
   };
 
   const handleDeleteStoryGlassRecord = async (messageId) => {
-    if (isGenerating) return false;
+    if (isGenerating || (runningRef.current && !runningRef.current.stopped) || checkpointRestoreRef.current) return false;
 
     const currentMessages = latestMessagesRef.current || [];
     const messageIndex = currentMessages.findIndex(message => String(message.id) === String(messageId));
@@ -2487,50 +2512,41 @@ function App() {
     const group = getMessageGroupAtIndex(messageIndex);
     if (!group) return false;
 
-    if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
-      if (!didRollback) return false;
+    if (group.assistantMessage || group.userMessage?.checkpoint?.id) {
+      const rollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'delete');
+      if (!rollback.ok) return false;
+      if (rollback.restoredByCheckpoint) return true;
     }
 
-    const nextMessages = [...currentMessages];
-    nextMessages.splice(group.start, group.end - group.start);
-    const nextPendingRequest = currentPendingRequest?.assistantMsgId === group.assistantMessage?.id
-      ? null
-      : currentPendingRequest;
-
-    if (currentPendingRequest && !nextPendingRequest) {
-      pendingRef.current = null;
-      resumeQueueAfterRewind(currentChatIdRef.current, true);
-    }
-    syncChatState(nextMessages, nextPendingRequest);
+    applyTurnRemovalState(group);
     return true;
   };
 
   const handleEditMessage = async (idx) => {
-    if (isGenerating || checkpointRestoreRef.current) return;
+    if (isGenerating || (runningRef.current && !runningRef.current.stopped) || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group?.userMessage) return;
 
-    if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'edit');
-      if (!didRollback) return;
+    if (group.assistantMessage || group.userMessage?.checkpoint?.id) {
+      const rollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'edit');
+      if (!rollback.ok) return;
+      if (rollback.restoredByCheckpoint) {
+        setComposerPreset({
+          text: rollback.result.userMessage.content || '',
+          files: Array.isArray(rollback.result.userMessage.attachedFiles) ? rollback.result.userMessage.attachedFiles : [],
+          options: rollback.result.userMessage.requestOptions || {},
+          timestamp: Date.now()
+        });
+        return;
+      }
     }
 
-    const nextMessages = [...(latestMessagesRef.current || [])];
-    nextMessages.splice(group.start, group.end - group.start);
-    const nextPendingRequest = currentPendingRequest?.assistantMsgId === group.assistantMessage?.id
-      ? null
-      : currentPendingRequest;
-
-    if (currentPendingRequest && !nextPendingRequest) {
-      pendingRef.current = null;
-      resumeQueueAfterRewind(currentChatIdRef.current, true);
-    }
-    syncChatState(nextMessages, nextPendingRequest);
+    applyTurnRemovalState(group);
     setComposerPreset({
       text: group.userMessage.content || '',
       files: Array.isArray(group.userMessage.attachedFiles) ? group.userMessage.attachedFiles : [],
+      options: group.userMessage.requestOptions || {},
       timestamp: Date.now()
     });
   };
@@ -2682,7 +2698,7 @@ function App() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.text || `Server error: ${response.status}`);
+        throw new Error(errorData.text || errorData.error || `Server error: ${response.status}`);
       }
 
       if (options.useWeb) {
@@ -2879,6 +2895,7 @@ function App() {
                 ...(nextPendingRequest || pendingRequest || {}),
                 approvalRequest: data.approvalRequest
               };
+              pendingRef.current = nextPendingRequest;
               setCurrentPendingRequest(nextPendingRequest);
               persistChatState(activeChatId, latestMessagesRef.current, nextPendingRequest);
               continue;
@@ -2978,9 +2995,12 @@ function App() {
       }
     } catch (error) {
       if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
-      streamError = true;
-      queueStore.pause(activeChatId);
-      if (error.name === 'AbortError') {
+      const isAbort = error.name === 'AbortError' || run.stopped;
+      if (!isAbort) {
+        streamError = true;
+      }
+      queueStore.pause(activeChatId, isAbort ? '已停止，队列已暂停。' : undefined);
+      if (isAbort) {
         shouldClearPending = true;
         console.log('Generation aborted by user');
       } else {
@@ -3037,6 +3057,7 @@ function App() {
       const successful = canAdvanceQueue({ outcome: runOutcome, done: completed, error: streamError, approval: awaitingApproval, stopped: run.stopped });
       if (!successful) queueStore.pause(activeChatId, awaitingApproval ? '等待审批，队列已暂停。' : '任务未成功完成，队列已暂停。');
       const finalPendingRequest = awaitingApproval ? nextPendingRequest : null;
+      const resolvedOutcome = runOutcome || (run.stopped ? 'stopped' : (successful ? 'completed' : 'error'));
       const durationMs = Date.now() - generationStartTime;
       const newMsgs = latestMessagesRef.current.map(message => (
           message.id === assistantMsgId
@@ -3044,11 +3065,11 @@ function App() {
                 const enhancedMessage = maybeAppendModelSettingsGuidance(message, uiLanguage);
                 return {
                   ...applyStreamingActions(enhancedMessage, {}, true),
-                  runOutcome,
+                  runOutcome: resolvedOutcome,
                   generationDurationMs: durationMs,
                   status: successful
                     ? (enhancedMessage.status === 'error' ? 'error' : 'done')
-                    : (streamError || runOutcome === 'error' || enhancedMessage.status === 'error' ? 'error' : 'interrupted')
+                    : (streamError || resolvedOutcome === 'error' || enhancedMessage.status === 'error' ? 'error' : 'interrupted')
                 };
               })()
             : message
@@ -3057,20 +3078,20 @@ function App() {
       setMessages(newMsgs);
       pendingRef.current = finalPendingRequest;
       setCurrentPendingRequest(finalPendingRequest);
+      runningRef.current = null;
       let saved = true;
       try { await persistChatState(activeChatId, newMsgs, finalPendingRequest); }
       catch {
         saved = false;
         queueStore.pause(activeChatId, '聊天记录保存失败，队列已暂停，请确认后继续。');
       }
-      if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
-      runningRef.current = null;
+      if (currentChatIdRef.current !== activeChatId || runningRef.current) return;
       if (successful && saved) void drainQueue(activeChatId);
     }
   };
 
   const sendMessageWithContext = async ({ text, files = [], options = {}, baseMessages = null }) => {
-    if (runningRef.current || bgPollRef.current || loadingChatRef.current || checkpointRestoreRef.current) return false;
+    if ((runningRef.current && !runningRef.current.stopped) || bgPollRef.current || loadingChatRef.current || checkpointRestoreRef.current) return false;
     const config = getDispatchConfig(configRef, options);
     if (!isChatProviderEnabled(config, config.provider)) {
       window.alert(getLocalText('该服务商已关闭，请先在设置中开启。', 'This provider is disabled. Enable it in Settings first.'));
@@ -3117,6 +3138,7 @@ function App() {
 
     setMessages(messagesWithAssistant);
     latestMessagesRef.current = messagesWithAssistant;
+    pendingRef.current = pendingRequest;
     setCurrentPendingRequest(pendingRequest);
     setContextStatus(calculateContextStatusFromMessages(messagesWithAssistant, config));
     persistChatState(activeChatId, messagesWithAssistant, pendingRequest);
@@ -3134,7 +3156,7 @@ function App() {
   };
 
   const handleRestoreCheckpoint = async (message) => {
-    if (!message?.checkpoint?.id || !currentChatId || isGenerating || checkpointRestoreRef.current) return false;
+    if (!message?.checkpoint?.id || !currentChatId || isGenerating || (runningRef.current && !runningRef.current.stopped) || checkpointRestoreRef.current) return false;
     const chatId = currentChatId;
     checkpointRestoreRef.current = true;
     setRestoringCheckpointId(message.checkpoint.id);
@@ -3170,9 +3192,20 @@ function App() {
     const chatId = currentChatIdRef.current || ensureActiveChat();
     currentChatIdRef.current = chatId;
     const payload = { text, files, options: { ...options, workspacePath: options.workspacePath ?? config.workspacePath ?? '' } };
-    if (runningRef.current || isGenerating || pendingRef.current || queueStore.get(chatId).paused || queueStore.get(chatId).items.length) {
+    const activelyBusy = Boolean(
+      (runningRef.current && !runningRef.current.stopped)
+      || isGenerating
+      || bgPollRef.current
+      || pendingRef.current?.approvalRequest
+    );
+    if (!activelyBusy && pendingRef.current && !pendingRef.current.approvalRequest) {
+      pendingRef.current = null;
+      setCurrentPendingRequest(null);
+    }
+    const currentQueue = queueStore.get(chatId);
+    if (activelyBusy || currentQueue.items.length > 0) {
       queueStore.enqueue(chatId, payload);
-      if (!runningRef.current && !isGenerating && !pendingRef.current) void drainQueue(chatId);
+      if (!activelyBusy && !currentQueue.paused) void drainQueue(chatId);
       return true;
     }
     void sendMessageWithContext(payload);
@@ -3180,7 +3213,11 @@ function App() {
   };
 
   const drainQueue = async (chatId) => {
-    if (currentChatIdRef.current !== chatId || runningRef.current || bgPollRef.current || loadingChatRef.current || pendingRef.current || checkpointRestoreRef.current) return;
+    if (currentChatIdRef.current !== chatId || (runningRef.current && !runningRef.current.stopped) || bgPollRef.current || loadingChatRef.current || pendingRef.current?.approvalRequest || checkpointRestoreRef.current) return;
+    if (pendingRef.current && !pendingRef.current.approvalRequest) {
+      pendingRef.current = null;
+      setCurrentPendingRequest(null);
+    }
     const item = queueStore.take(chatId);
     if (!item) return;
     // No await between reservation and send: history is read by sendMessageWithContext at dispatch time.
@@ -3288,37 +3325,29 @@ function App() {
   };
 
   const handleRedoMessage = async (idx) => {
-    if (isGenerating || checkpointRestoreRef.current) return;
+    if (isGenerating || (runningRef.current && !runningRef.current.stopped) || checkpointRestoreRef.current) return;
 
     const group = getMessageGroupAtIndex(idx);
     if (!group?.userMessage) return;
 
-    if (group.assistantMessage) {
-      const didRollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'redo');
-      if (!didRollback) return;
+    let baseMessages;
+    if (group.assistantMessage || group.userMessage?.checkpoint?.id) {
+      const rollback = await rollbackAssistantEffects(group.assistantMessage, group.userMessage, 'redo');
+      if (!rollback.ok) return;
+      if (rollback.restoredByCheckpoint) {
+        baseMessages = rollback.result.messages;
+      }
     }
 
-    const nextMessages = [...(latestMessagesRef.current || [])];
-    nextMessages.splice(group.start, group.end - group.start);
-    const nextPendingRequest = currentPendingRequest?.assistantMsgId === group.assistantMessage?.id
-      ? null
-      : currentPendingRequest;
-
-    setMessages(nextMessages);
-    latestMessagesRef.current = nextMessages;
-    if (currentPendingRequest && !nextPendingRequest) {
-      pendingRef.current = null;
-      resumeQueueAfterRewind(currentChatIdRef.current, true);
+    if (!baseMessages) {
+      baseMessages = applyTurnRemovalState(group).nextMessages;
     }
-    setCurrentPendingRequest(nextPendingRequest);
-    setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
-    persistChatState(currentChatId, nextMessages, nextPendingRequest);
 
     await sendMessageWithContext({
       text: group.userMessage.content || '',
       files: Array.isArray(group.userMessage.attachedFiles) ? group.userMessage.attachedFiles : [],
       options: group.userMessage.requestOptions || {},
-      baseMessages: nextMessages
+      baseMessages
     });
   };
 
@@ -3342,6 +3371,7 @@ function App() {
       if (!pendingRequest?.assistantMsgId) {
         setMessages(sessionMessages);
         latestMessagesRef.current = sessionMessages;
+        pendingRef.current = null;
         setCurrentPendingRequest(null);
         setContextStatus(calculateContextStatusFromMessages(sessionMessages, config));
         return;
@@ -3364,6 +3394,7 @@ function App() {
 
       setMessages(hydratedMessages);
       latestMessagesRef.current = hydratedMessages;
+      pendingRef.current = pendingRequest;
       setCurrentPendingRequest(pendingRequest);
       setContextStatus(calculateContextStatusFromMessages(hydratedMessages, config));
 
@@ -3400,20 +3431,34 @@ function App() {
     if (!chatId) return;
     queueStore.pause(chatId, '已取消待续任务，队列已暂停。');
 
-    if (String(currentChatId) === String(chatId) && isGenerating) {
+    const isCurrent = String(currentChatIdRef.current) === String(chatId);
+    if (isCurrent && (isGenerating || (runningRef.current && !runningRef.current.stopped))) {
       stopGeneration();
       return;
     }
 
+    const cancelledAssistantId = isCurrent ? (pendingRef.current?.assistantMsgId ?? null) : null;
+    if (isCurrent) {
+      pendingRef.current = null;
+      setCurrentPendingRequest(null);
+    }
+
     try {
-      await axios.post(`${BACKEND_URL}/api/chat/stream/${encodeURIComponent(chatId)}/stop`).catch(() => {});
+      await axios.post(`${BACKEND_URL}/api/chat/stream/${encodeURIComponent(chatId)}/stop`, {
+        ...(cancelledAssistantId != null ? { assistantMsgId: cancelledAssistantId } : {}),
+      }).catch(() => {});
       const res = await axios.get(`${BACKEND_URL}/api/history/${chatId}`);
       const sessionMessages = Array.isArray(res.data.messages) ? res.data.messages : [];
       const pendingRequest = res.data.pendingRequest || null;
+      const targetAssistantId = pendingRequest?.assistantMsgId ?? cancelledAssistantId;
       const nextMessages = sessionMessages.map((message) => (
-        pendingRequest?.assistantMsgId
-          && String(message.id) === String(pendingRequest.assistantMsgId)
-          ? { ...message, status: message.status === 'error' ? 'error' : 'interrupted' }
+        targetAssistantId != null
+          && String(message.id) === String(targetAssistantId)
+          ? {
+              ...message,
+              status: message.status === 'error' ? 'error' : (message.status === 'done' ? 'done' : 'interrupted'),
+              runOutcome: message.runOutcome || 'stopped',
+            }
           : message
       ));
 
@@ -3424,9 +3469,10 @@ function App() {
         clientSavedAt: Date.now()
       });
 
-      if (String(currentChatId) === String(chatId)) {
+      if (String(currentChatIdRef.current) === String(chatId)) {
         setMessages(nextMessages);
         latestMessagesRef.current = nextMessages;
+        pendingRef.current = null;
         setCurrentPendingRequest(null);
         setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
       }
@@ -3460,6 +3506,7 @@ function App() {
 
       setMessages(updatedMessages);
       latestMessagesRef.current = updatedMessages;
+      pendingRef.current = null;
       setCurrentPendingRequest(null);
       persistChatState(currentChatId, updatedMessages, null);
       return;
@@ -3478,6 +3525,7 @@ function App() {
     const nextPendingRequest = { ...pendingRequest };
     delete nextPendingRequest.approvalRequest;
 
+    pendingRef.current = nextPendingRequest;
     setCurrentPendingRequest(nextPendingRequest);
     persistChatState(currentChatId, latestMessagesRef.current, nextPendingRequest);
 
@@ -3500,28 +3548,55 @@ function App() {
 
   const stopGeneration = () => {
     const chatId = currentChatIdRef.current;
+    const hadLocalRun = Boolean(runningRef.current);
+    const stoppedAssistantId = runningRef.current?.assistantMsgId || pendingRef.current?.assistantMsgId || null;
     queueStore.pause(chatId, '已停止，队列已暂停。');
     if (runningRef.current) runningRef.current.stopped = true;
+    pendingRef.current = null;
+    setCurrentPendingRequest(null);
+    setIsGenerating(false);
+    clearInterval(bgPollRef.current);
+    bgPollRef.current = null;
+    if (stoppedAssistantId != null && Array.isArray(latestMessagesRef.current)) {
+      const stoppedMessages = latestMessagesRef.current.map((msg) => {
+        if (!msg || msg.role !== 'assistant' || String(msg.id) !== String(stoppedAssistantId)) return msg;
+        if (['done', 'error', 'interrupted'].includes(msg.status)) return msg;
+        return {
+          ...applyStreamingActions(msg, {}, true),
+          status: 'interrupted',
+          runOutcome: msg.runOutcome || 'stopped',
+        };
+      });
+      latestMessagesRef.current = stoppedMessages;
+      setMessages(stoppedMessages);
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
     if (chatId) {
-      axios.post(`${BACKEND_URL}/api/chat/stream/${chatId}/stop`).then(() => {
-        if (currentChatIdRef.current !== chatId || runningRef.current) return;
+      axios.post(`${BACKEND_URL}/api/chat/stream/${encodeURIComponent(chatId)}/stop`, {
+        ...(stoppedAssistantId != null ? { assistantMsgId: stoppedAssistantId } : {}),
+      }).then(() => {
+        if (hadLocalRun || currentChatIdRef.current !== chatId || runningRef.current) return;
         // Poll-only runs have no local stream finally block; refresh their stopped state.
         return axios.get(`${BACKEND_URL}/api/history/${chatId}`).then(response => {
           if (currentChatIdRef.current !== chatId || runningRef.current) return;
-          setMessages(response.data.messages || []);
-          pendingRef.current = response.data.pendingRequest || null;
-          setCurrentPendingRequest(pendingRef.current);
+          const reconciled = reconcileCompletedBackgroundSnapshot({
+            messages: response.data.messages || [],
+            pendingRequest: null,
+            assistantMsgId: stoppedAssistantId,
+          });
+          setMessages(reconciled.messages);
+          latestMessagesRef.current = reconciled.messages;
+          pendingRef.current = null;
+          setCurrentPendingRequest(null);
+          setContextStatus(calculateContextStatusFromMessages(reconciled.messages, configRef.current));
           setIsGenerating(false);
         });
       }).catch(() => {
-        if (currentChatIdRef.current === chatId && !runningRef.current) startBgPoll(chatId);
+        if (!hadLocalRun && currentChatIdRef.current === chatId && !runningRef.current) startBgPoll(chatId);
       });
     }
-    clearInterval(bgPollRef.current);
-    bgPollRef.current = null;
   };
 
   function detachChatRun() {

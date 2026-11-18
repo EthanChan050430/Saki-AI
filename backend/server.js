@@ -177,6 +177,7 @@ const withSessionWrite = createKeyedSerialQueue();
 const checkpointService = new CheckpointService({
     storeDir: process.env.CHECKPOINT_STORE_DIR || path.join(os.homedir(), '.saki-ai', 'checkpoints'),
     excludePaths: [SESSIONS_DIR, HISTORY_FILE],
+    isChatRunning: (id) => BACKGROUND_RUNS.has(String(id)),
 });
 const FILE_WRITE_LOCKS = new Map();
 const AGENT_AUTH_TOKEN = String(process.env.AGENT_AUTH_TOKEN || crypto.randomBytes(32).toString('hex'));
@@ -2913,15 +2914,53 @@ async function persistSessionRecordLocked({ chatId, messages = [], title, pendin
     if (clientSavedAt && clientSavedAt < Number(existingSession.checkpointRestoredAt || 0)) {
         throw Object.assign(new Error('此保存早于最近的检查点还原，已忽略过期对话。'), { statusCode: 409 });
     }
-    const normalizedMessages = mergePreservedStoryGlassConversationMessages(
+    const isTerminalAssistantMsg = (msg) => Boolean(
+        msg
+        && msg.role === 'assistant'
+        && (
+            ['done', 'error', 'interrupted'].includes(msg.status)
+            || ['completed', 'error', 'stopped'].includes(msg.runOutcome)
+        )
+    );
+    const existingById = new Map(
+        (Array.isArray(existingSession.messages) ? existingSession.messages : [])
+            .filter(msg => msg && msg.id !== undefined && msg.id !== null)
+            .map(msg => [String(msg.id), msg])
+    );
+    let normalizedMessages = mergePreservedStoryGlassConversationMessages(
         preserveSteeringMessages(Array.isArray(messages) ? messages : [], existingSession.messages),
         existingSession.messages,
         clientSavedAt
     );
+    let normalizedPendingRequest = hasPendingRequest(pendingRequest) ? pendingRequest : null;
+    if (!runIdentity) {
+        normalizedMessages = normalizedMessages.map((msg) => {
+            if (!msg || msg.role !== 'assistant' || msg.id === undefined || msg.id === null) return msg;
+            if (isTerminalAssistantMsg(msg)) return msg;
+            const existingMsg = existingById.get(String(msg.id));
+            if (!isTerminalAssistantMsg(existingMsg)) return msg;
+            const incomingHasParts = Array.isArray(msg.parts) && msg.parts.length > 0;
+            const incomingHasFiles = Array.isArray(msg.generatedFiles) && msg.generatedFiles.length > 0;
+            return {
+                ...msg,
+                parts: incomingHasParts ? msg.parts : (existingMsg.parts || msg.parts || []),
+                generatedFiles: incomingHasFiles ? msg.generatedFiles : (existingMsg.generatedFiles || msg.generatedFiles || []),
+                todoList: msg.todoList ?? existingMsg.todoList ?? null,
+                status: existingMsg.status,
+                runOutcome: existingMsg.runOutcome,
+                ...(existingMsg.generationDurationMs !== undefined ? { generationDurationMs: existingMsg.generationDurationMs } : {}),
+            };
+        });
+        if (normalizedPendingRequest && !normalizedPendingRequest.approvalRequest) {
+            const targetExisting = existingById.get(String(normalizedPendingRequest.assistantMsgId));
+            if (isTerminalAssistantMsg(targetExisting)) {
+                normalizedPendingRequest = null;
+            }
+        }
+    }
     const nextSource = source || existingSession.source || 'web';
     const nextExternal = external !== undefined ? external : (existingSession.external || null);
     const nextTitle = title || existingSession.title || undefined;
-    const normalizedPendingRequest = hasPendingRequest(pendingRequest) ? pendingRequest : null;
     const nextSession = {
         ...existingSession,
         ...(nextTitle ? { title: nextTitle } : {}),
@@ -6442,9 +6481,13 @@ async function runDeepReadingLoop(res, { message, history, context, provider, mo
         }
     };
 
-    let aborted = false;
+    let aborted = Boolean(res.destroyed || res.writableEnded);
+    const loopAbortController = new AbortController();
+    if (aborted) loopAbortController.abort();
+    const abortedConfig = { ...config, abortSignal: loopAbortController.signal };
     res.on('close', () => {
         aborted = true;
+        loopAbortController.abort();
         console.log(`[Deep Reading] Client disconnected. Aborting loop for chatId: ${chatId}`);
     });
 
@@ -6463,7 +6506,7 @@ async function runDeepReadingLoop(res, { message, history, context, provider, mo
 返回格式必须是 JSON 数组: [{"title": "任务标题", "description": "任务描述", "queries": ["检索词1", "检索词2"]}]
 只返回 JSON 代码块。`;
 
-        const breakdownResult = await callLLM(provider, model, ollamaUrl, breakdownPrompt, config);
+        const breakdownResult = await callLLM(provider, model, ollamaUrl, breakdownPrompt, abortedConfig);
         if (aborted) return;
         const parsedSteps = parseDeepReadingSteps(breakdownResult);
         if (!parsedSteps.length) {
@@ -6600,7 +6643,7 @@ ${combinedContext}
 
 请直接输出研究内容。`;
 
-                await callLLM(provider, model, ollamaUrl, reasoningPrompt, { ...config, systemPrompt: '' }, (token) => {
+                await callLLM(provider, model, ollamaUrl, reasoningPrompt, { ...abortedConfig, systemPrompt: '' }, (token) => {
                     if (aborted) return;
                     stepContent += token;
                     steps[i].content = stepContent;
@@ -6612,7 +6655,7 @@ ${combinedContext}
 任务目标: ${message}
 ${previousBlock}
 请直接输出详细、准确的研究分析，聚焦本步骤主题，区分事实与推测，不确定的信息需明确说明。`;
-                await callLLM(provider, model, ollamaUrl, simplePrompt, { ...config, systemPrompt: '' }, (token) => {
+                await callLLM(provider, model, ollamaUrl, simplePrompt, { ...abortedConfig, systemPrompt: '' }, (token) => {
                     if (aborted) return;
                     stepContent += token;
                     steps[i].content = stepContent;
@@ -6650,7 +6693,7 @@ ${finalContent}${refSection}
 6. **引用与参考来源**：正文中保留各步骤已有的 [n] 行内引用标记；若来源列表非空，在报告末尾单独添加"## 参考来源"章节，按 [1]、[2]… 顺序列出所有来源（标题 + 链接）。来源列表为空时省略该章节。`;
 
         let fullAssistantResponse = "";
-        await callLLM(provider, model, ollamaUrl, reportPrompt, { ...config, systemPrompt: '' }, (token) => {
+        await callLLM(provider, model, ollamaUrl, reportPrompt, { ...abortedConfig, systemPrompt: '' }, (token) => {
             if (aborted) return;
             fullAssistantResponse += token;
             reportStep.content += token;
@@ -6712,7 +6755,12 @@ ${finalContent}${refSection}
         });
         res.write('data: [DONE]\n\n');
     } catch (error) {
+        if (aborted) {
+            console.log(`[Deep Reading] Loop terminated due to client disconnection.`);
+            return;
+        }
         console.error('Deep Reading Error:', error);
+        emitRunOutcome(res, 'error', { error: error.message });
         sendUpdate({ status: 'error', error: error.message });
         res.write(`data: ${JSON.stringify({ text: `发生错误: ${error.message}` })}\n\n`);
         res.write('data: [DONE]\n\n');
@@ -7334,9 +7382,13 @@ async function runPPTLoop(res, { message, history, context, provider, model, oll
         }
     };
 
-    let aborted = false;
+    let aborted = Boolean(res.destroyed || res.writableEnded);
+    const loopAbortController = new AbortController();
+    if (aborted) loopAbortController.abort();
+    const abortedConfig = { ...config, abortSignal: loopAbortController.signal };
     res.on('close', () => {
         aborted = true;
+        loopAbortController.abort();
         console.log(`[PPT] Client disconnected. Aborting loop for chatId: ${chatId}`);
     });
 
@@ -7387,7 +7439,7 @@ ${imageCapabilityHint}
 
         while (planRetryCount <= maxPlanRetries) {
             try {
-                planResult = await callLLM(provider, model, ollamaUrl, planPrompt, config);
+                planResult = await callLLM(provider, model, ollamaUrl, planPrompt, abortedConfig);
                 break;
             } catch (err) {
                 planRetryCount++;
@@ -7559,7 +7611,7 @@ ${imageCapabilityHint}
                     steps[i].streamProgress = 0;
                     sendUpdate({ steps });
 
-                    await callLLM(provider, model, ollamaUrl, strictSlidePrompt, config, (token) => {
+                    await callLLM(provider, model, ollamaUrl, strictSlidePrompt, abortedConfig, (token) => {
                         if (aborted) return;
                         fullResponse += token;
 
@@ -7858,14 +7910,17 @@ async function loadPptFollowUpAttachments(rawAttachments = []) {
 }
 
 async function runPptFollowUpLoop(res, { message, targetPptMsg, provider, model, ollamaUrl, chatId, assistantMsgId, uploadedFiles = [], config }) {
-    let aborted = false;
+    let aborted = Boolean(res.destroyed || res.writableEnded);
+    const loopAbortController = new AbortController();
+    if (aborted) loopAbortController.abort();
     res.on('close', () => {
         aborted = true;
+        loopAbortController.abort();
         console.log(`[PPT FollowUp] Client disconnected for chatId: ${chatId}`);
     });
 
     const targetMessageId = targetPptMsg?.id;
-    const runtimeConfig = { ...(globalConfigCache || {}), ...(config || {}) };
+    const runtimeConfig = { ...(globalConfigCache || {}), ...(config || {}), abortSignal: loopAbortController.signal };
     const resolvedProvider = normalizeChatProviderId(provider || runtimeConfig.provider || 'ollama');
     const resolvedModel = model || runtimeConfig.model || 'llama3';
     const resolvedOllamaUrl = ollamaUrl || runtimeConfig.ollamaUrl || 'http://localhost:11434';
@@ -9312,19 +9367,45 @@ async function runAgentLoop(res, options) {
     const ownedRun = options.chatId && !res.runIdentity && BACKGROUND_RUNS.get(options.chatId) !== res
         ? createBackgroundRun(options.chatId, 'agent', options.assistantMsgId) : null;
     if (ownedRun) res.runIdentity = ownedRun;
+    const runIdentity = res.runIdentity || res;
+    const isRunActive = () => !res.destroyed && !res.writableEnded && (!options.chatId || isCurrentRun(BACKGROUND_RUNS, options.chatId, runIdentity));
     let workspaceLease = null;
+    let workspaceLeasePromise = null;
+    const bindLeaseRelease = () => {
+        const releaseLease = () => workspaceLease?.release();
+        if (typeof res?.once === 'function') res.once('close', releaseLease);
+        else if (typeof res?.on === 'function') res.on('close', releaseLease);
+        if (runIdentity && runIdentity !== res) {
+            if (typeof runIdentity.once === 'function') runIdentity.once('close', releaseLease);
+            else if (typeof runIdentity.on === 'function') runIdentity.on('close', releaseLease);
+        }
+    };
     const ensureMutatingWorkspaceLease = async (targetRoot) => {
         if (workspaceLease) return workspaceLease;
-        const runIdentity = res.runIdentity || res;
-        workspaceLease = await checkpointService.acquireWorkspace(targetRoot || workspaceService.currentRoot, {
-            kind: 'agent',
-            chatId: options.chatId || null,
-            label: String(options.message || '').trim().replace(/\s+/g, ' ').slice(0, 40) || options.chatId || 'Agent',
-            isActive: () => !res.destroyed && !res.writableEnded && (!options.chatId || isCurrentRun(BACKGROUND_RUNS, options.chatId, runIdentity)),
-        });
-        if (typeof res?.once === 'function') res.once('close', () => workspaceLease?.release());
-        else if (typeof res?.on === 'function') res.on('close', () => workspaceLease?.release());
-        return workspaceLease;
+        if (!workspaceLeasePromise) {
+            workspaceLeasePromise = (async () => {
+                if (!isRunActive()) {
+                    throw Object.assign(new Error('任务已停止，已取消工作区操作。'), { statusCode: 499 });
+                }
+                const lease = await checkpointService.acquireWorkspace(targetRoot || workspaceService.currentRoot, {
+                    kind: 'agent',
+                    chatId: options.chatId || null,
+                    label: String(options.message || '').trim().replace(/\s+/g, ' ').slice(0, 40) || options.chatId || 'Agent',
+                    isActive: isRunActive,
+                });
+                if (!isRunActive()) {
+                    lease.release();
+                    throw Object.assign(new Error('任务已停止，已取消工作区操作。'), { statusCode: 499 });
+                }
+                workspaceLease = lease;
+                bindLeaseRelease();
+                return lease;
+            })().catch((error) => {
+                workspaceLeasePromise = null;
+                throw error;
+            });
+        }
+        return workspaceLeasePromise;
     };
     try {
         return await workspaceService.run(options.config?.workspacePath || '', () => {
@@ -12109,14 +12190,15 @@ User message: ${message}${context ? `\n${context}` : ''}`;
         }
 
         if (chatId) {
-            await finalizeChatRunSession({
+            const finalized = await finalizeChatRunSession({
                 chatId,
                 messagesOverride: fullHistory,
                 assistantMsgId: assistantMsg.id,
                 outcome: 'completed',
                 broadcastReason: 'chat-finished',
                 runIdentity: res.runIdentity,
-            }).catch((err) => console.warn('[Chat] Finalize session warning:', err.message));
+            }).catch((err) => { console.warn('[Chat] Finalize session warning:', err.message); return null; });
+            if (finalized) res._sessionFinalized = true;
         }
 
         emitRunOutcome(res, 'completed');
@@ -12135,7 +12217,7 @@ User message: ${message}${context ? `\n${context}` : ''}`;
                 runOutcome: 'error',
                 todoList: null,
             }];
-            await finalizeChatRunSession({
+            const finalized = await finalizeChatRunSession({
                 chatId,
                 messagesOverride: errorHistory,
                 assistantMsgId: assistantMsgId || errorHistory.at(-1).id,
@@ -12143,7 +12225,8 @@ User message: ${message}${context ? `\n${context}` : ''}`;
                 errorText: errText,
                 broadcastReason: 'chat-error',
                 runIdentity: res.runIdentity,
-            }).catch((e) => console.warn('[Chat] Finalize error warning:', e.message));
+            }).catch((e) => { console.warn('[Chat] Finalize error warning:', e.message); return null; });
+            if (finalized) res._sessionFinalized = true;
         }
         if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ text: errText })}\n\n`);
@@ -12252,6 +12335,7 @@ Respond only with the summary.`;
             ];
 
             sessionData.messages = newHistory;
+            sessionData.pendingRequest = null;
             sessionData.contextCompression = {
                 summary: summaryText,
                 updatedAt: new Date().toISOString()
@@ -14981,8 +15065,13 @@ app.post('/api/chat', async (req, res) => {
     }
     touchInteractiveActivity('chat');
     if (chatId && BACKGROUND_RUNS.has(chatId)) {
-        res.status(409).json({ error: 'run_in_progress' });
-        return;
+        const existingRun = BACKGROUND_RUNS.get(chatId);
+        if (existingRun && (existingRun.destroyed || existingRun.writableEnded)) {
+            BACKGROUND_RUNS.delete(chatId);
+        } else {
+            res.status(409).json({ error: 'run_in_progress', text: '当前对话仍有任务运行，请稍候或停止后再试。' });
+            return;
+        }
     }
     // Pending Work runs (approval or resume) must finish in the agent loop even
     // if the user flipped the switch meanwhile.
@@ -14992,17 +15081,30 @@ app.post('/api/chat', async (req, res) => {
     reservation?.on('close', () => {
         if (reservation.destroyed && !res.writableEnded) res.end();
     });
+    const isTurnActive = () => !res.destroyed && !res.writableEnded && (!chatId || !reservation || isCurrentRun(BACKGROUND_RUNS, chatId, reservation));
+    res.once('close', () => {
+        if (!res.writableEnded && reservation && isCurrentRun(BACKGROUND_RUNS, chatId, reservation)
+            && (reservation.mode === 'initializing' || reservation.mode === 'chat')) {
+            reservation.stop();
+        }
+    });
     try {
 
     let checkpoint = null;
     if (!chatMode) {
         const root = await workspaceService.resolveRoot(config?.workspacePath || '');
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+        const turnLabel = String(message || '').trim().replace(/\s+/g, ' ').slice(0, 40) || chatId || 'Chat';
         checkpoint = await checkpointService.withWorkspace(root, async () => {
-            if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return null;
-            return prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
-        }, { kind: 'prepare', chatId });
-        if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+            if (!isTurnActive()) return null;
+            return prepareTurnCheckpoint(checkpointService, {
+                chatId,
+                root,
+                history: Array.isArray(history) ? history : [],
+                shouldContinue: isTurnActive,
+            });
+        }, { kind: 'prepare', chatId, label: turnLabel, isActive: isTurnActive });
+        if (!isTurnActive()) return;
     }
     if (res.destroyed || res.writableEnded) return;
     res.setHeader('Content-Type', 'text/event-stream');
@@ -15080,6 +15182,7 @@ app.post('/api/chat', async (req, res) => {
         }
     } else if (chatMode) {
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+        if (reservation) reservation.mode = 'chat';
         await runChatLoop(res, {
             message,
             history,
@@ -15113,6 +15216,7 @@ app.post('/api/chat', async (req, res) => {
 
         if (mode === 'CHAT') {
             if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+            if (reservation) reservation.mode = 'chat';
             await runChatLoop(res, { message, history, provider, model, ollamaUrl, chatId, assistantMsgId, uploadedFiles, config });
         } else {
             const vRes = chatId ? createBackgroundRun(chatId, 'agent', assistantMsgId, reservation) : res;
@@ -15140,6 +15244,17 @@ app.post('/api/chat', async (req, res) => {
         }
     }
     } catch (error) {
+        if (chatId && reservation && isCurrentRun(BACKGROUND_RUNS, chatId, reservation) && !reservation._sessionFinalized && !res._sessionFinalized) {
+            await finalizeChatRunSession({
+                chatId,
+                assistantMsgId,
+                outcome: error?.statusCode === 499 ? 'stopped' : 'error',
+                startedAt: reservation.startedAt || 0,
+                errorText: error?.statusCode === 499 ? '' : (error?.message || ''),
+                broadcastReason: error?.statusCode === 499 ? 'chat-stopped' : 'chat-error',
+                runIdentity: reservation,
+            }).catch(() => {});
+        }
         if (res.destroyed || res.writableEnded) return;
         if (!res.headersSent) res.status(error.statusCode || 500).json({ error: error.message, text: error.message });
         else {
@@ -15149,6 +15264,15 @@ app.post('/api/chat', async (req, res) => {
         }
     } finally {
         if (reservation && BACKGROUND_RUNS.get(chatId) === reservation) reservation.end();
+        if (chatId && reservation?.destroyed && !reservation._stopFinalized && !reservation._sessionFinalized && !res._sessionFinalized) {
+            await finalizeChatRunSession({
+                chatId,
+                assistantMsgId,
+                outcome: 'stopped',
+                startedAt: reservation.startedAt || 0,
+                broadcastReason: 'chat-stopped',
+            }).catch(() => {});
+        }
     }
 });
 
@@ -15167,18 +15291,51 @@ app.get('/api/chat/stream/:chatId', (req, res) => {
 app.post('/api/chat/stream/:chatId/stop', async (req, res) => {
     const chatId = req.params.chatId;
     const run = BACKGROUND_RUNS.get(chatId);
-    if (!run) { res.json({ stopped: false }); return; }
-    const { assistantMsgId, startedAt } = run;
-    run.stop();
+    let assistantMsgId = req.body?.assistantMsgId ?? null;
+    let startedAt = 0;
+    const hadRun = Boolean(run);
+    if (run) {
+        run._stopFinalized = true;
+        assistantMsgId = run.assistantMsgId ?? assistantMsgId;
+        startedAt = run.startedAt || 0;
+        run.stop();
+    }
     cancelAgentActionsForChat(chatId);
-    await finalizeChatRunSession({
-        chatId,
-        assistantMsgId,
-        outcome: 'stopped',
-        startedAt,
-        broadcastReason: 'chat-stopped',
-    }).catch((err) => console.warn('[Chat] Stop finalization warning:', err.message));
-    res.json({ stopped: true });
+    let repairedPending = false;
+    if (!hadRun || assistantMsgId == null) {
+        const existingSession = await safeReadJsonFile(path.join(SESSIONS_DIR, `${chatId}.json`), null);
+        if (existingSession) {
+            const pendingId = existingSession.pendingRequest?.assistantMsgId ?? null;
+            if (assistantMsgId == null && pendingId != null) {
+                assistantMsgId = pendingId;
+            }
+            if (!hadRun) {
+                const target = assistantMsgId != null
+                    ? (Array.isArray(existingSession.messages) ? existingSession.messages : []).find(m => m && String(m.id) === String(assistantMsgId))
+                    : null;
+                const alreadyTerminal = Boolean(
+                    target
+                    && (['done', 'error', 'interrupted'].includes(target.status)
+                        || ['completed', 'error', 'stopped'].includes(target.runOutcome))
+                );
+                if (existingSession.pendingRequest || (target && !alreadyTerminal)) {
+                    repairedPending = true;
+                } else {
+                    assistantMsgId = null;
+                }
+            }
+        }
+    }
+    if (hadRun || repairedPending) {
+        await finalizeChatRunSession({
+            chatId,
+            assistantMsgId,
+            outcome: 'stopped',
+            startedAt,
+            broadcastReason: 'chat-stopped',
+        }).catch((err) => console.warn('[Chat] Stop finalization warning:', err.message));
+    }
+    res.json({ stopped: hadRun || repairedPending });
 });
 // ── End background-run management routes ────────────────────────────────────
 

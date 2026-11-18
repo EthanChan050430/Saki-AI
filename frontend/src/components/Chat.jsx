@@ -2981,7 +2981,7 @@ export default function Chat({
             <section aria-label={getLocalText('消息队列', 'Message queue')} className="mb-3 rounded-2xl border border-[var(--control-border)] bg-[var(--control-bg)] p-3 text-xs text-[var(--text-dark)]">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <strong>{getLocalText('待发送队列', 'Queued messages')} · {queue?.items?.length || 0} {queue?.paused ? getLocalText('（已暂停）', '(paused)') : ''}</strong>
-                {queue?.paused && <button type="button" onClick={onQueueResume} disabled={Boolean(currentPendingRequest?.assistantMsgId) || Boolean(restoringCheckpointId)} className="text-saki-pink disabled:opacity-40">{getLocalText('继续队列', 'Continue queue')}</button>}
+                {queue?.paused && <button type="button" onClick={onQueueResume} disabled={Boolean(isGenerating || currentPendingRequest?.approvalRequest) || Boolean(restoringCheckpointId)} className="text-saki-pink disabled:opacity-40">{getLocalText('继续队列', 'Continue queue')}</button>}
               </div>
               <p className="opacity-60 mb-2">{getLocalText('队列仅保存在当前浏览器，刷新后默认暂停。运行中 Enter 默认入队。', 'Saved in this browser only; paused after refresh. Enter queues while running.')}</p>
               {queue?.note && <p role="status" className="mb-2">{queue.note}</p>}
@@ -3652,8 +3652,8 @@ export default function Chat({
               onClick={handleSend}
               disabled={Boolean(restoringCheckpointId)}
               className="p-2 sm:p-2.5 rounded-full transition-all active:scale-95 bg-gradient-to-r from-[#ff75ac] to-[#ff5b9a] text-white"
-              aria-label={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
-              title={isGenerating || currentPendingRequest?.assistantMsgId ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
+              aria-label={isGenerating || Boolean(currentPendingRequest?.approvalRequest) ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
+              title={isGenerating || Boolean(currentPendingRequest?.approvalRequest) ? getLocalText('加入队列', 'Add to queue') : getLocalText('发送', 'Send')}
             >
               <ArrowUp size={20} />
             </button>

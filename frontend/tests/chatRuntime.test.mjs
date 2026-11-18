@@ -143,6 +143,10 @@ test('App wires helpers into active dispatch, load, persistence and stream paths
   assert.match(app, /sanitizeLoadedPendingRequest\(/);
   assert.match(app, /reconcileCompletedBackgroundSnapshot\(/);
   assert.match(stream, /const finalPendingRequest = awaitingApproval \? nextPendingRequest : null;/);
+  assert.ok(stream.indexOf('runningRef.current = null;') < stream.indexOf('await persistChatState('));
+  const sendHandler = app.slice(app.indexOf('const handleSendMessage'), app.indexOf('const drainQueue'));
+  assert.match(sendHandler, /if \(!activelyBusy && pendingRef\.current && !pendingRef\.current\.approvalRequest\)/);
+  assert.match(sendHandler, /if \(activelyBusy \|\| currentQueue\.items\.length > 0\)/);
 });
 
 test('sanitizeLoadedPendingRequest drops stale pendingRequest on finalized or completed text replies', () => {

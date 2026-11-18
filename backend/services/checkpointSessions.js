@@ -5,7 +5,7 @@ function validateChatId(chatId) {
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(String(chatId || ''))) throw Object.assign(new Error('无效的对话编号。'), { statusCode: 400 });
 }
 
-async function prepareTurnCheckpoint(service, { chatId, root, history = [] }) {
+async function prepareTurnCheckpoint(service, { chatId, root, history = [], shouldContinue = null }) {
     if (!chatId) return null;
     validateChatId(chatId);
     const index = history.findLastIndex(message => message.role === 'user');
@@ -14,6 +14,7 @@ async function prepareTurnCheckpoint(service, { chatId, root, history = [] }) {
     const checkpoint = await service.ensure({
         chatId, root, messageId: userMessage.id,
         beforeMessages: history.slice(0, index), userMessage: { ...userMessage, checkpoint: undefined },
+        shouldContinue,
     });
     history[index] = { ...userMessage, checkpoint };
     return checkpoint;
