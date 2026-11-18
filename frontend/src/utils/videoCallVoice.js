@@ -181,13 +181,6 @@ export function createVideoCallVoice({ config, backendUrl }) {
   }
   return {
     synthesize, playPrepared, prime, level, echoReference,
-    // Resolve the TTS engine while the call is connecting, so the first sentence
-    // does not pay for worker/model startup.
-    async warm() {
-      await prime()
-      if (config.ttsProvider !== 'local-wasm') return
-      try { await synthesizeLocalSentence('嗯', { sid: Number(config.localTtsSid) || 0, speed: 1 }) } catch {}
-    },
     close() {
       finishActive?.()
       if (context && context.state !== 'closed') void context.close().catch(() => {})

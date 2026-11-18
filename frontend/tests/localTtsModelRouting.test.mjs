@@ -61,6 +61,7 @@ test('China uses 123 first and falls back to OneDrive after a corrupt response',
     },
   });
   assert.deepEqual(result.requests, [sourcesUrl, panUrl, relay('onedrive')]);
+  assert.equal(result.progress[0].type, 'model-cache-miss');
   assert.deepEqual(result.model, model);
   assert.deepEqual(result.written, model);
   assert.equal(result.progress.filter(message => message.type === 'download-source').at(-1).source, 'onedrive');
@@ -79,6 +80,7 @@ test('the browser public IP determines overseas order and skips share-only sourc
 test('a cache hit avoids both IP lookup and mirror requests', async () => {
   const result = await runAuto({ cached: true });
   assert.deepEqual(result.requests, []);
+  assert.deepEqual(result.progress, []);
   assert.deepEqual(result.model, model);
   assert.equal(result.written, undefined);
 });

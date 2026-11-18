@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { ArrowUp, Bot, CameraOff, Check, Globe, Keyboard, Maximize, Maximize2, Minimize, Minimize2, MessageSquare, Mic, MicOff, Moon, Paperclip, PhoneOff, Square, Sun, Video, X } from 'lucide-react'
 import VideoCallComponent from './VideoCallComponent'
 import VideoCallCaptions from './VideoCallCaptions'
+import VideoCallModelStatus from './VideoCallModelStatus'
 import { createVideoCallMotion } from '../utils/videoCallMotion'
 import { createVideoCallQuality } from '../utils/videoCallQuality'
 import { callPointerPosition, callTouchRegion } from '../utils/videoCallPointer'
 import { createVideoCallVoice } from '../utils/videoCallVoice'
+import { initLocalTts, subscribeLocalTtsStatus } from '../utils/localTtsEngine'
 import { createSpeechPipeline, createSpeechSegmenter, toSpokenText } from '../utils/videoCallSpeech'
 import { startCallMic } from '../utils/videoCallMic'
 import { monitorCallMicLevel } from '../utils/videoCallMicLevel'
@@ -106,6 +108,8 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [avatarReady, setAvatarReady] = useState(false)
+  const [voiceModel, setVoiceModel] = useState(null)
+  const usesWasm = config.ttsProvider === 'local-wasm'
   const ringtoneRef = useRef(null)
   const dialog = useRef(null), stage = useRef(null), avatar = useRef(null), cameraVideo = useRef(null), picker = useRef(null), composer = useRef(null)
   const fullscreenExitAt = useRef(-Infinity)
@@ -382,6 +386,13 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
   }
 
   useEffect(() => {
+    if (!usesWasm) return
+    const unsubscribe = subscribeLocalTtsStatus(status => setVoiceModel(status.downloadPhase ? status : null))
+    void initLocalTts().catch(() => {})
+    return unsubscribe
+  }, [usesWasm])
+
+  useEffect(() => {
     if (avatarReady) return undefined
     const ringtone = startCallRingtone()
     ringtoneRef.current = ringtone
@@ -398,7 +409,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
     if (!node.open) node.showModal()
     void voice.prime()
     let connectedAt = null
-    let raf, warmVoice, nextPose = -Infinity, lastStatus = -Infinity, isAvatarReady = false
+    let raf, nextPose = -Infinity, lastStatus = -Infinity, isAvatarReady = false
     const markAvatarReady = () => {
       if (isAvatarReady || !state.alive) return
       isAvatarReady = true
@@ -407,7 +418,6 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
       connectedAt = Date.now()
       setElapsed(0)
       setAvatarReady(true)
-      warmVoice = setTimeout(() => { void voice.warm() }, 1500)
     }
     const clock = setInterval(() => {
       if (connectedAt !== null) setElapsed(Math.floor((Date.now() - connectedAt) / 1000))
@@ -451,7 +461,6 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
       state.alive = false
       clearInterval(clock)
       clearTimeout(readyFallback)
-      clearTimeout(warmVoice)
       cancelAnimationFrame(raf)
       window.removeEventListener('message', message)
       document.removeEventListener('visibilitychange', resetFrames)
@@ -949,6 +958,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
         <p className="call-connecting-hint">
           {l('正在建立实时形象与语音连线', 'Connecting live avatar & voice…', 'ライブアバターと音声を接続しています…')}
         </p>
+        {usesWasm && !avatarReady && voiceModel && <VideoCallModelStatus model={voiceModel} localize={l} />}
       </div>
     </div>
     <header className="call-top">
@@ -1045,6 +1055,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
           </>}
         </button>}
       </div>
+      {usesWasm && avatarReady && voiceModel && <VideoCallModelStatus model={voiceModel} localize={l} connected />}
     </header>
     {camera && (
       <div

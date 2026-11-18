@@ -28,9 +28,11 @@ const MAX_FRAMES = 188
 const MIN_FRAMES = 2
 const BROWSER_NETWORK_RETRY_DELAYS = [400, 800]
 
-const matchesPlayback = (text, references) => [...references].some(reference => looksLikeEcho(text, reference, true))
+const matchesPlayback = (text, references, allowApproximate = true) => (
+  [...references].some(reference => looksLikeEcho(text, reference, true, allowApproximate))
+)
 
-export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', hasNearEndSpeech = () => true, onSpeech, onDraft, onText, onError }) {
+export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', hasNearEndSpeech = () => false, onSpeech, onDraft, onText, onError }) {
   if (signal.aborted) return
 
   if (mode === 'server') {
@@ -120,7 +122,9 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
       const result = event.results[i]
       const value = result[0].transcript.trim()
       if (result.isFinal) finalCount = i + 1
-      if (!value || (overlapsPlayback && (!nearEndSpeech || matchesPlayback(value, references)))) continue
+      // A clear new transcript can be quiet. Use acoustic evidence only when
+      // the text partially resembles playback, where matching is ambiguous.
+      if (!value || matchesPlayback(value, references, !nearEndSpeech)) continue
       if (result.isFinal) {
         hasNewFinal = true
         committed += (committed ? ' ' : '') + value
@@ -239,7 +243,7 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     const reference = echoReference()
     const output = Math.max(speakerLevel(), reference ? .15 : 0)
     const captured = { frame, reference }
-    const gate = Math.max(.009, floor * 2.6) + output * (echoCancellation ? .14 : .22)
+    const gate = Math.max(.009, floor * 2.6) + output * (echoCancellation ? .10 : .16)
     const heard = level > gate
     // Hysteresis keeps the utterance open through a soft consonant or a short
     // pause instead of cutting the last word of a sentence in half.
@@ -248,7 +252,7 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     if (!started) {
       lead = [...lead.slice(-5), captured]
       voiced = heard ? voiced + 1 : 0
-      if (voiced < VOICED_TO_START + (output ? 1 : 0)) return
+      if (voiced < VOICED_TO_START) return
       started = true
       utterance = lead
       lead = []

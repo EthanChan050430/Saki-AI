@@ -15,6 +15,8 @@ let engineState = {
   error: null,
   cacheUnavailable: false,
   activeSource: '',
+  downloadPhase: '',
+  downloadProgress: null,
 };
 
 let initPromise = null;
@@ -92,10 +94,13 @@ export function initLocalTts(file) {
     rejectInit = reject;
   });
   initPromise = currentInit;
-  updateState({ status: STATUS_LOADING, progressText: '正在加载本地语音模型...', percent: 0, error: null, cacheUnavailable: false, activeSource: '' });
+  updateState({
+    status: STATUS_LOADING, progressText: '正在加载本地语音模型...', percent: 0, error: null,
+    cacheUnavailable: false, activeSource: '', downloadPhase: '', downloadProgress: null,
+  });
 
   try {
-    worker = new Worker('/tts-wasm/saki-tts.worker.js?v=3');
+    worker = new Worker('/tts-wasm/saki-tts.worker.js?v=4');
   } catch (err) {
     const msg = err?.message || '无法启动语音 Web Worker';
     updateState({ status: STATUS_ERROR, error: msg, progressText: msg });
@@ -115,7 +120,7 @@ export function initLocalTts(file) {
     pendingJobs.clear();
     rejectInit(new Error(msg));
     updateState(cancelled
-      ? { status: STATUS_IDLE, error: null, progressText: '', percent: 0 }
+      ? { status: STATUS_IDLE, error: null, progressText: '', percent: 0, downloadPhase: '', downloadProgress: null }
       : { status: STATUS_ERROR, error: msg, progressText: msg });
   };
   cancelInit = () => failInit('已切换下载线路。', true);
@@ -124,13 +129,21 @@ export function initLocalTts(file) {
   currentWorker.onmessage = (e) => {
     if (worker !== currentWorker) return;
     const data = e.data || {};
+    if (data.type === 'model-cache-miss') {
+      updateState({ downloadPhase: 'preparing' });
+      return;
+    }
+
     if (data.type === 'selecting-source') {
-      updateState({ progressText: '正在按 IP 归属地选择下载线路...' });
+      updateState({ downloadPhase: 'selecting', progressText: '正在按 IP 归属地选择下载线路...' });
       return;
     }
 
     if (data.type === 'download-source') {
-      updateState({ activeSource: data.source, percent: 0, progressText: '正在连接模型下载线路...' });
+      updateState({
+        activeSource: data.source, percent: 0, progressText: '正在连接模型下载线路...',
+        downloadPhase: 'connecting', downloadProgress: null,
+      });
       return;
     }
 
@@ -140,15 +153,21 @@ export function initLocalTts(file) {
       if (match) {
         const loaded = Number(match[1]);
         const total = Number(match[2]) || 1;
-        const pct = Math.min(100, Math.round((loaded / total) * 100));
+        const pct = Math.min(100, Math.floor((loaded / total) * 100));
+        if (engineState.downloadPhase === 'downloading' && engineState.percent === pct && engineState.downloadProgress?.total === total) return;
         const loadedMb = (loaded / (1024 * 1024)).toFixed(1);
         const totalMb = (total / (1024 * 1024)).toFixed(1);
         updateState({
           progressText: `正在下载语音模型 ${pct}% (${loadedMb}/${totalMb} MB)`,
           percent: pct,
+          downloadPhase: 'downloading',
+          downloadProgress: { loaded, total },
         });
       } else if (raw === 'Running...') {
-        updateState({ progressText: '正在初始化语音推理引擎...', percent: 99 });
+        updateState({
+          progressText: '正在初始化语音推理引擎...', percent: 99,
+          downloadPhase: engineState.downloadPhase && 'initializing', downloadProgress: null,
+        });
       }
       return;
     }
@@ -165,6 +184,8 @@ export function initLocalTts(file) {
         status: STATUS_READY,
         progressText: '本地语音模型已就绪',
         percent: 100,
+        downloadPhase: '',
+        downloadProgress: null,
         sampleRate: data.sampleRate || 16000,
         numSpeakers: data.numSpeakers || 1,
         error: null,

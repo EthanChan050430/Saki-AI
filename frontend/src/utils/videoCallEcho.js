@@ -2,7 +2,7 @@ const normalize = value => String(value || '').normalize('NFKC').toLowerCase().r
 
 // Use stricter matching when the microphone actually overlapped playback.
 // Without that timing evidence, keep short replies that share common words.
-export function looksLikeEcho(heardText, spokenText, overlapsPlayback = false) {
+export function looksLikeEcho(heardText, spokenText, overlapsPlayback = false, allowApproximate = true) {
   const heard = normalize(heardText)
   const spoken = normalize(spokenText)
   // During playback or its echo tail, even a clipped syllable can be speaker bleed.
@@ -13,6 +13,7 @@ export function looksLikeEcho(heardText, spokenText, overlapsPlayback = false) {
   if (spoken.includes(heard)) {
     return heard.length >= 10 || heard.length >= spoken.length * 0.5
   }
+  if (!allowApproximate) return false
   // ASR often introduces homophones or drops particles when picking up speaker
   // bleed; check bigram containment so near-matches are still treated as echo.
   const spokenBigrams = new Set()

@@ -107,7 +107,11 @@ async function loadModelPackage(file, source, sourcesUrl) {
     const cached = await cache?.match(CACHE_KEY).catch(() => null);
     const cachedBytes = await cached?.arrayBuffer().catch(() => null);
     if (cachedBytes?.byteLength === MODEL_SIZE) return cachedBytes;
-    if (source === 'server' || (source === 'auto' && !self.crypto?.subtle)) return null;
+    self.postMessage({ type: 'model-cache-miss' });
+    if (source === 'server' || (source === 'auto' && !self.crypto?.subtle)) {
+      self.postMessage({ type: 'download-source', source: 'server' });
+      return null;
+    }
   }
 
   let bytes;

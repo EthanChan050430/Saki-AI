@@ -103,7 +103,7 @@ test('browser recognition rejects a short echo even when the final arrives after
   h.controller.abort()
 })
 
-test('browser barge-in requires microphone evidence when recognition overlaps playback', t => {
+test('browser barge-in accepts quiet new speech and uses microphone evidence for ambiguous text', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const instances = browserRecognizer(t)
   const h = harness(t, async () => {})
@@ -113,7 +113,7 @@ test('browser barge-in requires microphone evidence when recognition overlaps pl
     hasNearEndSpeech: () => nearEndSpeech, onDraft: () => {},
   })
   const recognition = instances[0]
-  const garbledEcho = result('We should cheer at the show', true)
+  const garbledEcho = result('The wether should clear up tomorrow', true)
   recognition.onspeechstart()
   recognition.onresult({ results: [garbledEcho] })
   t.mock.timers.tick(250)
@@ -121,13 +121,21 @@ test('browser barge-in requires microphone evidence when recognition overlaps pl
   assert.deepEqual(h.texts, [])
 
   recognition.onspeechstart()
-  nearEndSpeech = true
-  recognition.onspeechend()
-  nearEndSpeech = false
-  recognition.onresult({ results: [garbledEcho, result('Wait, can I ask something?', true)] })
+  const quietSpeech = result('Wait, can I ask something?', true)
+  recognition.onresult({ results: [garbledEcho, quietSpeech] })
   t.mock.timers.tick(250)
   assert.equal(h.speech.length, 1)
   assert.deepEqual(h.texts, ['Wait, can I ask something?'])
+
+  recognition.onspeechstart()
+  nearEndSpeech = true
+  recognition.onspeechend()
+  nearEndSpeech = false
+  const relatedQuestion = result('Will the weather clear up tomorrow morning?', true)
+  recognition.onresult({ results: [garbledEcho, quietSpeech, relatedQuestion] })
+  t.mock.timers.tick(250)
+  assert.equal(h.speech.length, 2)
+  assert.deepEqual(h.texts, ['Wait, can I ask something?', 'Will the weather clear up tomorrow morning?'])
   h.controller.abort()
 })
 
@@ -323,15 +331,15 @@ test('speaker bleed while Saki is talking does not trigger immediate barge-in', 
   await tick()
   assert.deepEqual(h.speech, [])
   assert.equal(uploaded.length, 0, 'moderate speaker bleed is rejected at the VAD gate')
-  for (const frame of loud(2, 0.08)) port.onmessage(frame)
+  for (const frame of loud(2, 0.05)) port.onmessage(frame)
   for (const frame of loud(6, 0)) port.onmessage(frame)
   await tick()
-  assert.equal(uploaded.length, 0, 'a brief loud burst during playback does not start recording')
+  assert.equal(uploaded.length, 1, 'a short, quieter interruption reaches transcription')
   for (const frame of loud(4, 0.08)) port.onmessage(frame)
   for (let i = 0; i < 6; i++) port.onmessage({ data: new Float32Array(1024) })
   await tick()
   assert.deepEqual(h.speech, [], 'louder audio while Saki speaks still waits for echo-filtered transcription')
-  assert.equal(uploaded.length, 1, 'captured audio goes to transcription for real barge-in')
+  assert.equal(uploaded.length, 2, 'captured audio goes to transcription for real barge-in')
   h.controller.abort()
 })
 
@@ -345,13 +353,13 @@ test('server recognition filters delayed echo using the playback that overlapped
   h.options.echoReference = () => reference
   await startLocalCallMic(h.options)
   const port = h.nodes[0].port
-  const capture = async () => {
-    for (const frame of loud(4)) port.onmessage(frame)
+  const capture = async (count, amplitude) => {
+    for (const frame of loud(count, amplitude)) port.onmessage(frame)
     for (const frame of loud(6, 0)) port.onmessage(frame)
     await tick()
   }
 
-  await capture()
+  await capture(4, 0.1)
   reference = ''
   respond('明天')
   await tick()
@@ -359,7 +367,7 @@ test('server recognition filters delayed echo using the playback that overlapped
   assert.deepEqual(h.texts, [])
 
   reference = '那就这样，我们明天再联系。'
-  await capture()
+  await capture(2, 0.04)
   respond('等等，我还有个问题')
   await tick()
   assert.deepEqual(h.texts, ['等等，我还有个问题'])

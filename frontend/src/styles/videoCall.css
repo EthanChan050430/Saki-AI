@@ -1017,6 +1017,40 @@
   color: rgba(74, 48, 62, .72);
 }
 
+.call-voice-model {
+  box-sizing: border-box;
+  width: min(292px, 100%);
+  margin-top: 14px;
+  padding: 9px 12px;
+  border: 1px solid #f4c5e04d;
+  border-radius: 12px;
+  background: #282030dd;
+  color: #fff1f9;
+  text-align: start;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.call-voice-model-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; }
+.call-voice-model-source,.call-voice-model-bytes { opacity: .76; font-size: 11px; }
+.call-voice-model-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.call-voice-model-progress progress { width: 100%; height: 5px; accent-color: #ff8bbd; }
+.call-voice-model-bytes { grid-column: 1 / -1; }
+.call-top > .call-voice-model { grid-column: 1 / -1; justify-self: center; margin-top: 0; }
+
+.video-call[data-call-theme="light"] .call-voice-model {
+  background: #fff4faed;
+  border-color: #cb86a363;
+  color: #55283d;
+}
+
 @keyframes call-ring-pulse {
   0% { transform: scale(.86); opacity: .85; }
   100% { transform: scale(1.65); opacity: 0; }
