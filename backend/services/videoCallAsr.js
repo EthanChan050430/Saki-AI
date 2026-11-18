@@ -4,24 +4,30 @@ const { join } = require('node:path');
 const { existsSync } = require('node:fs');
 
 const SCRIPT = join(__dirname, 'videoCallAsr.py');
+const windows = process.platform === 'win32';
+const venvPython = join(__dirname, '../../.venv-video-call', windows ? 'Scripts/python.exe' : 'bin/python');
 
 // The worker needs a Python interpreter; the repository venv is preferred so the
 // transcribe dependencies do not have to be installed globally.
 function resolvePython() {
     if (process.env.SAKI_ASR_PYTHON) return process.env.SAKI_ASR_PYTHON;
-    const windows = process.platform === 'win32';
-    const environment = join(__dirname, '../../.venv-video-call', windows ? 'Scripts/python.exe' : 'bin/python');
-    if (existsSync(environment)) return environment;
+    if (existsSync(venvPython)) return venvPython;
     return windows ? 'python' : 'python3';
 }
 
-function createVideoCallAsr() {
+function serverAsrEnabled() {
+    const setting = process.env.SAKI_ASR_ENABLED;
+    if (setting === '0' || setting === '1') return setting === '1';
+    return Boolean(process.env.SAKI_ASR_PYTHON) || existsSync(venvPython);
+}
+
+function createVideoCallAsr({ enabled = serverAsrEnabled() } = {}) {
     let worker, ready, info, stopWorker;
     let retryAt = 0;
     let sequence = 0;
     const jobs = new Map();
     const unavailable = () => new Error('本地语音识别未就绪');
-    const canStart = () => process.env.SAKI_ASR_ENABLED !== '0' && Date.now() >= retryAt;
+    const canStart = () => enabled && Date.now() >= retryAt;
 
     function start() {
         if (ready) return ready;

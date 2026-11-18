@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { startLocalCallMic } from '../src/utils/videoCallMic.js'
+import { startCallMic, startLocalCallMic } from '../src/utils/videoCallMic.js'
 
 function harness(t, fetcher) {
   const saved = Object.fromEntries(['AudioContext', 'AudioWorkletNode', 'fetch'].map(key => [key, globalThis[key]]))
@@ -18,15 +18,93 @@ function harness(t, fetcher) {
   globalThis.fetch = fetcher
   t.after(() => Object.assign(globalThis, saved))
   const controller = new AbortController(), texts = [], statuses = [], errors = [], speech = []
-  const options = { stream: { getAudioTracks: () => [{ getSettings: () => ({ echoCancellation: true }) }] },
+  const track = { readyState: 'live', getSettings: () => ({ echoCancellation: true }) }
+  const options = { stream: { getAudioTracks: () => [track] },
     backendUrl: '', base: '/', lang: 'zh-CN', signal: controller.signal, speakerLevel: () => 0,
     onSpeech: () => speech.push(performance.now()), onText: text => texts.push(text),
     onStatus: state => statuses.push(state), onError: error => errors.push(error) }
-  return { controller, options, nodes, audios, texts, statuses, errors, speech }
+  return { controller, options, nodes, audios, texts, statuses, errors, speech, track }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const readyResponse = { ok: true, json: async () => ({ state: 'ready' }) }
 const loud = (count, amplitude = .1) => Array.from({ length: count }, () => ({ data: new Float32Array(1024).fill(amplitude) }))
+
+function browserRecognizer(t) {
+  const saved = globalThis.SpeechRecognition
+  const instances = []
+  globalThis.SpeechRecognition = class {
+    constructor() { this.starts = []; instances.push(this) }
+    start(track) { this.starts.push(track) }
+    abort() { this.aborted = true }
+  }
+  t.after(() => { globalThis.SpeechRecognition = saved })
+  return instances
+}
+
+const result = (transcript, isFinal = false) => Object.assign([{ transcript }], { isFinal })
+
+test('browser recognition streams drafts and sends each final once without calling the server', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  let requests = 0
+  const h = harness(t, async () => { requests++ })
+  const drafts = []
+  startCallMic({ ...h.options, isEcho: value => value === 'Saki 的声音', onDraft: value => drafts.push(value) })
+  const recognition = instances[0]
+  assert.equal(recognition.lang, 'zh-CN')
+  assert.equal(recognition.continuous, true)
+  assert.equal(recognition.interimResults, true)
+  assert.deepEqual(recognition.starts, [h.track])
+
+  const echo = result('Saki 的声音', true)
+  recognition.onresult({ results: [echo, result('你好')] })
+  assert.deepEqual(drafts, ['你好'])
+  assert.deepEqual(h.texts, [])
+  const final = result('你好，Saki', true)
+  recognition.onresult({ results: [echo, final] })
+  t.mock.timers.tick(250)
+  recognition.onresult({ results: [echo, final] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.texts, ['你好，Saki'])
+
+  recognition.onerror({ error: 'no-speech' })
+  recognition.onend()
+  t.mock.timers.tick(180)
+  assert.deepEqual(recognition.starts, [h.track, h.track])
+  recognition.onresult({ results: [result('挂断时说的话', true)] })
+  h.controller.abort()
+  t.mock.timers.tick(250)
+  assert.equal(recognition.aborted, true)
+  assert.deepEqual(h.texts, ['你好，Saki'])
+  assert.deepEqual(h.errors, [])
+  assert.equal(requests, 0)
+})
+
+test('browser failure does not hand the microphone to the server', t => {
+  const instances = browserRecognizer(t)
+  let requests = 0
+  const h = harness(t, async () => { requests++ })
+  startCallMic({ ...h.options, mode: 'browser', isEcho: () => false, onDraft: () => {} })
+  instances[0].onerror({ error: 'network' })
+  assert.deepEqual(h.errors, ['network'])
+  assert.equal(instances[0].aborted, true)
+  assert.equal(requests, 0)
+})
+
+test('server mode uses only the server and never opens a recorder if disabled', async t => {
+  const instances = browserRecognizer(t)
+  const requests = []
+  const h = harness(t, async url => {
+    requests.push(url)
+    return { ok: true, json: async () => ({ state: 'unavailable' }) }
+  })
+  startCallMic({ ...h.options, mode: 'server', isEcho: () => false, onDraft: () => {} })
+  await tick()
+  assert.deepEqual(requests, ['/api/video-call/transcribe/ready'])
+  assert.deepEqual(h.errors, ['server-unavailable'])
+  assert.equal(h.audios.length, 0)
+  assert.equal(instances.length, 0)
+})
 
 // Exercise the capture protocol with actual PCM samples, including startup and cancellation.
 test('local microphone waits for model readiness, transcribes PCM and cleans up', async t => {
@@ -64,7 +142,7 @@ test('hanging up during local model startup never opens a recorder', async t => 
   ready(readyResponse)
   await started
   assert.equal(h.nodes.length, 0)
-  assert.equal(h.audios[0].state, 'closed')
+  assert.equal(h.audios.length, 0)
   assert.deepEqual(h.texts, [])
 })
 
@@ -80,11 +158,11 @@ test('readiness keeps polling during warm-up and aborts on hang-up', async t => 
   assert.equal(h.nodes.length, 0)
   h.controller.abort()
   await started
-  assert.equal(h.audios[0].state, 'closed')
+  assert.equal(h.audios.length, 0)
   assert.equal(requests, 1)
 })
 
-test('failed transcription reports failure for browser fallback', async t => {
+test('failed server transcription reports failure', async t => {
   const h = harness(t, async url => url.endsWith('/ready') ? readyResponse : { ok: false })
   await startLocalCallMic(h.options)
   const port = h.nodes[0].port

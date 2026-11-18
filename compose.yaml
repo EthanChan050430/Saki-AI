@@ -1,6 +1,10 @@
 services:
   saki:
-    build: .
+    build:
+      context: .
+      args:
+        SAKI_ASR_ENABLED: ${SAKI_ASR_ENABLED:-0}
+        SAKI_ASR_BUNDLE_MODEL: ${SAKI_ASR_BUNDLE_MODEL:-1}
     image: saki-ai:light
     init: true
     restart: unless-stopped

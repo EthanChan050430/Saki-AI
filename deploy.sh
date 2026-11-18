@@ -6,7 +6,6 @@ PID_FILE="$STATE_DIR/backend.pid"
 LOG_FILE="$STATE_DIR/backend.log"
 export NODE_ENV="${NODE_ENV:-production}"
 export SAKI_PROFILE="${SAKI_PROFILE:-light}"
-export SAKI_ASR_PREWARM="${SAKI_ASR_PREWARM:-1}"
 mkdir -p "$STATE_DIR"
 fail() { printf '[Saki] %s\n' "$*" >&2; exit 1; }
 running() {

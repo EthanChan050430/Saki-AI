@@ -71,6 +71,7 @@ const AGENT_PERMISSION_MODE_FULL = 'full-access';
 const MOBILE_BREAKPOINT = 768;
 const UTILITY_WINDOW_LIMIT = 4;
 const MODEL_SETTINGS_LINK = 'agent://settings/models';
+const CALL_MIC_MODE_KEY = 'saki_video_call_mic_mode';
 const ONBOARDING_STORAGE_KEY = 'agent_onboarding_completed_v1';
 const CHARACTER_ACTIVITY_ANIMATIONS = new Set([
   'bartending',
@@ -592,6 +593,14 @@ function App() {
   currentChatIdRef.current = currentChatId;
   const [isGenerating, setIsGenerating] = useState(false);
   const [videoCall, setVideoCall] = useState(null);
+  const [callMicMode, setCallMicMode] = useState(() => {
+    try { return localStorage.getItem(CALL_MIC_MODE_KEY) === 'server' ? 'server' : 'browser'; }
+    catch { return 'browser'; }
+  });
+  const changeCallMicMode = mode => {
+    setCallMicMode(mode);
+    try { localStorage.setItem(CALL_MIC_MODE_KEY, mode); } catch { /* Keep the choice for this session. */ }
+  };
   const videoCallRef = useRef(null);
   const [contextStatus, setContextStatus] = useState(null);
   const abortControllerRef = useRef(null);
@@ -3927,6 +3936,8 @@ function App() {
           <SettingsModal
             config={config}
             setConfig={setConfig}
+            callMicMode={callMicMode}
+            onChangeCallMicMode={changeCallMicMode}
             onClose={() => closeDesktopUtilityWindow('settings')}
             models={models}
             onUpdateProviderModels={handleUpdateProviderModels}
@@ -4123,7 +4134,7 @@ function App() {
         </AnimatePresence>
       </div>
       {videoCall && <Suspense fallback={null}>
-        <VideoCall config={videoCall.config} modelLabel={videoCall.modelLabel} models={models} backendUrl={BACKEND_URL} language={i18n.resolvedLanguage || i18n.language} theme={theme}
+        <VideoCall config={videoCall.config} micMode={callMicMode} modelLabel={videoCall.modelLabel} models={models} backendUrl={BACKEND_URL} language={i18n.resolvedLanguage || i18n.language} theme={theme}
           messages={videoCall.base} sessionId={videoCall.sessionId} onTurn={syncVideoCallMessages} onClose={closeVideoCall} onToggleTheme={toggleTheme} />
       </Suspense>}
       <AnimatePresence>
@@ -4208,6 +4219,8 @@ function App() {
               key="settings-modal"
               config={config}
               setConfig={setConfig}
+              callMicMode={callMicMode}
+              onChangeCallMicMode={changeCallMicMode}
               onClose={() => setSettingsOpen(false)}
               models={models}
               onUpdateProviderModels={handleUpdateProviderModels}

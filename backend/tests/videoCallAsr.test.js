@@ -35,7 +35,7 @@ function stubWorker(t) {
     writeFileSync(path, STUB);
     const saved = process.env.SAKI_ASR_SCRIPT;
     process.env.SAKI_ASR_SCRIPT = path;
-    const asr = createVideoCallAsr();
+    const asr = createVideoCallAsr({ enabled: true });
     t.after(() => {
         asr.stop();
         if (saved === undefined) delete process.env.SAKI_ASR_SCRIPT;
@@ -46,6 +46,16 @@ function stubWorker(t) {
 }
 
 const audio = value => Buffer.from(value);
+
+test('explicitly disabled server transcription never starts the worker', async () => {
+    const saved = process.env.SAKI_ASR_ENABLED;
+    process.env.SAKI_ASR_ENABLED = '0';
+    const asr = createVideoCallAsr();
+    if (saved === undefined) delete process.env.SAKI_ASR_ENABLED;
+    else process.env.SAKI_ASR_ENABLED = saved;
+    assert.deepEqual(asr.readiness(), { state: 'unavailable' });
+    await assert.rejects(asr.transcribe(audio('hello'), 'zh', new AbortController().signal));
+});
 
 test('worker readiness is cached and reported, transcripts round-trip', { skip: !pythonWorks && 'python unavailable' }, async t => {
     const asr = stubWorker(t);

@@ -25,18 +25,102 @@ const QUIET_TO_STOP = 6
 const MAX_FRAMES = 188
 const MIN_FRAMES = 2
 
+export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, isEcho, onSpeech, onDraft, onText, onError }) {
+  if (signal.aborted) return
+
+  if (mode === 'server') {
+    if (!stream) { onError('audio-capture'); return }
+    const fail = () => { if (!signal.aborted) onError('server-unavailable') }
+    void startLocalCallMic({
+      stream, backendUrl, base, lang, signal, speakerLevel, onSpeech,
+      onText: value => {
+        if (signal.aborted || isEcho(value)) return
+        onSpeech()
+        onText(value)
+      },
+      onError: fail,
+    }).catch(fail)
+    return
+  }
+
+  const Recognition = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition
+  if (!Recognition) { onError('unsupported'); return }
+
+  let recognition
+  try { recognition = new Recognition() } catch { onError('start-failed'); return }
+
+  let sendTimer, restartTimer, committed = '', finalCount = 0
+  const dispatch = () => {
+    clearTimeout(sendTimer)
+    if (!committed || signal.aborted) return
+    const value = committed
+    committed = ''
+    onText(value)
+  }
+  const stop = () => {
+    clearTimeout(sendTimer)
+    clearTimeout(restartTimer)
+    signal.removeEventListener('abort', stop)
+    recognition.onresult = recognition.onerror = recognition.onend = null
+    recognition.abort()
+  }
+  const browserFailed = reason => {
+    if (signal.aborted) return
+    stop()
+    if (reason !== 'not-allowed') dispatch()
+    onDraft('')
+    onError(reason)
+  }
+  const start = () => {
+    if (signal.aborted) return
+    const track = stream?.getAudioTracks()[0]
+    if (track?.readyState === 'live') {
+      try { recognition.start(track); return } catch { /* Older implementations can use the default microphone. */ }
+    }
+    try { recognition.start() } catch { browserFailed('start-failed') }
+  }
+
+  recognition.lang = lang
+  recognition.continuous = true
+  recognition.interimResults = true
+  recognition.onresult = event => {
+    if (signal.aborted) return
+    const drafts = []
+    let hasNewFinal = false
+    for (let i = finalCount; i < event.results.length; i += 1) {
+      const result = event.results[i]
+      const value = result[0].transcript.trim()
+      if (result.isFinal) finalCount = i + 1
+      if (!value || isEcho(value)) continue
+      if (result.isFinal) {
+        hasNewFinal = true
+        committed += (committed ? ' ' : '') + value
+      } else drafts.push(value)
+    }
+    const draft = drafts.join(' ')
+    if (draft || hasNewFinal) onSpeech(draft, hasNewFinal)
+    onDraft([committed, draft].filter(Boolean).join(' '))
+    clearTimeout(sendTimer)
+    if (committed && !draft) sendTimer = setTimeout(dispatch, 250)
+  }
+  recognition.onerror = ({ error }) => {
+    if (error !== 'aborted' && error !== 'no-speech') browserFailed(error)
+  }
+  recognition.onend = () => {
+    if (signal.aborted) return
+    dispatch()
+    finalCount = 0
+    onDraft('')
+    if (!signal.aborted) restartTimer = setTimeout(start, 180)
+  }
+  signal.addEventListener('abort', stop, { once: true })
+  start()
+}
+
 export async function startLocalCallMic({ stream, backendUrl, base, lang, signal, speakerLevel, onSpeech, onText, onError, onStatus = () => {} }) {
   if (signal.aborted) return
   const Audio = globalThis.AudioContext || globalThis.webkitAudioContext
   if (!Audio) throw new Error('当前浏览器不支持本机语音采集。')
-  const audio = new Audio()
-  let node
-  const close = () => {
-    node?.port.close()
-    signal.removeEventListener('abort', close)
-    if (audio.state !== 'closed') void audio.close().catch(() => {})
-  }
-  signal.addEventListener('abort', close, { once: true })
   const prepare = async () => {
     onStatus('starting')
     const startup = AbortSignal.any([signal, AbortSignal.timeout(185000)])
@@ -61,8 +145,21 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     }
     startup.throwIfAborted()
   }
+  try { await prepare() } catch (error) {
+    if (!signal.aborted) throw error
+    return
+  }
+  if (signal.aborted) return
+  const audio = new Audio()
+  let node
+  const close = () => {
+    node?.port.close()
+    signal.removeEventListener('abort', close)
+    if (audio.state !== 'closed') void audio.close().catch(() => {})
+  }
+  signal.addEventListener('abort', close, { once: true })
   try {
-    await Promise.all([audio.audioWorklet.addModule(`${base}assets/video-call/mic-capture.js`), prepare()])
+    await audio.audioWorklet.addModule(`${base}assets/video-call/mic-capture.js`)
     if (signal.aborted) { close(); return }
     node = new AudioWorkletNode(audio, 'call-mic-capture', { outputChannelCount: [1] })
     audio.createMediaStreamSource(stream).connect(node)

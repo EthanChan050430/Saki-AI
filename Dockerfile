@@ -22,17 +22,19 @@ WORKDIR /app
 COPY --from=dependencies --chown=node:node /app/backend/node_modules ./backend/node_modules
 COPY --chown=node:node backend/server.js ./backend/server.js
 COPY --chown=node:node backend/services ./backend/services
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
-    && python3 -m venv /app/.venv-video-call \
-    && /app/.venv-video-call/bin/pip install --no-cache-dir -r backend/services/video-call-requirements.txt \
-    && rm -rf /var/lib/apt/lists/*
-ENV HF_HOME=/app/data/asr-cache
+ARG SAKI_ASR_ENABLED=0
 ARG SAKI_ASR_BUNDLE_MODEL=1
-RUN if [ "$SAKI_ASR_BUNDLE_MODEL" = 1 ]; then \
-        /app/.venv-video-call/bin/python -c "from faster_whisper.utils import download_model; download_model('base', output_dir='/app/asr-models/base')" && \
-        rm -rf /app/data/asr-cache; \
+RUN if [ "$SAKI_ASR_ENABLED" = 1 ]; then \
+        apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && \
+        python3 -m venv /app/.venv-video-call && \
+        /app/.venv-video-call/bin/pip install --no-cache-dir -r backend/services/video-call-requirements.txt && \
+        rm -rf /var/lib/apt/lists/* && \
+        if [ "$SAKI_ASR_BUNDLE_MODEL" = 1 ]; then \
+            /app/.venv-video-call/bin/python -c "from faster_whisper.utils import download_model; download_model('base', output_dir='/app/asr-models/base')" && \
+            rm -rf /root/.cache/huggingface; \
+        fi; \
     fi
-ENV SAKI_ASR_PREWARM=1
+ENV SAKI_ASR_ENABLED=${SAKI_ASR_ENABLED} HF_HOME=/app/data/asr-cache
 COPY --chown=node:node data/global_config.example.json ./defaults/global_config.example.json
 COPY --from=frontend --chown=node:node /build/frontend/dist ./frontend/dist
 RUN mkdir -p /app/data && chown node:node /app/data

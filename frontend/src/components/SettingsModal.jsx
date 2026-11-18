@@ -33,7 +33,7 @@ import {
   playFloat32Audio,
 } from '../utils/localTtsEngine';
 
-export default function SettingsModal({ config, setConfig, onClose, models, onUpdateProviderModels, onLockNow, windowed = false }) {
+export default function SettingsModal({ config, setConfig, callMicMode, onChangeCallMicMode, onClose, models, onUpdateProviderModels, onLockNow, windowed = false }) {
   const { t, i18n } = useTranslation();
   const backgroundPreset = getChatBackgroundPreset(config);
   const backgroundPreview = getChatBackgroundSource(config, document.documentElement.dataset.theme, window.innerWidth < 768);
@@ -1407,6 +1407,31 @@ export default function SettingsModal({ config, setConfig, onClose, models, onUp
                   </div>
                 </div>
               )}
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-sm font-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Mic size={16} />
+              {getLocalText('视频通话', 'Video call', 'ビデオ通話')}
+            </h4>
+            <div className="bg-[var(--surface-bg-light)] rounded-xl p-4 border space-y-2">
+              <label className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-bold text-[var(--text-dark)]">{getLocalText('语音识别方式', 'Speech recognition', '音声認識方式')}</span>
+                <select
+                  value={callMicMode}
+                  onChange={event => onChangeCallMicMode(event.target.value)}
+                  className="border border-[var(--surface-border-subtle)] rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#ff75ac] outline-none bg-[var(--surface-bg)] text-[var(--text-dark)]"
+                >
+                  <option value="browser">{getLocalText('浏览器识别（默认）', 'Browser recognition (default)', 'ブラウザー音声認識（既定）')}</option>
+                  <option value="server">{getLocalText('服务器识别（Whisper）', 'Server recognition (Whisper)', 'サーバー音声認識（Whisper）')}</option>
+                </select>
+              </label>
+              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                {callMicMode === 'server'
+                  ? getLocalText('需要在服务器上安装 Whisper。', 'Requires Whisper on the server.', 'サーバーに Whisper のインストールが必要です。')
+                  : getLocalText('使用浏览器内置的语音识别，可实时显示识别字幕。', 'Uses your browser’s speech recognition and shows live captions.', 'ブラウザー内蔵の音声認識を使い、字幕をリアルタイムで表示します。')}
+              </p>
             </div>
           </section>
 

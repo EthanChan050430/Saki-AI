@@ -33,7 +33,7 @@ function installDependencies(directory, { full = false, dev = false, force = fal
     fs.writeFileSync(marker, fingerprint);
 }
 function prepareVideoCallAsr() {
-    if (process.env.SAKI_ASR_ENABLED === '0' || process.env.SAKI_ASR_PYTHON) return;
+    if (process.env.SAKI_ASR_ENABLED !== '1' || process.env.SAKI_ASR_PYTHON) return;
     const venv = path.join(root, '.venv-video-call');
     const python = path.join(venv, 'bin/python');
     if (spawnSync(python, ['-c', 'import faster_whisper, opencc'], { stdio: 'ignore' }).status === 0) return;

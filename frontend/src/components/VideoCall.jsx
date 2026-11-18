@@ -8,7 +8,7 @@ import { createVideoCallQuality } from '../utils/videoCallQuality'
 import { callPointerPosition, callTouchRegion } from '../utils/videoCallPointer'
 import { createVideoCallVoice } from '../utils/videoCallVoice'
 import { createSpeechPipeline, createSpeechSegmenter, toSpokenText } from '../utils/videoCallSpeech'
-import { startLocalCallMic } from '../utils/videoCallMic'
+import { startCallMic } from '../utils/videoCallMic'
 import { monitorCallMicLevel } from '../utils/videoCallMicLevel'
 import { showCallPanels, closeCallPanels, callPanelPosition } from '../utils/videoCallPanels'
 import { callContextHistory, restoredComponentHistory, boundedComponentHistory, componentChanges, applyCallActivity, appendCallText, settleCallActivities } from '../utils/videoCallContext'
@@ -34,6 +34,13 @@ const normalizedModel = (provider, name) => provider === 'copilot' ? normalizeCo
 const compactCallQuery = `${MOBILE_BREAKPOINT_QUERY}, (max-width: 1024px) and (pointer: coarse)`
 const panelSides = ['left', 'right']
 const micPermission = ['请允许浏览器使用麦克风。', 'Allow microphone access in your browser.', 'ブラウザーでマイクへのアクセスを許可してください。']
+const callMicErrors = {
+  'not-allowed': micPermission,
+  'audio-capture': ['无法读取麦克风，请检查设备连接或使用键盘。', 'Could not read the microphone. Check the device or use the keyboard.', 'マイクを使用できません。接続を確認するか、キーボードを使ってください。'],
+  unsupported: ['当前浏览器不支持语音识别。可使用键盘，或在设置中选择服务器识别。', 'This browser does not support speech recognition. Use the keyboard or select Server recognition in Settings.', 'このブラウザーは音声認識に対応していません。キーボードを使うか、設定でサーバー音声認識を選んでください。'],
+  'server-unavailable': ['服务器语音识别不可用。可在设置中切换到浏览器识别。', 'Server speech recognition is unavailable. You can switch to browser recognition in Settings.', 'サーバー音声認識を利用できません。設定でブラウザー音声認識に切り替えられます。'],
+}
+const browserMicUnavailable = ['浏览器语音识别暂不可用。可重新开启麦克风重试，或使用键盘。', 'Browser speech recognition is unavailable. Turn the microphone back on to retry or use the keyboard.', 'ブラウザー音声認識を利用できません。マイクをオンにして再試行するか、キーボードを使ってください。']
 
 function CallButton({ label, icon: Icon, art, disabled, pressed, kind, off, onClick, micMeter = false }) {
   return <button type="button" className={`call-action ${kind || ''}`} title={label} aria-label={label}
@@ -49,7 +56,7 @@ function CallButton({ label, icon: Icon, art, disabled, pressed, kind, off, onCl
   </button>
 }
 
-export default function VideoCall({ config, modelLabel, models, backendUrl, language, theme, messages, sessionId, onTurn, onClose, onToggleTheme }) {
+export default function VideoCall({ config, micMode, modelLabel, models, backendUrl, language, theme, messages, sessionId, onTurn, onClose, onToggleTheme }) {
   const { t } = useTranslation()
   const l = (zh, en, ja) => localizeWith(language, zh, en, ja)
   const lang = languageTag(language)
@@ -778,132 +785,57 @@ export default function VideoCall({ config, modelLabel, models, backendUrl, lang
   useEffect(() => {
     if (!mic) return
     const state = runtime.current
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    const micController = new AbortController()
-    const disable = message => {
+    const controller = new AbortController()
+    const { signal } = controller
+    let stream, stopMeter
+    const isListening = () => !signal.aborted && state.alive && state.mic
+    const disable = reason => {
+      if (!isListening()) return
       state.mic = false
+      controller.abort()
       setMic(false)
-      setError(message)
-    }
-    let recognition
-    let live = true, speakTimer, restartTimer, committed = '', lastResult = 0, stream, stopMeter = () => {}
-    const isListening = () => live && state.alive && state.mic
-    const dispatch = () => {
-      const value = committed.trim()
-      if (!value || !isListening()) return
-      committed = ''
-      void sendRef.current(value, true)
-    }
-    const onResult = event => {
-      if (!isListening()) return
-      let draft = ''
-      let latestFinal = ''
-      for (let i = Math.min(event.resultIndex, lastResult); i < event.results.length; i += 1) {
-        const result = event.results[i]
-        const value = result[0].transcript.trim()
-        if (result.isFinal && i >= lastResult) {
-          lastResult = i + 1
-          if (!value || voice.isEcho(value)) continue
-          latestFinal += value
-          committed += (committed ? ' ' : '') + value
-        } else if (!result.isFinal && value && !voice.isEcho(value)) draft += value
-      }
-      if (draft || latestFinal) state.heard = performance.now()
-      const draftLength = draft.replace(/[^\p{L}\p{N}]/gu, '').length
-      if (state.turn && (latestFinal || (state.phase !== 'speaking' && draftLength >= 2))) interruptRef.current()
-      setInterim((committed + ' ' + draft).trim())
-      clearTimeout(speakTimer)
-      if (committed && !draft) speakTimer = setTimeout(dispatch, 350)
-    }
-    const onRecognitionError = event => {
-      if (!isListening() || event.error === 'aborted' || event.error === 'no-speech') return
-      disable(event.error === 'not-allowed' ? micPermission : ['语音识别暂不可用，可以打开键盘继续。', 'Speech recognition is unavailable. Open the keyboard to continue.', '音声認識を利用できません。キーボードで続けられます。'])
-    }
-    const start = () => {
-      if (!isListening()) return
-      if (!Recognition) { disable(['本地语音服务未就绪，可以打开键盘继续。', 'Local speech recognition is not ready. Open the keyboard to continue.', 'ローカル音声認識の準備ができていません。キーボードで続けられます。']); return }
-      try {
-        if (!recognition) {
-          recognition = new Recognition()
-          recognition.lang = lang
-          recognition.continuous = true
-          recognition.interimResults = true
-          recognition.onresult = onResult
-          recognition.onerror = onRecognitionError
-          recognition.onend = onRecognitionEnd
-        }
-        const track = stream?.getAudioTracks()[0]
-        if (track?.readyState === 'live') {
-          try { recognition.start(track); return } catch { /* Keep the stream for the input meter when falling back. */ }
-        }
-        recognition.start()
-      } catch { disable(['无法启动语音识别，可以打开键盘继续。', 'Could not start speech recognition. Open the keyboard to continue.', '音声認識を開始できませんでした。キーボードで続けられます。']) }
-    }
-    const onRecognitionEnd = () => {
-      if (!isListening()) return
-      clearTimeout(speakTimer)
-      dispatch()
-      lastResult = 0
-      setInterim('')
-      restartTimer = setTimeout(start, 180)
+      setError(callMicErrors[reason] || browserMicUnavailable)
     }
     async function openMic() {
       try {
         stream = await navigator.mediaDevices?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
       } catch (error) {
-        if (!isListening()) return
         if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-          disable(micPermission)
+          disable('not-allowed')
           return
         }
       }
-      if (!isListening()) { stream?.getTracks().forEach(track => track.stop()); return }
-      if (stream) {
+      if (!isListening()) {
+        stream?.getTracks().forEach(track => track.stop())
+        return
+      }
+      startCallMic({
+        mode: micMode, stream, backendUrl, base, lang, signal,
+        speakerLevel: () => state.phase === 'speaking' ? Math.max(.15, voice.level(performance.now()).voice) : 0,
+        isEcho: value => voice.isEcho(value),
+        onSpeech: (draft = '', final = false) => {
+          if (!isListening()) return
+          state.heard = performance.now()
+          const draftLength = draft.replace(/[^\p{L}\p{N}]/gu, '').length
+          if (state.turn && (final || (state.phase !== 'speaking' && draftLength >= 2))) interruptRef.current()
+        },
+        onDraft: value => { if (isListening()) setInterim(value) },
+        onText: value => { if (isListening()) void sendRef.current(value, true) },
+        onError: disable,
+      })
+      if (stream && isListening()) {
         stopMeter = monitorCallMicLevel(stream, level => { if (isListening()) updateMicLevel(level) })
-        let usingFallback = false
-        const fallback = () => {
-          if (!isListening() || usingFallback) return
-          usingFallback = true
-          micController.abort()
-          if (!Recognition) {
-            disable(['本机语音识别连接失败。请检查后端语音服务，点击开启麦克风可重试。', 'Could not connect to local speech recognition. Check the speech service, then unmute to retry.', 'ローカル音声認識に接続できませんでした。音声サービスを確認し、ミュート解除で再試行してください。'])
-            return
-          }
-          start()
-        }
-        try {
-          await startLocalCallMic({
-            stream, backendUrl, base, lang, signal: micController.signal,
-            speakerLevel: () => state.phase === 'speaking' ? Math.max(.15, voice.level(performance.now()).voice) : 0,
-            onSpeech: () => {
-              if (!isListening()) return
-              state.heard = performance.now()
-            },
-            onText: value => {
-              if (!isListening() || voice.isEcho(value)) return
-              state.heard = performance.now()
-              void sendRef.current(value, true)
-            },
-            onError: fallback,
-          })
-          return
-        } catch { fallback(); return }
       }
-      start()
     }
     void openMic()
     return () => {
-      live = false
-      clearTimeout(speakTimer)
-      clearTimeout(restartTimer)
-      micController.abort()
-      stopMeter()
+      controller.abort()
+      stopMeter?.()
       updateMicLevel(0)
-      recognition?.abort()
       stream?.getTracks().forEach(track => track.stop())
       setInterim('')
     }
-  }, [mic, lang, voice, backendUrl])
+  }, [mic, micMode, lang, voice, backendUrl])
 
   const time = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
   const switchMic = () => {
