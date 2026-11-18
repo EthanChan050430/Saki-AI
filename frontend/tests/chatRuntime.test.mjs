@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  createEpochGuard, loadChatSnapshot, getDispatchConfig, resolveSessionWorkspacePath,
+  createChatHistoryStore, createEpochGuard, loadChatSnapshot, getDispatchConfig, resolveSessionWorkspacePath,
   readCachedConfig, cacheConfig, persistConfig, applyStreamingActions,
   sanitizeLoadedPendingRequest, reconcileCompletedBackgroundSnapshot,
 } from '../src/utils/chatRuntime.js';
@@ -13,6 +13,69 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+
+test('deleting a chat hides it immediately and stale refreshes cannot restore it', async () => {
+  const a = { id: 1 };
+  const b = { id: '2' };
+  let visible;
+  let cached;
+  const store = createChatHistoryStore(items => { visible = items; }, items => { cached = items; });
+  store.restoreCache([a, b]);
+
+  const initialResponse = deferred();
+  const initialRefresh = store.refresh(() => initialResponse.promise);
+  const deleteResponse = deferred();
+  const deletion = store.remove('1', () => deleteResponse.promise);
+  assert.deepEqual(visible, [b]);
+  assert.equal(store.isDeleting(1), true);
+  assert.equal(store.remove(1, assert.fail), null);
+
+  await store.refresh(async () => [a, b]);
+  assert.deepEqual(visible, [b]);
+  const lateResponse = deferred();
+  const lateRefresh = store.refresh(() => lateResponse.promise);
+  deleteResponse.resolve();
+  await deletion;
+  assert.equal(store.wasDeleted(1), true);
+  assert.deepEqual(cached, [b]);
+
+  initialResponse.resolve([a, b]);
+  lateResponse.resolve([a, b]);
+  await Promise.all([initialRefresh, lateRefresh]);
+  assert.deepEqual(visible, [b]);
+  assert.deepEqual(cached, [b]);
+});
+
+test('overlapping deletes roll back only the failed row and preserve concurrent history updates', async () => {
+  const a = { id: 'a' };
+  const b = { id: 'b' };
+  const c = { id: 'c' };
+  let visible;
+  let cached;
+  const store = createChatHistoryStore(items => { visible = items; }, items => { cached = items; });
+  store.restoreCache([a, b]);
+  const failedResponse = deferred();
+  const failedDeletion = store.remove(a.id, () => failedResponse.promise);
+  const successfulDeletion = store.remove(b.id, async () => {});
+  assert.deepEqual(visible, []);
+  await successfulDeletion;
+
+  const oldResponse = deferred();
+  const oldRefresh = store.refresh(() => oldResponse.promise);
+  const updatedA = { ...a, title: 'Updated during removal' };
+  await store.refresh(async () => [c, updatedA]);
+  oldResponse.resolve([a]);
+  await oldRefresh;
+  assert.deepEqual(visible, [c]);
+
+  failedResponse.reject(new Error('delete failed'));
+  await assert.rejects(failedDeletion, /delete failed/);
+  assert.deepEqual(visible, [c, updatedA]);
+  assert.deepEqual(cached, [c, updatedA]);
+  assert.equal(store.wasDeleted(a.id), false);
+  await store.remove(a.id, async () => {});
+  assert.deepEqual(visible, [c]);
+});
 
 test('A-B-A: stale history, running result and rejection cannot mutate current load', async () => {
   for (const stage of ['history', 'running', 'error']) {

@@ -45,6 +45,37 @@ function lifecycleContext(extra = {}) {
     return context;
 }
 
+test('history deletion follows pending session writes and stops a run before it can save again', async () => {
+    const chatId = 'deleted-chat';
+    const events = [];
+    let deleteHistory;
+    const c = lifecycleContext({
+        app: { delete: (_route, handler) => { deleteHistory = handler; } },
+        checkpointService: { withSession: (_id, operation) => operation() },
+        fs: { remove: async () => { events.push('file removed'); } },
+        path, SESSIONS_DIR: 'sessions',
+        removeHistoryEntry: async () => { events.push('history removed'); },
+        cancelAgentActionsForChat: () => { events.push('actions cancelled'); },
+        emitRealtimeEvent: () => { events.push('history updated'); },
+    });
+    vm.runInContext(section("app.delete('/api/history/:id'", "app.post('/api/upload'"), c);
+    const run = c.createBackgroundRun(chatId, 'agent', 'assistant');
+    const gate = deferred();
+    const firstSave = c.withRunSessionWrite(chatId, run, async () => {
+        await gate.promise;
+        events.push('pending save finished');
+    });
+    const deletion = deleteHistory({ params: { id: chatId } }, {
+        json: response => { assert.equal(response.success, true); },
+    });
+    const lateSave = c.withRunSessionWrite(chatId, run, assert.fail);
+    gate.resolve();
+    await Promise.all([firstSave, deletion, lateSave]);
+
+    assert.equal(c.BACKGROUND_RUNS.has(chatId), false);
+    assert.deepEqual(events, ['pending save finished', 'file removed', 'history removed', 'actions cancelled', 'history updated']);
+});
+
 test('stop releases occupancy immediately; old cleanup and late tool persistence cannot affect new run', async () => {
     const c = lifecycleContext();
     const old = c.createBackgroundRun('chat', 'agent', 'old');

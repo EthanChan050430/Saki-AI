@@ -48,6 +48,7 @@ import { localize, localizeWith } from './utils/localize';
 import { QUEUE_STORAGE_KEY, restoreQueues, createChatQueueStore, mergeSteeringEvent, canAdvanceQueue } from './utils/chatQueue';
 import { addCallRecords, mergeCallRecords } from './utils/videoCallTranscript';
 import {
+  createChatHistoryStore,
   createEpochGuard,
   loadChatSnapshot,
   readCachedConfig,
@@ -579,6 +580,9 @@ function App() {
     }).catch(() => {});
   }, [theme]);
   const [history, setHistory] = useState([]);
+  const historyStoreRef = useRef(null);
+  if (!historyStoreRef.current) historyStoreRef.current = createChatHistoryStore(setHistory, cacheHistoryList);
+  const historyStore = historyStoreRef.current;
   const [currentChatId, setCurrentChatId] = useState(null);
   const [messages, setMessagesState] = useState([]);
   const [currentPendingRequest, setCurrentPendingRequest] = useState(null);
@@ -748,12 +752,11 @@ function App() {
 
   const useDesktopUtilityWindows = !isMobileViewport;
 
-  const commitHistory = useCallback((items) => {
-    const nextHistory = normalizeHistoryList(items);
-    setHistory(nextHistory);
-    cacheHistoryList(nextHistory);
-    return nextHistory;
-  }, []);
+  const refreshHistory = useCallback(() => historyStore.refresh(async () => {
+    const response = await fetch(`${BACKEND_URL}/api/history`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Failed to load chat history (${response.status})`);
+    return normalizeHistoryList(await response.json());
+  }).catch(error => console.error(error)), [historyStore]);
 
   const resetPrimaryModals = () => {
     setSettingsOpen(false);
@@ -1434,18 +1437,14 @@ function App() {
   }, [config, isConfigLoaded]);
 
   useEffect(() => {
-    // Load history from backend with cache support
-    const cachedHistory = localStorage.getItem('agent_history');
-    if (cachedHistory) {
-      try {
-        commitHistory(JSON.parse(cachedHistory));
-      } catch (e) {}
+    try {
+      const cachedHistory = localStorage.getItem('agent_history');
+      if (cachedHistory) historyStore.restoreCache(normalizeHistoryList(JSON.parse(cachedHistory)));
+    } catch {
+      // History can still load when local storage is unavailable.
     }
-
-    axios.get(`${BACKEND_URL}/api/history`).then(res => {
-      commitHistory(res.data);
-    }).catch(err => console.error(err));
-  }, [commitHistory]);
+    refreshHistory();
+  }, [historyStore, refreshHistory]);
 
   useEffect(() => {
     const handleBeforeUnload = (e) => {
@@ -1698,12 +1697,6 @@ function App() {
     return finalModels;
   }, []);
 
-  const refreshHistory = () => {
-    axios.get(`${BACKEND_URL}/api/history`).then(res => {
-      commitHistory(res.data);
-    }).catch(err => console.error(err));
-  };
-
   const formatHistoryTimestamp = (value) => {
     if (!value) return '';
     const date = new Date(value);
@@ -1877,7 +1870,7 @@ function App() {
     return () => {
       source.close();
     };
-  }, [currentChatId, isGenerating]);
+  }, [currentChatId, isGenerating, refreshHistory]);
 
   const startBgPoll = (chatId) => {
     const epochCurrent = chatEpochRef.current.capture();
@@ -2032,31 +2025,9 @@ function App() {
     });
   };
 
-  const deleteChat = (e, chatId) => {
-    e.stopPropagation();
-    axios.delete(`${BACKEND_URL}/api/history/${chatId}`).then(() => {
-      setHistory(prev => {
-        const nextHistory = normalizeHistoryList(prev.filter(h => h.id !== chatId));
-        cacheHistoryList(nextHistory);
-        return nextHistory;
-      });
-      if (currentChatId === chatId) {
-        startNewChat();
-      }
-    });
-  };
-
-  const saveChatToBackend = (chatId, currentMessages, workspacePath = configRef.current?.workspacePath ?? config.workspacePath ?? '') => {
-    if (!chatId) return;
-    axios.post(`${BACKEND_URL}/api/history`, {
-      chatId,
-      messages: currentMessages,
-      ...(typeof workspacePath === 'string' ? { workspacePath } : {}),
-      clientSavedAt: Date.now()
-    }).then(() => {
-        axios.get(`${BACKEND_URL}/api/history`).then(res => commitHistory(res.data));
-    });
-  };
+  const saveChatToBackend = (chatId, currentMessages, workspacePath) => (
+    persistChatState(chatId, currentMessages, null, workspacePath)
+  );
 
   const ensureActiveChat = () => {
     if (currentChatId) return currentChatId;
@@ -2454,11 +2425,14 @@ function App() {
       ...(typeof workspacePath === 'string' ? { workspacePath } : {}),
       clientSavedAt: Date.now()
     };
-    const previous = historySaveRef.current.get(chatId) || Promise.resolve();
-    const save = previous.catch(() => {}).then(() => axios.post(`${BACKEND_URL}/api/history`, payload)).then(() => {
-      refreshHistory();
+    const key = String(chatId);
+    const previous = historySaveRef.current.get(key) || Promise.resolve();
+    const save = previous.catch(() => {}).then(async () => {
+      if (historyStore.wasDeleted(key)) return;
+      await axios.post(`${BACKEND_URL}/api/history`, payload);
+      void refreshHistory();
     });
-    historySaveRef.current.set(chatId, save);
+    historySaveRef.current.set(key, save);
     // Most callers are optimistic; the terminal caller still awaits the original rejection.
     save.catch(() => queueStore.pause(chatId, '聊天记录保存失败，队列已暂停。'));
     return save;
@@ -2553,18 +2527,28 @@ function App() {
     });
   };
 
-  const handleDeleteChat = (e, chatId) => {
+  const handleDeleteChat = async (e, chatId) => {
     e.stopPropagation();
-    axios.delete(`${BACKEND_URL}/api/history/${chatId}`).then(() => {
-      setHistory(prev => {
-        const nextHistory = normalizeHistoryList(prev.filter(h => h.id !== chatId));
-        cacheHistoryList(nextHistory);
-        return nextHistory;
-      });
-      if (currentChatId === chatId) {
-        handleStartNewChat();
-      }
+    const key = String(chatId);
+    const previous = historySaveRef.current.get(key);
+    const deletion = historyStore.remove(key, async () => {
+      if (previous) await previous.catch(() => {});
+      await axios.delete(`${BACKEND_URL}/api/history/${encodeURIComponent(key)}`);
     });
+    if (!deletion) return;
+    historySaveRef.current.set(key, deletion);
+    try {
+      await deletion;
+    } catch (error) {
+      console.error('Failed to delete chat:', error);
+      window.alert(localizeWith(uiLanguage, '删除对话失败，请重试。', 'Could not delete the chat. Please try again.', '会話を削除できませんでした。もう一度お試しください。'));
+      return;
+    } finally {
+      if (historySaveRef.current.get(key) === deletion) historySaveRef.current.delete(key);
+    }
+
+    if (String(currentChatIdRef.current) === key) handleStartNewChat();
+    void refreshHistory();
   };
 
   const handleDeleteMessage = async (idx) => {
@@ -3303,6 +3287,7 @@ function App() {
   const handleSendMessage = async (text, files = [], options = {}) => {
     if (loadingChatRef.current || checkpointRestoreRef.current) return false;
     const chatId = currentChatIdRef.current || ensureActiveChat();
+    if (historyStore.isDeleting(chatId)) return false;
     currentChatIdRef.current = chatId;
     const payload = { text, files, options: { ...options, workspacePath: options.workspacePath ?? config.workspacePath ?? '' } };
     const activelyBusy = Boolean(
@@ -3326,6 +3311,7 @@ function App() {
   };
 
   const drainQueue = async (chatId) => {
+    if (historyStore.isDeleting(chatId)) return;
     if (currentChatIdRef.current !== chatId || (runningRef.current && !runningRef.current.stopped) || bgPollRef.current || loadingChatRef.current || pendingRef.current?.approvalRequest || checkpointRestoreRef.current) return;
     if (pendingRef.current && !pendingRef.current.approvalRequest) {
       pendingRef.current = null;
@@ -3577,12 +3563,7 @@ function App() {
           : message
       ));
 
-      await axios.post(`${BACKEND_URL}/api/history`, {
-        chatId,
-        messages: nextMessages,
-        pendingRequest: null,
-        clientSavedAt: Date.now()
-      });
+      await persistChatState(chatId, nextMessages, null, null);
 
       if (String(currentChatIdRef.current) === String(chatId)) {
         setMessages(nextMessages);
@@ -3591,7 +3572,6 @@ function App() {
         setCurrentPendingRequest(null);
         setContextStatus(calculateContextStatusFromMessages(nextMessages, config));
       }
-      refreshHistory();
     } catch (error) {
       console.error('Failed to stop pending chat:', error);
     }

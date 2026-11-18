@@ -5101,7 +5101,7 @@ app.post('/api/files/rollback', async (req, res) => {
 });
 
 app.get('/api/history', async (req, res) => {
-    res.set('Cache-Control', 'max-age=5');
+    res.set('Cache-Control', 'no-store');
     res.json(await getPrunedHistory());
 });
 
@@ -5141,16 +5141,23 @@ app.post('/api/checkpoints/restore', requireAgentAuth, createCheckpointRestoreHa
 }));
 
 app.delete('/api/history/:id', async (req, res) => {
-    const sessionFilePath = path.join(SESSIONS_DIR, `${req.params.id}.json`);
-    if (await fs.exists(sessionFilePath)) {
-        await fs.remove(sessionFilePath);
+    const chatId = req.params.id;
+    try {
+        await checkpointService.withSession(chatId, () => withSessionWrite(chatId, async () => {
+            await fs.remove(path.join(SESSIONS_DIR, `${chatId}.json`));
+            await removeHistoryEntry(chatId);
+            const run = BACKGROUND_RUNS.get(chatId);
+            if (run) {
+                run._stopFinalized = true;
+                run.stop();
+                cancelAgentActionsForChat(chatId);
+            }
+        }));
+        emitRealtimeEvent({ type: 'history-updated', reason: 'history-delete' });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ error: error.message });
     }
-
-    let history = await getHistory();
-    history = history.filter(h => h.id !== req.params.id && h.id != req.params.id);
-    await saveHistory(history);
-    emitRealtimeEvent({ type: 'history-updated', reason: 'history-delete' });
-    res.json({ success: true });
 });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {

@@ -24,6 +24,57 @@ export async function loadChatSnapshot({ isCurrent, loadHistory, applyHistory, l
   }
 }
 
+export function createChatHistoryStore(publish, cache) {
+  let history = [];
+  let requestId = 0;
+  let lastAppliedRequestId = 0;
+  const deleting = new Set();
+  const deleted = new Set();
+
+  const publishVisible = () => publish(history.filter(item => !deleting.has(String(item.id))));
+  const commit = items => {
+    history = items;
+    cache(history);
+    publishVisible();
+  };
+
+  const finishDelete = async (id, deleteEntry) => {
+    try {
+      await deleteEntry();
+    } catch (error) {
+      deleting.delete(id);
+      publishVisible();
+      throw error;
+    }
+
+    // Any refresh already started may still contain the deleted entry.
+    lastAppliedRequestId = requestId;
+    deleting.delete(id);
+    deleted.add(id);
+    commit(history.filter(item => String(item.id) !== id));
+  };
+
+  return {
+    restoreCache: items => { history = items; publishVisible(); },
+    async refresh(load) {
+      const id = ++requestId;
+      const items = await load();
+      if (id <= lastAppliedRequestId) return;
+      lastAppliedRequestId = id;
+      commit(items);
+    },
+    isDeleting: chatId => deleting.has(String(chatId)),
+    wasDeleted: chatId => deleted.has(String(chatId)),
+    remove(chatId, deleteEntry) {
+      const id = String(chatId);
+      if (deleting.has(id)) return null;
+      deleting.add(id);
+      publishVisible();
+      return finishDelete(id, deleteEntry);
+    },
+  };
+}
+
 export function readCachedConfig(storage) {
   try { return JSON.parse(storage.getItem('agent_config') || 'null'); }
   catch { return null; }
