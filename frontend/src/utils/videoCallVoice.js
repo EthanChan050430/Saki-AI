@@ -14,7 +14,7 @@ export function createVideoCallVoice({ config, backendUrl }) {
     const combined = activeEcho ? `${activeEcho} ${piece}` : piece
     echo = { text: combined.slice(-600), until: Infinity }
   }
-  const markSilence = () => { if (echo) echo.until = performance.now() + 1400 }
+  const markSilence = () => { if (echo) echo.until = performance.now() + 600 }
 
   function echoReference() {
     return echo && performance.now() <= echo.until ? echo.text : ''

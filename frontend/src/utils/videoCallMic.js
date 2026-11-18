@@ -29,12 +29,18 @@ const MIN_FRAMES = 2
 const BROWSER_NETWORK_RETRY_DELAYS = [400, 800]
 const BROWSER_FINALIZE_DELAY = 450
 const BROWSER_END_TIMEOUT = 1500
+const BROWSER_NO_RESULT_DELAY = 1200
+const BROWSER_SPEECH_NO_RESULT_DELAY = 2200
+const MIC_SPEECH_GAP = 550
 
 const matchesPlayback = (text, references, allowApproximate = true) => (
   [...references].some(reference => looksLikeEcho(text, reference, true, allowApproximate))
 )
 
-export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', hasNearEndSpeech = () => false, onSpeech, onDraft, onText, onError }) {
+export function startCallMic({
+  mode, stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '',
+  hasNearEndSpeech = () => false, onSpeech, onDraft, onText, onError, onUnrecognized = () => {},
+}) {
   if (signal.aborted) return
 
   if (mode === 'server') {
@@ -57,8 +63,9 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
 
   let recognition
   let inputTrack = stream?.getAudioTracks().find(track => track.kind === 'audio' && track.readyState === 'live')
-  let sendTimer, finalizeTimer, endTimer, restartTimer
-  let committed = '', draft = '', finalCount = 0, speechEnded = false, endedWithError = false
+  let sendTimer, finalizeTimer, endTimer, restartTimer, noResultTimer
+  let committed = '', draft = '', finalCount = 0, speechEnded = false, recognitionError = ''
+  let awaitingText = false, browserHeardSpeech = false, burstHadResult = false, lastMicSpeech = -Infinity
   let networkFailures = 0
   let retryDelay = 180, nearEndSpeech = false
   const references = new Set()
@@ -95,14 +102,35 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
       if (!signal.aborted && recognition === current) finishSession(true)
     }, BROWSER_END_TIMEOUT)
   }
+  const endRecognition = () => {
+    waitForEnd()
+    try { recognition.stop?.() } catch {}
+  }
+  const expectText = (delay = browserHeardSpeech ? BROWSER_SPEECH_NO_RESULT_DELAY : BROWSER_NO_RESULT_DELAY) => {
+    awaitingText = true
+    clearTimeout(noResultTimer)
+    noResultTimer = setTimeout(() => {
+      if (!signal.aborted && awaitingText && recognition && endTimer === undefined) {
+        speechEnded = true
+        endRecognition()
+      }
+    }, delay)
+  }
+  const reportMicSpeech = () => {
+    if (signal.aborted || !recognition || recognitionError || endTimer !== undefined || restartTimer !== undefined) return
+    const now = Date.now()
+    if (now - lastMicSpeech > MIC_SPEECH_GAP) burstHadResult = false
+    lastMicSpeech = now
+    // Only watch for a silent hang when the recognizer has not heard speech yet (or already ended).
+    if (!burstHadResult && !draft && (!browserHeardSpeech || speechEnded)) expectText()
+  }
   const requestFinalResult = () => {
     if (!speechEnded || !draft || finalizeTimer !== undefined || endTimer !== undefined) return
     finalizeTimer = setTimeout(() => {
       finalizeTimer = undefined
       if (signal.aborted) return
       // Wait for a final transcript, and restart the recognizer if its session never ends.
-      waitForEnd()
-      try { recognition.stop?.() } catch {}
+      endRecognition()
     }, BROWSER_FINALIZE_DELAY)
   }
   const releaseRecognition = () => {
@@ -117,6 +145,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     clearTimeout(sendTimer)
     clearFinalize()
     clearEndTimer()
+    clearTimeout(noResultTimer)
     clearTimeout(restartTimer)
     signal.removeEventListener('abort', stop)
     releaseRecognition()
@@ -129,10 +158,11 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     onDraft('')
     onError(reason)
   }
-  const start = () => {
+  const start = (retriedInvalidState = false) => {
+    restartTimer = undefined
     if (signal.aborted) return
     retryDelay = 180
-    endedWithError = false
+    recognitionError = ''
     try {
       if (!recognition) attachRecognition(new Recognition())
       if (inputTrack?.readyState === 'live') {
@@ -146,24 +176,39 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
       }
       recognition.start()
     } catch (error) {
+      if (error?.name === 'InvalidStateError') {
+        releaseRecognition()
+        if (!retriedInvalidState) {
+          start(true)
+        } else {
+          restartTimer = setTimeout(() => start(true), 100)
+        }
+        return
+      }
       const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
       browserFailed(denied ? 'not-allowed' : 'start-failed')
     }
   }
 
   const handleSpeechStart = () => {
-    speechEnded = false
+    if (endTimer === undefined) speechEnded = false
+    browserHeardSpeech = true
+    awaitingText = false
+    clearTimeout(noResultTimer)
     clearFinalize()
     resetSpeechEvidence()
     rememberPlayback()
   }
   const handleSpeechEnd = () => {
     speechEnded = true
+    browserHeardSpeech = true
     rememberPlayback()
-    requestFinalResult()
+    if (draft) requestFinalResult()
+    else if (!burstHadResult && !references.size && !recognitionError && endTimer === undefined) expectText()
   }
   const handleResult = event => {
     networkFailures = 0
+    recognitionError = ''
     const drafts = []
     let hasNewFinal = false
     const previousFinalCount = finalCount
@@ -181,11 +226,19 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
         committed += (committed ? ' ' : '') + value
       } else drafts.push(value)
     }
-    if (finalCount !== previousFinalCount && event.results.length === finalCount) resetSpeechEvidence()
+    if (finalCount !== previousFinalCount && event.results.length === finalCount) {
+      resetSpeechEvidence()
+      browserHeardSpeech = false
+    }
     draft = drafts.join(' ')
     if (draft) requestFinalResult()
     else clearFinalize()
-    if (draft || hasNewFinal) onSpeech(draft, hasNewFinal, overlapsPlayback)
+    if (draft || hasNewFinal) {
+      awaitingText = false
+      burstHadResult = true
+      clearTimeout(noResultTimer)
+      onSpeech(draft, hasNewFinal, overlapsPlayback)
+    }
     onDraft([committed, draft].filter(Boolean).join(' '))
     // An interim result for the next clause must not hold a finished clause forever.
     if (committed && (sendTimer === undefined || hasNewFinal || !draft)) {
@@ -194,9 +247,11 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     }
   }
   const handleError = ({ error }) => {
-    endedWithError = true
+    recognitionError = error
     clearFinalize()
+    clearTimeout(noResultTimer)
     if (error === 'aborted' || error === 'no-speech') {
+      if (error === 'no-speech' && !awaitingText) retryDelay = 20
       waitForEnd()
       return
     }
@@ -215,16 +270,24 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   function finishSession(replaceRecognition = false) {
     clearFinalize()
     clearEndTimer()
-    if (replaceRecognition) releaseRecognition()
-    if (draft && !endedWithError && (!replaceRecognition || speechEnded)) {
+    clearTimeout(noResultTimer)
+    const missedSpeech = awaitingText
+    // The actual input was active but the recognizer never detected speech on the supplied track.
+    if (missedSpeech && !browserHeardSpeech && (!recognitionError || recognitionError === 'no-speech')) inputTrack = undefined
+    if (replaceRecognition || missedSpeech) releaseRecognition()
+    const recoverableError = !recognitionError || recognitionError === 'no-speech' || recognitionError === 'aborted'
+    if (draft && recoverableError && (!replaceRecognition || speechEnded)) {
       committed += (committed ? ' ' : '') + draft
     }
     draft = ''
     dispatch()
     finalCount = 0
     speechEnded = false
+    awaitingText = browserHeardSpeech = burstHadResult = false
+    lastMicSpeech = -Infinity
     resetSpeechEvidence()
     onDraft('')
+    if (missedSpeech && !signal.aborted) onUnrecognized()
     if (!signal.aborted) restartTimer = setTimeout(start, retryDelay)
   }
 
@@ -245,6 +308,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   }
   signal.addEventListener('abort', stop, { once: true })
   start()
+  return reportMicSpeech
 }
 
 export async function startLocalCallMic({ stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', onSpeech, onText, onError, onStatus = () => {} }) {

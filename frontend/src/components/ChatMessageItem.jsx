@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 import { Paperclip, FileText, Download, Presentation, Maximize2, ArrowUpRight } from 'lucide-react';
 import AgentMessageParts from './AgentActivity';
 import CheckpointRestoreBar from './CheckpointRestoreBar';
@@ -8,9 +8,15 @@ const PPTView = React.lazy(() => import('./PPTView'));
 const CredibilityCheckView = React.lazy(() => import('./CredibilityCheckView'));
 const StoryGlassView = React.lazy(() => import('./StoryGlassView'));
 
+const MESSAGE_LONG_PRESS_MS = 450;
+const MESSAGE_PRESS_MOVE_LIMIT_PX = 10;
+const NATIVE_PRESS_TARGETS = 'a, button, input, textarea, select, label, summary, pre, img, audio, video, [contenteditable], [role="button"]';
+
 export const ChatMessageItem = memo(function ChatMessageItem({
   message: m,
   index: idx,
+  actionsOpen,
+  onChangeMessageActions,
   isGenerating,
   isLastMessage,
   checkpointOwner,
@@ -59,6 +65,9 @@ export const ChatMessageItem = memo(function ChatMessageItem({
   ToolObservation,
   MusicFileCard,
 }) {
+  const messagePressRef = useRef(null);
+  useEffect(() => () => clearTimeout(messagePressRef.current?.timer), []);
+
   const isAssistant = m.role === 'assistant';
   const isStoryGlassOverlayMessage = Boolean(m.requestOptions?.storyGlassOverlay);
   const isStoryGlassOverlayAssistant = Boolean(
@@ -132,7 +141,52 @@ export const ChatMessageItem = memo(function ChatMessageItem({
     && m.status !== 'error'
     && m.status !== 'done'
     && m.status !== 'cancelled';
-  const hideToolbar = isAssistant && activeRun && showPendingState;
+  const showToolbar = MessageBubbleToolbar && !showPendingState && editingMsgIdx !== idx;
+  const messageKey = m.id ?? idx;
+  const toolbarId = `chat-message-actions-${messageKey}`;
+
+  function cancelMessagePress() {
+    clearTimeout(messagePressRef.current?.timer);
+    messagePressRef.current = null;
+  }
+
+  function handleMessagePress(event) {
+    if (event.pointerType !== 'touch') return;
+    cancelMessagePress();
+    if (!event.isPrimary || !event.currentTarget.contains(event.target) || event.target.closest(NATIVE_PRESS_TARGETS)) return;
+
+    messagePressRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      timer: setTimeout(() => {
+        messagePressRef.current.timer = null;
+        onChangeMessageActions(messageKey);
+      }, MESSAGE_LONG_PRESS_MS),
+    };
+  }
+
+  function handleMessagePressMove(event) {
+    const press = messagePressRef.current;
+    if (press && event.pointerType === 'touch'
+      && Math.hypot(event.clientX - press.x, event.clientY - press.y) > MESSAGE_PRESS_MOVE_LIMIT_PX) {
+      cancelMessagePress();
+    }
+  }
+
+  function handleMessageContextMenu(event) {
+    if ((messagePressRef.current || event.nativeEvent.pointerType === 'touch')
+      && event.currentTarget.contains(event.target) && !event.target.closest(NATIVE_PRESS_TARGETS)) {
+      event.preventDefault();
+    }
+  }
+
+  function handleMessageActionsKey(event) {
+    if (event.target !== event.currentTarget) return;
+    const opensActions = ['Enter', ' ', 'ContextMenu'].includes(event.key) || (event.shiftKey && event.key === 'F10');
+    if (!opensActions) return;
+    event.preventDefault();
+    if (!event.repeat) onChangeMessageActions(actionsOpen ? null : messageKey);
+  }
 
   return (
     <div
@@ -164,7 +218,16 @@ export const ChatMessageItem = memo(function ChatMessageItem({
             <img src={config.aiAvatar || botAvatar} alt="Bot" className="w-full h-full object-cover" />
           </button>
         )}
-        <div className={`relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : (m.pptData || m.deepReadingData || m.storyGlassData || m.credibilityCheckData ? 'w-full max-w-[calc(100%-2.25rem)] sm:max-w-[92%] xl:max-w-[88%]' : m.role === 'user' ? 'max-w-[92%] sm:max-w-[85%]' : 'max-w-[calc(100%-2.25rem)] sm:max-w-[85%]')} group/message ${!(hideToolbar || editingMsgIdx === idx) && MessageBubbleToolbar ? 'pt-5 md:pt-0' : ''} ${m.role === 'user' ? 'order-1' : ''}`}>
+        <div
+          data-actions-open={showToolbar && actionsOpen ? 'true' : undefined}
+          tabIndex={showToolbar ? 0 : undefined}
+          role={showToolbar ? 'group' : undefined}
+          aria-label={showToolbar ? getLocalText('聊天消息', 'Chat message', 'チャットメッセージ') : undefined}
+          aria-controls={showToolbar ? toolbarId : undefined}
+          aria-keyshortcuts={showToolbar ? 'Enter Space Shift+F10' : undefined}
+          onKeyDown={showToolbar ? handleMessageActionsKey : undefined}
+          className={`saki-message-bubble relative ${editingMsgIdx === idx ? 'w-[550px] max-w-full' : (m.pptData || m.deepReadingData || m.storyGlassData || m.credibilityCheckData ? 'w-full max-w-[calc(100%-2.25rem)] sm:max-w-[92%] xl:max-w-[88%]' : m.role === 'user' ? 'max-w-[92%] sm:max-w-[85%]' : 'max-w-[calc(100%-2.25rem)] sm:max-w-[85%]')} ${m.role === 'user' ? 'order-1' : ''}`}
+        >
           {isAssistant && m.steeringMessages?.length > 0 && (
             <div className="mb-2 space-y-1 text-xs" aria-label={getLocalText('运行引导', 'Run steering')}>
               {m.steeringMessages.map(item => <div key={item.id} className="rounded-xl border border-[var(--control-border)] bg-[var(--control-bg)] px-3 py-2">
@@ -174,8 +237,9 @@ export const ChatMessageItem = memo(function ChatMessageItem({
               </div>)}
             </div>
           )}
-          {!(hideToolbar || editingMsgIdx === idx) && MessageBubbleToolbar && (
+          {showToolbar && (
             <MessageBubbleToolbar
+              id={toolbarId}
               align={m.role === 'user' ? 'end' : 'start'}
               isAssistant={isAssistant}
               message={m}
@@ -217,13 +281,22 @@ export const ChatMessageItem = memo(function ChatMessageItem({
             />
           )}
 
-          <div className={`rounded-2xl p-3 sm:p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
-            m.role === 'user'
-              ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_8px_24px_rgba(255,117,172,0.3)] rounded-tr-none rounded-2xl p-3 sm:p-4'
-              : showPendingState
-                ? ''
-                : 'bg-white/85 dark:bg-[#231b26]/85 border border-white/65 dark:border-pink-400/25 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(255,117,172,0.08)] backdrop-blur-xl rounded-tl-none rounded-2xl p-3 sm:p-4 text-gray-800 dark:text-[#f5f5f7]'
-          }`}>
+          <div
+            onPointerDown={showToolbar ? handleMessagePress : undefined}
+            onPointerMove={showToolbar ? handleMessagePressMove : undefined}
+            onPointerUp={showToolbar ? cancelMessagePress : undefined}
+            onPointerCancel={showToolbar ? cancelMessagePress : undefined}
+            onPointerLeave={showToolbar ? cancelMessagePress : undefined}
+            onLostPointerCapture={showToolbar ? cancelMessagePress : undefined}
+            onContextMenu={showToolbar ? handleMessageContextMenu : undefined}
+            className={`${showToolbar ? 'saki-message-long-press ' : ''}rounded-2xl p-3 sm:p-4 transition-all ${editingMsgIdx === idx ? 'shadow-xl w-full' : 'hover:translate-y-[-1px] hover:shadow-lg'} ${
+              m.role === 'user'
+                ? 'bg-gradient-to-br from-[#ff75ac] to-[#ff5b9a] text-white shadow-[0_8px_24px_rgba(255,117,172,0.3)] rounded-tr-none rounded-2xl p-3 sm:p-4'
+                : showPendingState
+                  ? ''
+                  : 'bg-white/85 dark:bg-[#231b26]/85 border border-white/65 dark:border-pink-400/25 shadow-[0_10px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgba(255,117,172,0.08)] backdrop-blur-xl rounded-tl-none rounded-2xl p-3 sm:p-4 text-gray-800 dark:text-[#f5f5f7]'
+            }`}
+          >
             {editingMsgIdx === idx ? (
               <div className="flex flex-col gap-4 pointer-events-auto w-full animate-in fade-in duration-200">
                 <div className="relative rounded-2xl border border-slate-200/80 bg-slate-50/50 p-1 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)] backdrop-blur-sm focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all">

@@ -105,6 +105,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
   const [callTurns, setCallTurns] = useState([])
   const [liveReply, setLiveReply] = useState('')
   const [interim, setInterim] = useState('')
+  const [micNeedsRepeat, setMicNeedsRepeat] = useState(false)
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [avatarReady, setAvatarReady] = useState(false)
@@ -830,7 +831,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
         peakAt = now
         return speakerPeak
       }
-      startCallMic({
+      const reportMicSpeech = startCallMic({
         mode: micMode, stream, backendUrl, base, lang, signal,
         speakerLevel,
         echoReference: voice.echoReference,
@@ -838,11 +839,21 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
         onSpeech: (draft = '', final = false, overlapsPlayback = false) => {
           if (!isListening()) return
           state.heard = performance.now()
+          setMicNeedsRepeat(false)
           const draftLength = draft.replace(/[^\p{L}\p{N}]/gu, '').length
           if (state.turn && (final || (state.phase !== 'speaking' && !overlapsPlayback && draftLength >= 2))) interruptRef.current()
         },
-        onDraft: value => { if (isListening()) setInterim(value) },
-        onText: value => { if (isListening()) void sendRef.current(value, true) },
+        onDraft: value => {
+          if (!isListening()) return
+          if (value) setMicNeedsRepeat(false)
+          setInterim(value)
+        },
+        onText: value => {
+          if (!isListening()) return
+          setMicNeedsRepeat(false)
+          void sendRef.current(value, true)
+        },
+        onUnrecognized: () => { if (isListening()) setMicNeedsRepeat(true) },
         onError: disable,
       })
       if (stream && isListening()) {
@@ -851,9 +862,12 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
           updateMicLevel(level)
           if (micMode === 'server' || rms === undefined) return
           micSamples++
-          const gate = .014 + Math.max(.15, speakerLevel()) * .14
+          const output = speakerLevel()
+          const playback = output > .015 || Boolean(voice.echoReference())
+          const gate = playback ? .014 + Math.max(.15, output) * .14 : .008
           strongFrames = rms > gate ? strongFrames + 1 : 0
           if (strongFrames >= 2) nearEndAt = performance.now()
+          if (!playback && strongFrames >= 3) reportMicSpeech?.()
         })
       }
     }
@@ -864,6 +878,7 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
       updateMicLevel(0)
       stream?.getTracks().forEach(track => track.stop())
       setInterim('')
+      setMicNeedsRepeat(false)
     }
   }, [mic, micMode, lang, voice, backendUrl])
 
@@ -1135,6 +1150,9 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
     <section className="call-bottom" aria-label={l('通话控制', 'Call controls', '通話コントロール')}>
       {captions && <VideoCallCaptions caption={caption} interim={interim} turns={callTurns} liveReply={liveReply} aiAvatar={config.aiAvatar} userAvatar={config.userAvatar} />}
       {error && <div className="call-error" role="alert">{Array.isArray(error) ? l(...error) : error}</div>}
+      {!error && micNeedsRepeat && <div className="call-error" role="status">
+        {l('上一句没有转成文字，请再说一遍。', 'Speech recognition missed that sentence. Please say it again.', '発話を文字に変換できませんでした。もう一度話してください。')}
+      </div>}
       <div className="call-console">
         {files.length > 0 && <div className="call-files">{files.map(file => <span key={file.id}>{file.name}
           <button type="button" aria-label={l(`移除 ${file.name}`, `Remove ${file.name}`, `${file.name} を削除`)} onClick={() => setFiles(current => current.filter(item => item.id !== file.id))}><X size={13} /></button>

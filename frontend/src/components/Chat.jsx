@@ -1718,6 +1718,7 @@ export default function Chat({
   }, [onDockHostMount, onDockHostUnmount]);
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [readingIdx, setReadingIdx] = useState(null);
+  const [openMessageActions, setOpenMessageActions] = useState(null);
   const [editingMsgIdx, setEditingMsgIdx] = useState(null);
   const [editingMsgText, setEditingMsgText] = useState('');
   const [diagnosticsMsg, setDiagnosticsMsg] = useState(null);
@@ -1972,7 +1973,28 @@ export default function Chat({
 
   useEffect(() => {
     restoredOptionsRef.current = null;
+    setOpenMessageActions(null);
   }, [currentChatId]);
+
+  useEffect(() => {
+    if (openMessageActions == null) return;
+
+    const closeOnOutsidePress = (event) => {
+      if (!event.target.closest?.('[data-message-actions]')) setOpenMessageActions(null);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      const toolbar = event.target.closest?.('.saki-message-toolbar');
+      toolbar?.closest('.saki-message-bubble')?.focus();
+      setOpenMessageActions(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePress, true);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePress, true);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openMessageActions]);
 
   useEffect(() => {
     if (!restoredOptionsRef.current) return;
@@ -2904,6 +2926,8 @@ export default function Chat({
               key={m.id || idx}
               message={m}
               index={idx}
+              actionsOpen={openMessageActions === (m.id ?? idx)}
+              onChangeMessageActions={setOpenMessageActions}
               isGenerating={isGenerating}
               isLastMessage={idx === messages.length - 1}
               checkpointOwner={messageCheckpointOwners[idx]}
@@ -3821,6 +3845,7 @@ function estimateMessageTokens(message) {
 }
 
 function MessageBubbleToolbar({
+  id,
   align = 'start',
   isAssistant,
   message,
@@ -3839,7 +3864,11 @@ function MessageBubbleToolbar({
   const tokens = isAssistant ? estimateMessageTokens(message) : 0;
 
   return (
-    <div className={`saki-message-toolbar saki-touch-visible pointer-events-none absolute -top-3.5 md:-top-4 z-10 flex w-max max-w-[calc(100vw-2.5rem)] items-center gap-0.5 sm:gap-1.5 rounded-2xl border border-white/40 bg-white/90 p-1 sm:p-1.5 shadow-xl backdrop-blur-md opacity-100 transition-all md:opacity-0 md:translate-y-1 md:group-hover/message:translate-y-0 md:group-hover/message:opacity-100 ${align === 'end' ? 'right-1 sm:right-3' : 'left-1 sm:left-3'}`}>
+    <div
+      id={id}
+      data-message-actions
+      className={`saki-message-toolbar pointer-events-none absolute top-0 z-10 flex w-max max-w-[calc(100vw-3.75rem)] items-center gap-0.5 rounded-2xl border border-white/40 bg-white/90 p-1 shadow-xl backdrop-blur-md ${align === 'end' ? 'right-0' : 'left-0'}`}
+    >
       {isAssistant && tokens > 0 && (
         <button 
           onClick={(e) => {
@@ -4085,7 +4114,7 @@ function ToolbarButton({ onClick, label, icon: Icon, active = false, destructive
       data-destructive={destructive || undefined}
     >
       <Icon size={13} className={active ? 'animate-pulse' : ''} />
-      <span className="hidden sm:inline">{label}</span>
+      <span className="saki-message-action-label hidden">{label}</span>
     </button>
   );
 }
