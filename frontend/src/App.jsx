@@ -2166,10 +2166,6 @@ function App() {
           try {
             const data = JSON.parse(dataStr);
 
-            if (data.type === 'checkpoint_warning') {
-              window.alert(getLocalText('工作区超过检查点容量限制，本轮可以继续，但无法还原本轮文件更改。', 'The workspace exceeds the checkpoint limit. This turn can continue, but its file changes cannot be restored.'));
-              continue;
-            }
             if (data.type === 'checkpoint' && data.checkpoint) {
               setMessages(previous => {
                 const updated = attachCheckpoint(previous, data.checkpoint);
@@ -2750,10 +2746,6 @@ function App() {
               queueStore.pause(activeChatId, String(data.error || data.text || '流响应错误'));
             }
 
-            if (data.type === 'checkpoint_warning') {
-              window.alert(getLocalText('工作区超过检查点容量限制，本轮可以继续，但无法还原本轮文件更改。', 'The workspace exceeds the checkpoint limit. This turn can continue, but its file changes cannot be restored.'));
-              continue;
-            }
             if (data.type === 'checkpoint' && data.checkpoint) {
               setMessages(previous => {
                 const updated = attachCheckpoint(previous, data.checkpoint);

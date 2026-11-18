@@ -19,7 +19,7 @@ function createMockRes() {
 }
 
 describe('CheckpointService workspace locks and restore', () => {
-    it('identifies capacity failures and refuses to restore across a missing later checkpoint', async () => {
+    it('does not impose the former capacity options and refuses to restore across a missing later checkpoint', async () => {
         const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'saki-cp-capacity-'));
         try {
             const workDir = path.join(tmpRoot, 'workspace');
@@ -27,8 +27,12 @@ describe('CheckpointService workspace locks and restore', () => {
             await fs.ensureDir(workDir);
             await fs.ensureDir(sessionsDir);
             await fs.writeFile(path.join(workDir, 'a.txt'), 'before');
-            const limited = new CheckpointService({ storeDir: path.join(tmpRoot, 'limited'), maxBytes: 1 });
-            await assert.rejects(() => limited.capture(workDir), error => error.code === 'CHECKPOINT_CAPACITY_EXCEEDED');
+            const limited = new CheckpointService({ storeDir: path.join(tmpRoot, 'limited'), maxFiles: 1, maxBytes: 1 });
+            assert.equal((await limited.capture(workDir))[0].size, 6);
+            const largeCheckpoint = await limited.ensure({ chatId: 'large', messageId: 'one', root: workDir, beforeMessages: [], userMessage: { role: 'user', id: 'one' } });
+            await fs.writeFile(path.join(workDir, 'a.txt'), 'changed');
+            await limited.restore({ id: largeCheckpoint.id, chatId: 'large', commit: async () => {} });
+            assert.equal(await fs.readFile(path.join(workDir, 'a.txt'), 'utf8'), 'before');
             const service = new CheckpointService({ storeDir: path.join(tmpRoot, 'store') });
             const chatId = 'capacity_chat';
             const userMessage = { role: 'user', id: 'one', content: 'first' };

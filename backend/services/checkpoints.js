@@ -12,11 +12,9 @@ const rootKey = root => process.platform === 'win32' ? path.resolve(root).toLowe
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class CheckpointService {
-    constructor({ storeDir, excludePaths = [], maxFiles = 100000, maxBytes = 2 * 1024 ** 3 }) {
+    constructor({ storeDir, excludePaths = [] }) {
         this.storeDir = path.resolve(storeDir);
         this.excludePaths = [this.storeDir, ...excludePaths.map(value => path.resolve(value))];
-        this.maxFiles = maxFiles;
-        this.maxBytes = maxBytes;
         this.hashCache = new Map();
         this.workspaceLocks = new Map();
         this.workspaceContext = new AsyncLocalStorage();
@@ -161,7 +159,6 @@ class CheckpointService {
 
     async scan(root) {
         const entries = [];
-        let bytes = 0;
         const walk = async (directory, prefix = '') => {
             const children = await fs.readdir(directory, { withFileTypes: true });
             children.sort((a, b) => a.name.localeCompare(b.name));
@@ -179,12 +176,8 @@ class CheckpointService {
                     entries.push({ ...common, type: 'directory' });
                     await walk(absolute, relative);
                 } else if (stat.isFile()) {
-                    bytes += stat.size;
                     entries.push({ ...common, type: 'file' });
                 } else throw failure(`检查点不支持此文件类型：${relative}`);
-                if (entries.length > this.maxFiles || bytes > this.maxBytes) {
-                    throw Object.assign(failure('工作区超出检查点容量限制，请选择更小的工作区或调整 CHECKPOINT_MAX_FILES / CHECKPOINT_MAX_BYTES。', 413), { code: 'CHECKPOINT_CAPACITY_EXCEEDED' });
-                }
             }
         };
         try { await walk(root); }
@@ -225,7 +218,7 @@ class CheckpointService {
             if (await fs.pathExists(object)) await fs.unlink(temporary);
             else await fs.rename(temporary, object);
         } catch (error) { await fs.unlink(temporary).catch(() => {}); throw error; }
-        if (this.hashCache.size > this.maxFiles) this.hashCache.clear();
+        if (this.hashCache.size >= 100000 && !this.hashCache.has(source)) this.hashCache.delete(this.hashCache.keys().next().value);
         this.hashCache.set(source, { stamp, hash: digest });
         return digest;
     }
@@ -295,7 +288,7 @@ class CheckpointService {
     }
 
     async validate(root, entries) {
-        if (!path.isAbsolute(root) || !Array.isArray(entries) || entries.length > this.maxFiles) throw failure('检查点工作区或目录清单无效。');
+        if (!path.isAbsolute(root) || !Array.isArray(entries)) throw failure('检查点工作区或目录清单无效。');
         const names = new Set();
         const types = new Map(entries.map(entry => [entry.path, entry.type]));
         const verified = new Set();

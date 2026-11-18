@@ -41,6 +41,7 @@ const { WorkspaceService } = require('./services/workspace');
 const { CheckpointService } = require('./services/checkpoints');
 const { prepareTurnCheckpoint, createCheckpointRestoreHandler } = require('./services/checkpointSessions');
 const { deleteDirectoryToTrash } = require('./services/directoryDeletion');
+const { hasUnsafeAbsoluteCd } = require('./services/terminalPaths');
 const { buildCompactAgentPrompt, packMemoryEvidence } = require('./services/smallModelContext');
 const { createToolRegistry, renderToolCatalog, parseToolCalls, parseMcpArguments, normalizeRespondText } = require('./services/agentTools');
 const { verifyClaim } = require('./services/claimVerification');
@@ -176,8 +177,6 @@ const withSessionWrite = createKeyedSerialQueue();
 const checkpointService = new CheckpointService({
     storeDir: process.env.CHECKPOINT_STORE_DIR || path.join(os.homedir(), '.saki-ai', 'checkpoints'),
     excludePaths: [SESSIONS_DIR, HISTORY_FILE],
-    maxFiles: Number(process.env.CHECKPOINT_MAX_FILES) || 100000,
-    maxBytes: Number(process.env.CHECKPOINT_MAX_BYTES) || 2 * 1024 ** 3,
 });
 const FILE_WRITE_LOCKS = new Map();
 const AGENT_AUTH_TOKEN = String(process.env.AGENT_AUTH_TOKEN || crypto.randomBytes(32).toString('hex'));
@@ -597,10 +596,9 @@ function evaluateTerminalPermission(command, permissionMode) {
         /(^|[\s("'`])\.\.([\\/]|$|[\s"'`])/i,  // block any relative path traversal (e.g. .., ..\, ../)
         /(^|[\s("'`])[a-z]:([\\/]|$|[\s"'`])/i, // block any drive letter path (e.g. c:, c:\, c:/)
         /(^|[\s("'`])\\\\/i,                   // block UNC network paths
-        /\b(cd|set-location|sl)\b\s*(?:[\\/]|[a-z]:|~)/i, // block cd to root, drive, or home (e.g., cd/, cd \, cd ~)
     ];
 
-    if (sandboxEscapePatterns.some(pattern => pattern.test(raw))) {
+    if (sandboxEscapePatterns.some(pattern => pattern.test(raw)) || hasUnsafeAbsoluteCd(raw, workspaceService.currentRoot)) {
         return {
             allowed: false,
             reason: `Permission denied: default permission only allows terminal access inside sandbox ${workspaceService.currentRoot}. Switch to full access for broader paths.`,
@@ -9405,7 +9403,7 @@ async function runAgentLoopInWorkspace(res, { message, history, context, provide
 - Project files, configs, memories, secrets, and user folders outside the sandbox are blocked in this mode.
 - If you are blocked by permissions, explain that the user can switch to full access and try again.`;
     } else {
-        context += '\n\nFULL ACCESS MODE ENABLED: terminal and file tools may access the broader workspace as before. Use caution and keep actions tightly scoped to the user request.';
+        context += '\n\nFULL ACCESS MODE ENABLED: terminal commands and file tools are not restricted to the workspace sandbox and do not require per-action sandbox approval. Run the commands needed for the user\'s request directly, subject to the operating system permissions.';
     }
 
     context += `\n\nACTIVE WORKSPACE: ${FILES_DIR}. Resolve relative paths and run terminal commands here. The user selected this directory for the current task. Inspect existing projects before creating new project folders.`;
@@ -10472,7 +10470,7 @@ ${partialAssistantText || '(empty partial output)'}`;
                     }
 
                     const workspacePath = path.resolve(FILES_DIR, raw);
-                    if (!isPathInside(FILES_DIR, workspacePath)) {
+                    if (permissionMode === AGENT_PERMISSION_MODE_DEFAULT && !isPathInside(FILES_DIR, workspacePath)) {
                         return {
                             filePath: workspacePath,
                             usedWorkspaceDefault: true,
@@ -14997,19 +14995,13 @@ app.post('/api/chat', async (req, res) => {
     try {
 
     let checkpoint = null;
-    let checkpointWarning = null;
     if (!chatMode) {
         const root = await workspaceService.resolveRoot(config?.workspacePath || '');
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
-        try {
-            checkpoint = await checkpointService.withWorkspace(root, async () => {
-                if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return null;
-                return prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
-            }, { kind: 'prepare', chatId });
-        } catch (error) {
-            if (error.code !== 'CHECKPOINT_CAPACITY_EXCEEDED') throw error;
-            checkpointWarning = error.code;
-        }
+        checkpoint = await checkpointService.withWorkspace(root, async () => {
+            if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return null;
+            return prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
+        }, { kind: 'prepare', chatId });
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
     }
     if (res.destroyed || res.writableEnded) return;
@@ -15017,7 +15009,6 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     if (checkpoint) res.write(`data: ${JSON.stringify({ type: 'checkpoint', checkpoint })}\n\n`);
-    if (checkpointWarning) res.write(`data: ${JSON.stringify({ type: 'checkpoint_warning', code: checkpointWarning })}\n\n`);
 
     if (chatId && String(message || '').trim().startsWith('/compact')) {
         await handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config });

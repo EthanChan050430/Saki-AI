@@ -71,7 +71,7 @@ function buildCapabilityProfile({
         ? 'disabled in settings'
         : 'enabled for short instrumental MIDI sketches such as BGM, loops, and melody ideas';
     const permissionState = permissionMode === 'full-access'
-        ? 'terminal and file tools can reach the broader workspace'
+        ? 'terminal commands and file tools are not restricted to the workspace sandbox and do not require per-action sandbox approval, subject to operating system permissions'
         : `terminal and file tools stay inside the sandbox (${sandboxPath}) by default, and sensitive actions may still need approval`;
 
     return [
