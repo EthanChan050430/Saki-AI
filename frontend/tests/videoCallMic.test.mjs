@@ -35,6 +35,7 @@ function browserRecognizer(t) {
   globalThis.SpeechRecognition = class {
     constructor() { this.starts = []; instances.push(this) }
     start(...args) { this.starts.push(args) }
+    stop() { this.stops = (this.stops || 0) + 1 }
     abort() { this.aborted = true }
   }
   t.after(() => { globalThis.SpeechRecognition = saved })
@@ -42,6 +43,111 @@ function browserRecognizer(t) {
 }
 
 const result = (transcript, isFinal = false) => Object.assign([{ transcript }], { isFinal })
+
+test('browser recognition uses the same live microphone track as the meter and can retry the default input', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  h.track.kind = 'audio'
+  startCallMic({ ...h.options, mode: 'browser', onDraft: () => {} })
+  const recognition = instances[0]
+  assert.deepEqual(recognition.starts, [[h.track]])
+  recognition.onerror({ error: 'audio-capture' })
+  recognition.onend()
+  t.mock.timers.tick(180)
+  assert.deepEqual(recognition.starts, [[h.track], []])
+  recognition.onresult({ results: [result('你好 Saki', true)] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.texts, ['你好 Saki'])
+  assert.deepEqual(h.errors, [])
+  h.controller.abort()
+})
+
+test('a browser that stops at an interim result sends the finished utterance once', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  startCallMic({ ...h.options, onDraft: () => {} })
+  const recognition = instances[0]
+  recognition.onspeechstart()
+  recognition.onresult({ results: [result('刚才说的已经识别了')] })
+  recognition.onspeechend()
+  t.mock.timers.tick(450)
+  assert.equal(recognition.stops, 1)
+  assert.deepEqual(h.texts, [])
+  recognition.onend()
+  assert.deepEqual(h.texts, ['刚才说的已经识别了'])
+  t.mock.timers.tick(1200)
+  assert.equal(h.texts.length, 1)
+  h.controller.abort()
+})
+
+test('a stuck interim result cannot keep a confirmed result from being sent', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  startCallMic({ ...h.options, onDraft: () => {} })
+  const recognition = instances[0]
+  const final = result('第一句已识别', true)
+  recognition.onresult({ results: [final, result('第二')] })
+  t.mock.timers.tick(600)
+  recognition.onresult({ results: [final, result('第二句')] })
+  t.mock.timers.tick(500)
+  assert.deepEqual(h.texts, ['第一句已识别'])
+  recognition.onresult({ results: [final, result('第二句也识别了', true)] })
+  recognition.onend()
+  assert.deepEqual(h.texts, ['第一句已识别', '第二句也识别了'])
+  h.controller.abort()
+})
+
+test('a stalled recognizer sends the ended utterance once and rejects callbacks from its retired instance', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  startCallMic({ ...h.options, onDraft: () => {} })
+  const first = instances[0]
+  const lateResult = first.onresult
+  const lateEnd = first.onend
+  first.onspeechstart()
+  first.onresult({ results: [result('你能听到我吗')] })
+  first.onspeechend()
+  t.mock.timers.tick(450)
+  assert.equal(first.stops, 1)
+  t.mock.timers.tick(1499)
+  assert.deepEqual(h.texts, [])
+  t.mock.timers.tick(1)
+  assert.deepEqual(h.texts, ['你能听到我吗'])
+  assert.equal(first.aborted, true)
+  t.mock.timers.tick(180)
+  assert.equal(instances.length, 2)
+
+  lateResult({ results: [result('你能听到我吗', true)] })
+  lateEnd()
+  instances[1].onresult({ results: [result('这是下一句话', true)] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.texts, ['你能听到我吗', '这是下一句话'])
+  assert.equal(instances.length, 2)
+  h.controller.abort()
+})
+
+test('a final result arriving before the deadline wins and muting prevents an overdue restart', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  startCallMic({ ...h.options, onDraft: () => {} })
+  const recognition = instances[0]
+  recognition.onspeechstart()
+  recognition.onresult({ results: [result('等我说完')] })
+  recognition.onspeechend()
+  t.mock.timers.tick(450)
+  recognition.onresult({ results: [result('请等我说完。', true)] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.texts, ['请等我说完。'])
+  h.controller.abort()
+  t.mock.timers.tick(2000)
+  assert.deepEqual(h.texts, ['请等我说完。'])
+  assert.equal(instances.length, 1)
+})
 
 test('browser recognition streams drafts and sends each final once without calling the server', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -291,6 +397,17 @@ test('two voiced frames start an utterance instead of three', async t => {
   assert.deepEqual(h.speech, [], 'a single frame is noise')
   for (const frame of loud(1)) port.onmessage(frame)
   assert.equal(h.speech.length, 1)
+  h.controller.abort()
+})
+
+test('quiet speech reaches server transcription while there is no playback', async t => {
+  const h = harness(t, async url => url.endsWith('/ready')
+    ? readyResponse
+    : { ok: true, json: async () => ({ text: '轻声说的话' }) })
+  await startLocalCallMic(h.options)
+  for (const frame of [...loud(4, .009), ...loud(6, 0)]) h.nodes[0].port.onmessage(frame)
+  await tick()
+  assert.deepEqual(h.texts, ['轻声说的话'])
   h.controller.abort()
 })
 

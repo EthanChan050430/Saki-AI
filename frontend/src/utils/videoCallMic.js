@@ -27,6 +27,8 @@ const QUIET_TO_STOP = 6
 const MAX_FRAMES = 188
 const MIN_FRAMES = 2
 const BROWSER_NETWORK_RETRY_DELAYS = [400, 800]
+const BROWSER_FINALIZE_DELAY = 450
+const BROWSER_END_TIMEOUT = 1500
 
 const matchesPlayback = (text, references, allowApproximate = true) => (
   [...references].some(reference => looksLikeEcho(text, reference, true, allowApproximate))
@@ -54,9 +56,9 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   if (!Recognition) { onError('unsupported'); return }
 
   let recognition
-  try { recognition = new Recognition() } catch { onError('start-failed'); return }
-
-  let sendTimer, restartTimer, committed = '', finalCount = 0
+  let inputTrack = stream?.getAudioTracks().find(track => track.kind === 'audio' && track.readyState === 'live')
+  let sendTimer, finalizeTimer, endTimer, restartTimer
+  let committed = '', draft = '', finalCount = 0, speechEnded = false, endedWithError = false
   let networkFailures = 0
   let retryDelay = 180, nearEndSpeech = false
   const references = new Set()
@@ -71,21 +73,57 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   }
   const dispatch = () => {
     clearTimeout(sendTimer)
+    sendTimer = undefined
     if (!committed || signal.aborted) return
     const value = committed
     committed = ''
     onText(value)
+    if (draft && !signal.aborted) onDraft(draft)
+  }
+  const clearFinalize = () => {
+    clearTimeout(finalizeTimer)
+    finalizeTimer = undefined
+  }
+  const clearEndTimer = () => {
+    clearTimeout(endTimer)
+    endTimer = undefined
+  }
+  const waitForEnd = () => {
+    if (endTimer !== undefined) return
+    const current = recognition
+    endTimer = setTimeout(() => {
+      if (!signal.aborted && recognition === current) finishSession(true)
+    }, BROWSER_END_TIMEOUT)
+  }
+  const requestFinalResult = () => {
+    if (!speechEnded || !draft || finalizeTimer !== undefined || endTimer !== undefined) return
+    finalizeTimer = setTimeout(() => {
+      finalizeTimer = undefined
+      if (signal.aborted) return
+      // Wait for a final transcript, and restart the recognizer if its session never ends.
+      waitForEnd()
+      try { recognition.stop?.() } catch {}
+    }, BROWSER_FINALIZE_DELAY)
+  }
+  const releaseRecognition = () => {
+    const current = recognition
+    recognition = undefined
+    if (!current) return
+    current.onresult = current.onerror = current.onend = null
+    current.onspeechstart = current.onspeechend = null
+    try { current.abort() } catch {}
   }
   const stop = () => {
     clearTimeout(sendTimer)
+    clearFinalize()
+    clearEndTimer()
     clearTimeout(restartTimer)
     signal.removeEventListener('abort', stop)
-    recognition.onresult = recognition.onerror = recognition.onend = null
-    recognition.onspeechstart = recognition.onspeechend = null
-    recognition.abort()
+    releaseRecognition()
   }
   const browserFailed = reason => {
     if (signal.aborted) return
+    draft = ''
     stop()
     if (reason !== 'not-allowed') dispatch()
     onDraft('')
@@ -94,7 +132,18 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   const start = () => {
     if (signal.aborted) return
     retryDelay = 180
+    endedWithError = false
     try {
+      if (!recognition) attachRecognition(new Recognition())
+      if (inputTrack?.readyState === 'live') {
+        try {
+          recognition.start(inputTrack)
+          return
+        } catch (error) {
+          if (!['TypeError', 'NotSupportedError', 'InvalidStateError'].includes(error?.name)) throw error
+          inputTrack = undefined
+        }
+      }
       recognition.start()
     } catch (error) {
       const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
@@ -102,16 +151,18 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     }
   }
 
-  recognition.lang = lang
-  recognition.continuous = true
-  recognition.interimResults = true
-  recognition.onspeechstart = () => {
+  const handleSpeechStart = () => {
+    speechEnded = false
+    clearFinalize()
     resetSpeechEvidence()
     rememberPlayback()
   }
-  recognition.onspeechend = rememberPlayback
-  recognition.onresult = event => {
-    if (signal.aborted) return
+  const handleSpeechEnd = () => {
+    speechEnded = true
+    rememberPlayback()
+    requestFinalResult()
+  }
+  const handleResult = event => {
     networkFailures = 0
     const drafts = []
     let hasNewFinal = false
@@ -131,27 +182,66 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
       } else drafts.push(value)
     }
     if (finalCount !== previousFinalCount && event.results.length === finalCount) resetSpeechEvidence()
-    const draft = drafts.join(' ')
+    draft = drafts.join(' ')
+    if (draft) requestFinalResult()
+    else clearFinalize()
     if (draft || hasNewFinal) onSpeech(draft, hasNewFinal, overlapsPlayback)
     onDraft([committed, draft].filter(Boolean).join(' '))
-    clearTimeout(sendTimer)
-    if (committed && !draft) sendTimer = setTimeout(dispatch, 250)
+    // An interim result for the next clause must not hold a finished clause forever.
+    if (committed && (sendTimer === undefined || hasNewFinal || !draft)) {
+      clearTimeout(sendTimer)
+      sendTimer = setTimeout(dispatch, draft ? 1100 : 250)
+    }
   }
-  recognition.onerror = ({ error }) => {
-    if (error === 'aborted' || error === 'no-speech') return
+  const handleError = ({ error }) => {
+    endedWithError = true
+    clearFinalize()
+    if (error === 'aborted' || error === 'no-speech') {
+      waitForEnd()
+      return
+    }
+    if (error === 'audio-capture' && inputTrack) {
+      inputTrack = undefined
+      waitForEnd()
+      return
+    }
     if (error === 'network' && networkFailures < BROWSER_NETWORK_RETRY_DELAYS.length) {
       retryDelay = BROWSER_NETWORK_RETRY_DELAYS[networkFailures++]
+      waitForEnd()
       return
     }
     browserFailed(error)
   }
-  recognition.onend = () => {
-    if (signal.aborted) return
+  function finishSession(replaceRecognition = false) {
+    clearFinalize()
+    clearEndTimer()
+    if (replaceRecognition) releaseRecognition()
+    if (draft && !endedWithError && (!replaceRecognition || speechEnded)) {
+      committed += (committed ? ' ' : '') + draft
+    }
+    draft = ''
     dispatch()
     finalCount = 0
+    speechEnded = false
     resetSpeechEvidence()
     onDraft('')
     if (!signal.aborted) restartTimer = setTimeout(start, retryDelay)
+  }
+
+  function attachRecognition(current) {
+    recognition = current
+    // Ignore callbacks already queued by a browser after its old session is replaced.
+    const active = handler => event => {
+      if (!signal.aborted && recognition === current) handler(event)
+    }
+    current.lang = lang
+    current.continuous = true
+    current.interimResults = true
+    current.onspeechstart = active(handleSpeechStart)
+    current.onspeechend = active(handleSpeechEnd)
+    current.onresult = active(handleResult)
+    current.onerror = active(handleError)
+    current.onend = active(() => finishSession())
   }
   signal.addEventListener('abort', stop, { once: true })
   start()
@@ -214,7 +304,7 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
   }
   const echoCancellation = stream.getAudioTracks()[0]?.getSettings()?.echoCancellation
   let lead = [], utterance = [], voiced = 0, quiet = 0, started = false, pending = Promise.resolve()
-  let floor = .006
+  let floor = .004
   const submit = captured => {
     const frames = captured.map(({ frame }) => frame)
     if (frames.length < MIN_FRAMES) return
@@ -243,7 +333,8 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     const reference = echoReference()
     const output = Math.max(speakerLevel(), reference ? .15 : 0)
     const captured = { frame, reference }
-    const gate = Math.max(.009, floor * 2.6) + output * (echoCancellation ? .10 : .16)
+    const noiseGate = output ? Math.max(.0156, floor * 2.6) : Math.max(.006, floor * 1.8)
+    const gate = noiseGate + output * (echoCancellation ? .10 : .16)
     const heard = level > gate
     // Hysteresis keeps the utterance open through a soft consonant or a short
     // pause instead of cutting the last word of a sentence in half.
