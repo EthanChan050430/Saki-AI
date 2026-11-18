@@ -31,7 +31,7 @@ export function monitorCallMicLevel(stream, onLevel) {
         // Map -54..-12 dBFS to the capsule height; ignore the noise floor.
         const target = rms > .002 ? Math.max(0, Math.min(1, (20 * Math.log10(rms) + 54) / 42)) : 0
         level += (target - level) * (target > level ? .65 : .22)
-        onLevel(level < .005 ? 0 : level)
+        onLevel(level < .005 ? 0 : level, rms)
         previous = now
       }
       frame = requestAnimationFrame(tick)

@@ -1,12 +1,14 @@
 const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 
-// Text that arrives just after Saki stops speaking may be her own voice bleeding
-// back through the microphone. Only a transcript that covers a real share of
-// what she said counts as echo: a short reply like "挺好的" merely happens to
-// appear inside her sentence, and swallowing it would lose the user's words.
-export function looksLikeEcho(heardText, spokenText) {
+// Use stricter matching when the microphone actually overlapped playback.
+// Without that timing evidence, keep short replies that share common words.
+export function looksLikeEcho(heardText, spokenText, overlapsPlayback = false) {
   const heard = normalize(heardText)
   const spoken = normalize(spokenText)
+  // During playback or its echo tail, even a clipped syllable can be speaker bleed.
+  if (overlapsPlayback && heard && spoken.includes(heard)) {
+    return heard.length >= 2 || String(spokenText).split(/[\p{P}\p{Z}\s]+/u).some(piece => normalize(piece) === heard)
+  }
   if (heard.length < 6 || spoken.length < 6) return false
   if (spoken.includes(heard)) {
     return heard.length >= 10 || heard.length >= spoken.length * 0.5
@@ -20,5 +22,5 @@ export function looksLikeEcho(heardText, spokenText) {
   for (let i = 0; i < total; i++) {
     if (spokenBigrams.has(heard.slice(i, i + 2))) hits++
   }
-  return hits / total >= 0.55
+  return hits >= 4 && hits / total >= 0.55
 }

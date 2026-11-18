@@ -1,3 +1,5 @@
+import { BACKEND_URL } from './backendUrl.js';
+
 const STATUS_IDLE = 'idle';
 const STATUS_LOADING = 'loading';
 const STATUS_READY = 'ready';
@@ -11,9 +13,38 @@ let engineState = {
   sampleRate: 16000,
   numSpeakers: 1,
   error: null,
+  cacheUnavailable: false,
+  activeSource: '',
 };
 
 let initPromise = null;
+let cancelInit = null;
+const SOURCE_KEY = 'saki:tts-download-source:v2';
+const SOURCE_NAMES = ['auto', 'server', 'github', 'google', 'onedrive', 'pan123'];
+let downloadSource = 'auto';
+try {
+  const saved = globalThis.localStorage?.getItem(SOURCE_KEY);
+  if (SOURCE_NAMES.includes(saved)) downloadSource = saved;
+} catch {}
+
+export function getTtsDownloadSource() {
+  return downloadSource;
+}
+
+export function setTtsDownloadSource(source) {
+  if (!SOURCE_NAMES.includes(source) || source === downloadSource) return;
+  downloadSource = source;
+  try { globalThis.localStorage?.setItem(SOURCE_KEY, source); } catch {}
+  cancelInit?.();
+}
+
+const MODEL_SOURCES_API = `${BACKEND_URL}/api/tts/model-sources`;
+
+export async function getTtsModelSources() {
+  const response = await fetch(MODEL_SOURCES_API, { signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new Error('无法获取模型下载线路。');
+  return response.json();
+}
 let jobCounter = 0;
 const pendingJobs = new Map();
 const listeners = new Set();
@@ -48,13 +79,11 @@ export function subscribeLocalTtsStatus(cb) {
   return () => listeners.delete(cb);
 }
 
-export function initLocalTts() {
+export function initLocalTts(file) {
   if (engineState.status === STATUS_READY && worker) {
     return Promise.resolve({ ...engineState });
   }
   if (initPromise) return initPromise;
-
-  updateState({ status: STATUS_LOADING, progressText: '正在加载本地语音模型...', percent: 0, error: null });
 
   let resolveInit;
   let rejectInit;
@@ -63,9 +92,10 @@ export function initLocalTts() {
     rejectInit = reject;
   });
   initPromise = currentInit;
+  updateState({ status: STATUS_LOADING, progressText: '正在加载本地语音模型...', percent: 0, error: null, cacheUnavailable: false, activeSource: '' });
 
   try {
-    worker = new Worker('/tts-wasm/saki-tts.worker.js');
+    worker = new Worker('/tts-wasm/saki-tts.worker.js?v=3');
   } catch (err) {
     const msg = err?.message || '无法启动语音 Web Worker';
     updateState({ status: STATUS_ERROR, error: msg, progressText: msg });
@@ -75,21 +105,35 @@ export function initLocalTts() {
   }
 
   const currentWorker = worker;
-  const failInit = (msg) => {
+  const failInit = (msg, cancelled = false) => {
     if (worker !== currentWorker) return;
     currentWorker.terminate();
     worker = null;
+    cancelInit = null;
     if (initPromise === currentInit) initPromise = null;
     for (const job of pendingJobs.values()) job.reject(new Error(msg));
     pendingJobs.clear();
     rejectInit(new Error(msg));
-    updateState({ status: STATUS_ERROR, error: msg, progressText: msg });
+    updateState(cancelled
+      ? { status: STATUS_IDLE, error: null, progressText: '', percent: 0 }
+      : { status: STATUS_ERROR, error: msg, progressText: msg });
   };
+  cancelInit = () => failInit('已切换下载线路。', true);
   currentWorker.onerror = (err) => failInit(err?.message || 'WASM 语音引擎加载失败');
 
   currentWorker.onmessage = (e) => {
     if (worker !== currentWorker) return;
     const data = e.data || {};
+    if (data.type === 'selecting-source') {
+      updateState({ progressText: '正在按 IP 归属地选择下载线路...' });
+      return;
+    }
+
+    if (data.type === 'download-source') {
+      updateState({ activeSource: data.source, percent: 0, progressText: '正在连接模型下载线路...' });
+      return;
+    }
+
     if (data.type === 'progress') {
       const raw = String(data.status || '');
       const match = raw.match(/Downloading data\.\.\. \((\d+)\/(\d+)\)/);
@@ -109,7 +153,13 @@ export function initLocalTts() {
       return;
     }
 
+    if (data.type === 'cache-unavailable') {
+      updateState({ cacheUnavailable: true });
+      return;
+    }
+
     if (data.type === 'ready') {
+      cancelInit = null;
       if (initPromise === currentInit) initPromise = null;
       updateState({
         status: STATUS_READY,
@@ -136,6 +186,11 @@ export function initLocalTts() {
       else job.resolve({ samples: data.samples, sampleRate: data.sampleRate });
     }
   };
+  try {
+    currentWorker.postMessage({ type: 'init', file, source: downloadSource, sourcesUrl: MODEL_SOURCES_API });
+  } catch (error) {
+    failInit(error?.message || '无法启动模型加载。');
+  }
   return currentInit;
 }
 

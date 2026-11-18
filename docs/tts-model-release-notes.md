@@ -1,41 +1,43 @@
 # 浏览器端 TTS 模型
 
-此附件为 Saki-AI 浏览器端语音合成模型（约 132 MiB）。模型不包含在 Git 仓库中，需要在部署前下载。下载后仍由浏览器执行语音合成。
+Saki-AI 的浏览器端语音合成模型约 132 MiB，文件名为 `sherpa-onnx-wasm-main-tts.data`。模型在浏览器里运行。
 
-## 普通部署（Linux）
+## 在 Saki 里选择下载线路
 
-在 Saki-AI 项目根目录执行：
+在 **设置 → 语音 → 浏览器端神经网络语音 → 下载线路** 中选择来源。
 
-```bash
-mkdir -p frontend/public/tts-wasm
-curl -fL --retry 3 -o frontend/public/tts-wasm/sherpa-onnx-wasm-main-tts.data.tmp \
-  https://github.com/EthanChan050430/Saki-AI/releases/download/tts-model-v1/sherpa-onnx-wasm-main-tts.data
-echo '2fc20c60263d89c146fa3a71336d9c6d9bd62d57caa44f10e1f1a764e4149392  frontend/public/tts-wasm/sherpa-onnx-wasm-main-tts.data.tmp' | sha256sum -c -
-mv frontend/public/tts-wasm/sherpa-onnx-wasm-main-tts.data.tmp frontend/public/tts-wasm/sherpa-onnx-wasm-main-tts.data
-node scripts/launch.cjs --prepare --build
-```
+「自动（按 IP）」是默认模式。缓存未命中时，应用按访问设备的公网 IP 归属地选择来源：
 
-校验失败时不要执行 `mv`；重新下载后再次校验。构建完成后启动或重启你的 Saki-AI 服务。若配置了自定义 `SAKI_FRONTEND_DIST`，构建时使用相同配置。
+- 中国大陆依次尝试 123 云盘、OneDrive、GitHub Releases、Google Drive。
+- 其他地区依次尝试 GitHub Releases、Google Drive、123 云盘、OneDrive。定位超时也使用此顺序。
+- 自动模式跳过只配了分享页的 123 云盘。GitHub Releases 和 OneDrive 通过 Saki 服务转发，123 云盘直链优先由浏览器尝试。各镜像均失败时尝试当前服务器上的模型。
 
-对于已经构建的普通部署，也可以把校验通过的模型复制到当前使用的前端构建目录 `tts-wasm/` 下，不必重新构建。之后重新构建时，确保 `frontend/public/tts-wasm/` 中仍有模型。
+浏览器在缓存自动下载的文件前校验 SHA-256。手动选线和导入方式如下。
 
-## Docker Compose 部署
 
-在**构建镜像的机器**上，先执行上面的 `mkdir`、`curl`、校验和 `mv` 步骤，再在项目根目录构建并启动：
+- **当前服务器**：点击「预加载模型」，从当前部署下载。
+- **Google Drive**：点击「预加载模型」，浏览器从 Google Drive 直接下载并校验。
+- **GitHub Releases / OneDrive / 123 云盘**：点击「下载模型文件」，下载完成后点「导入模型文件」。浏览器会校验并缓存文件。
+- OneDrive 可由部署者通过 `SAKI_TTS_ONEDRIVE_URL` 设置为该文件允许下载的只读共享链接。未配置时，设置中的 OneDrive 选项不可选。修改部署配置后重启服务。
+- 123 云盘可通过 `SAKI_TTS_123PAN_SHARE_URL` 配置模型分享页。若有可供服务器直接下载的链接，可配置 `SAKI_TTS_123PAN_DIRECT_URL`。
 
-```bash
-docker compose build
-docker compose up -d
-```
+## 部署时下载
 
-如果镜像在其他机器构建，需先将模型放入该机器的构建目录；仅在运行容器的服务器下载模型不会修改现有镜像。
-
-## 验证
-
-将地址替换成你的网站地址，检查文件是否可访问：
+在项目根目录运行下面任意一条命令。已验证的同版本模型会自动复用。
 
 ```bash
-curl -I https://你的域名/tts-wasm/sherpa-onnx-wasm-main-tts.data
+node scripts/download-tts-model.cjs github
+node scripts/download-tts-model.cjs google
+node scripts/download-tts-model.cjs onedrive
+node scripts/download-tts-model.cjs pan123
 ```
 
-正常应返回 HTTP 200，文件大小为 138068830 字节。然后在 Saki-AI 中选择浏览器端神经网络语音并预加载模型。首次使用需要下载模型，耗时取决于网络速度。
+脚本验证文件大小和 SHA-256 后才安装模型。源码部署默认将模型放到 `frontend/public/tts-wasm/`。从源码构建时执行 `node scripts/launch.cjs --prepare --build`，或在构建 Docker 镜像的机器上执行 `docker compose up -d --build`。
+
+已有前端构建时，可加 `--dist` 直接装进当前构建目录。例如 `node scripts/download-tts-model.cjs google --dist`。默认构建目录为 `frontend/dist`，可通过 `SAKI_FRONTEND_DIST` 指定。独立发布包默认将模型安装到构建目录。
+
+## 模型校验
+
+- 文件大小为 138068830 字节。
+- SHA-256 为 `2fc20c60263d89c146fa3a71336d9c6d9bd62d57caa44f10e1f1a764e4149392`。
+- 线上部署可用 `curl -I https://你的域名/tts-wasm/sherpa-onnx-wasm-main-tts.data` 检查当前服务器是否提供模型。

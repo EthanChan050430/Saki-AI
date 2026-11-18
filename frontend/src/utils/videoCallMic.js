@@ -1,3 +1,5 @@
+import { looksLikeEcho } from './videoCallEcho.js'
+
 const targetRate = 16000
 
 function pcm16(frames, sampleRate) {
@@ -26,16 +28,18 @@ const MAX_FRAMES = 188
 const MIN_FRAMES = 2
 const BROWSER_NETWORK_RETRY_DELAYS = [400, 800]
 
-export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, isEcho, onSpeech, onDraft, onText, onError }) {
+const matchesPlayback = (text, references) => [...references].some(reference => looksLikeEcho(text, reference, true))
+
+export function startCallMic({ mode, stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', hasNearEndSpeech = () => true, onSpeech, onDraft, onText, onError }) {
   if (signal.aborted) return
 
   if (mode === 'server') {
     if (!stream) { onError('audio-capture'); return }
     const fail = () => { if (!signal.aborted) onError('server-unavailable') }
     void startLocalCallMic({
-      stream, backendUrl, base, lang, signal, speakerLevel, onSpeech,
+      stream, backendUrl, base, lang, signal, speakerLevel, echoReference, onSpeech,
       onText: value => {
-        if (signal.aborted || isEcho(value)) return
+        if (signal.aborted) return
         onSpeech()
         onText(value)
       },
@@ -52,7 +56,17 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
 
   let sendTimer, restartTimer, committed = '', finalCount = 0
   let networkFailures = 0
-  let retryDelay = 180
+  let retryDelay = 180, nearEndSpeech = false
+  const references = new Set()
+  const rememberPlayback = () => {
+    const reference = echoReference()
+    if (reference) references.add(reference)
+    nearEndSpeech ||= hasNearEndSpeech()
+  }
+  const resetSpeechEvidence = () => {
+    references.clear()
+    nearEndSpeech = false
+  }
   const dispatch = () => {
     clearTimeout(sendTimer)
     if (!committed || signal.aborted) return
@@ -65,6 +79,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     clearTimeout(restartTimer)
     signal.removeEventListener('abort', stop)
     recognition.onresult = recognition.onerror = recognition.onend = null
+    recognition.onspeechstart = recognition.onspeechend = null
     recognition.abort()
   }
   const browserFailed = reason => {
@@ -88,23 +103,32 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   recognition.lang = lang
   recognition.continuous = true
   recognition.interimResults = true
+  recognition.onspeechstart = () => {
+    resetSpeechEvidence()
+    rememberPlayback()
+  }
+  recognition.onspeechend = rememberPlayback
   recognition.onresult = event => {
     if (signal.aborted) return
     networkFailures = 0
     const drafts = []
     let hasNewFinal = false
+    const previousFinalCount = finalCount
+    rememberPlayback()
+    const overlapsPlayback = references.size > 0
     for (let i = finalCount; i < event.results.length; i += 1) {
       const result = event.results[i]
       const value = result[0].transcript.trim()
       if (result.isFinal) finalCount = i + 1
-      if (!value || isEcho(value)) continue
+      if (!value || (overlapsPlayback && (!nearEndSpeech || matchesPlayback(value, references)))) continue
       if (result.isFinal) {
         hasNewFinal = true
         committed += (committed ? ' ' : '') + value
       } else drafts.push(value)
     }
+    if (finalCount !== previousFinalCount && event.results.length === finalCount) resetSpeechEvidence()
     const draft = drafts.join(' ')
-    if (draft || hasNewFinal) onSpeech(draft, hasNewFinal)
+    if (draft || hasNewFinal) onSpeech(draft, hasNewFinal, overlapsPlayback)
     onDraft([committed, draft].filter(Boolean).join(' '))
     clearTimeout(sendTimer)
     if (committed && !draft) sendTimer = setTimeout(dispatch, 250)
@@ -121,6 +145,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
     if (signal.aborted) return
     dispatch()
     finalCount = 0
+    resetSpeechEvidence()
     onDraft('')
     if (!signal.aborted) restartTimer = setTimeout(start, retryDelay)
   }
@@ -128,7 +153,7 @@ export function startCallMic({ mode, stream, backendUrl, base, lang, signal, spe
   start()
 }
 
-export async function startLocalCallMic({ stream, backendUrl, base, lang, signal, speakerLevel, onSpeech, onText, onError, onStatus = () => {} }) {
+export async function startLocalCallMic({ stream, backendUrl, base, lang, signal, speakerLevel, echoReference = () => '', onSpeech, onText, onError, onStatus = () => {} }) {
   if (signal.aborted) return
   const Audio = globalThis.AudioContext || globalThis.webkitAudioContext
   if (!Audio) throw new Error('当前浏览器不支持本机语音采集。')
@@ -186,8 +211,11 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
   const echoCancellation = stream.getAudioTracks()[0]?.getSettings()?.echoCancellation
   let lead = [], utterance = [], voiced = 0, quiet = 0, started = false, pending = Promise.resolve()
   let floor = .006
-  const submit = frames => {
+  const submit = captured => {
+    const frames = captured.map(({ frame }) => frame)
     if (frames.length < MIN_FRAMES) return
+    // Keep the playback reference from capture time even if ASR is queued.
+    const references = new Set(captured.map(({ reference }) => reference).filter(Boolean))
     pending = pending.then(async () => {
       if (signal.aborted) return
       onStatus('transcribing')
@@ -199,7 +227,7 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
       const { text } = await response.json()
       if (!signal.aborted) {
         onStatus('listening')
-        if (text) onText(text)
+        if (text && !matchesPlayback(text, references)) onText(text)
       }
     }).catch(error => { if (!signal.aborted) onError(error) })
   }
@@ -208,7 +236,9 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     let energy = 0
     for (const value of frame) energy += value * value
     const level = Math.sqrt(energy / frame.length)
-    const output = speakerLevel()
+    const reference = echoReference()
+    const output = Math.max(speakerLevel(), reference ? .15 : 0)
+    const captured = { frame, reference }
     const gate = Math.max(.009, floor * 2.6) + output * (echoCancellation ? .14 : .22)
     const heard = level > gate
     // Hysteresis keeps the utterance open through a soft consonant or a short
@@ -216,9 +246,9 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
     const active = level > gate * .78
     if (!heard) floor += (Math.min(.014, level) - floor) * (level < floor ? .05 : .012)
     if (!started) {
-      lead = [...lead.slice(-5), frame]
+      lead = [...lead.slice(-5), captured]
       voiced = heard ? voiced + 1 : 0
-      if (voiced < VOICED_TO_START) return
+      if (voiced < VOICED_TO_START + (output ? 1 : 0)) return
       started = true
       utterance = lead
       lead = []
@@ -226,10 +256,10 @@ export async function startLocalCallMic({ stream, backendUrl, base, lang, signal
       // Only interrupt immediately on raw energy when Saki is silent; while she
       // is speaking, wait for transcription + echo filtering so speaker bleed
       // does not cut her off mid-sentence.
-      if (!output) onSpeech()
+      if (!output && !utterance.some(({ reference }) => reference)) onSpeech()
       return
     }
-    utterance.push(frame)
+    utterance.push(captured)
     quiet = active ? 0 : quiet + 1
     if (quiet < QUIET_TO_STOP && utterance.length < MAX_FRAMES) return
     // Silence tail only, keeping one frame so the last phoneme stays intact.

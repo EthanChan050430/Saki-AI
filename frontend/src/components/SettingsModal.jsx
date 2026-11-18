@@ -27,6 +27,9 @@ import {
 } from '../utils/loginAuth';
 import {
   getLocalTtsState,
+  getTtsDownloadSource,
+  getTtsModelSources,
+  setTtsDownloadSource,
   subscribeLocalTtsStatus,
   initLocalTts,
   synthesizeLocalSentence,
@@ -556,6 +559,10 @@ export default function SettingsModal({ config, setConfig, callMicMode, onChange
   };
 
   const [localTtsStatus, setLocalTtsStatus] = useState(() => getLocalTtsState());
+  const [modelSource, setModelSource] = useState(getTtsDownloadSource);
+  const [modelSources, setModelSources] = useState({});
+  const ttsModelFile = useRef(null);
+  const modelDownloadUrl = modelSources[modelSource];
   const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   const handleLoginPasswordChange = (value) => {
@@ -570,6 +577,15 @@ export default function SettingsModal({ config, setConfig, callMicMode, onChange
   useEffect(() => {
     return subscribeLocalTtsStatus(setLocalTtsStatus);
   }, []);
+
+  useEffect(() => {
+    if (config.ttsProvider !== 'local-wasm') return;
+    let active = true;
+    getTtsModelSources().then(sources => {
+      if (active) setModelSources(sources);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [config.ttsProvider]);
 
   useEffect(() => {
     if (config.ttsProvider === 'gpt-sovits' && sovitsModels.gpt.length === 0) {
@@ -1238,7 +1254,10 @@ export default function SettingsModal({ config, setConfig, callMicMode, onChange
                   {t('browser_tts')}
                 </button>
                 <button
-                  onClick={() => setConfig({...config, ttsProvider: 'local-wasm'})}
+                  onClick={() => {
+                    setConfig({ ...config, ttsProvider: 'local-wasm' });
+                    if (modelSource === 'auto') initLocalTts().catch(() => {});
+                  }}
                   className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${config.ttsProvider === 'local-wasm' ? 'bg-[var(--surface-bg)] shadow-sm text-[#ff75ac]' : 'text-[var(--text-secondary)] hover:text-[var(--text-dark)]'}`}
                 >
                   {getLocalText('本地模型 (WASM)', 'Local Model (WASM)', 'ローカルモデル (WASM)')}
@@ -1259,10 +1278,84 @@ export default function SettingsModal({ config, setConfig, callMicMode, onChange
                         {getLocalText('浏览器端神经网络语音 (sherpa-onnx WASM)', 'In-Browser Neural TTS (sherpa-onnx WASM)', 'ブラウザ内ニューラル TTS (sherpa-onnx WASM)')}
                       </div>
                       <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
-                        {getLocalText('模型作为静态资源托管，首次加载后自动缓存在本地浏览器中；全程零服务器算力消耗，加载失败时自动回退到浏览器 TTS。', 'Hosted as static files and cached in your browser after first load. Uses zero server compute and falls back to Browser TTS on error.')}
+                        {getLocalText('模型在浏览器中运行，首次使用需要下载约 132 MiB。', 'The model runs in your browser. The first load requires a 132 MiB download.', 'モデルはブラウザ上で動作し、初回は約 132 MiB のダウンロードが必要です。')}
                       </div>
                     </div>
                   </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    <label className="flex items-center gap-2 font-medium">
+                      {getLocalText('下载线路', 'Download source', 'ダウンロード元')}
+                      <select
+                        value={modelSource}
+                        onChange={(event) => {
+                          setTtsDownloadSource(event.target.value);
+                          setModelSource(event.target.value);
+                          if (event.target.value === 'auto') initLocalTts().catch(() => {});
+                        }}
+                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-bg)] px-2 py-1.5"
+                      >
+                        <option value="auto">{getLocalText("自动（按 IP）", "Automatic (by IP)", "自動 (IP に基づく)")}</option>
+                        <option value="server">{getLocalText('当前服务器', 'Current server', '現在のサーバー')}</option>
+                        <option value="google" disabled={!modelSources.google}>Google Drive</option>
+                        <option value="github" disabled={!modelSources.github}>GitHub Releases</option>
+                        <option value="onedrive" disabled={!modelSources.onedrive}>OneDrive</option>
+                        <option value="pan123" disabled={!modelSources.pan123}>{getLocalText("123 云盘", "123 Cloud", "123 クラウド")}</option>
+                      </select>
+                    </label>
+                    {modelDownloadUrl && (
+                      <a href={modelDownloadUrl} target="_blank" rel="noreferrer" className="px-1 font-semibold text-[var(--accent-text)] hover:underline">
+                        {getLocalText('下载模型文件', 'Download model file', 'モデルファイルをダウンロード')}
+                      </a>
+                    )}
+                    <input
+                      ref={ttsModelFile}
+                      type="file"
+                      accept=".data"
+                      hidden
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) initLocalTts(file).catch(() => {});
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => ttsModelFile.current?.click()}
+                      disabled={['loading', 'ready'].includes(localTtsStatus.status)}
+                      className="rounded-lg border border-[var(--border-subtle)] px-2 py-1.5 font-semibold hover:bg-[var(--surface-bg-light)] disabled:opacity-50"
+                    >
+                      {getLocalText('导入模型文件', 'Import model file', 'モデルファイルを読み込む')}
+                    </button>
+                  </div>
+                  {['github', 'onedrive', 'pan123'].includes(modelSource) && modelDownloadUrl && (
+                    <p className="text-[11px] text-[var(--text-secondary)]">
+                      {getLocalText('下载完成后导入 .data 文件，后续从浏览器缓存加载。', 'Import the downloaded .data file to reuse it from your browser cache.', 'ダウンロードした .data ファイルを読み込むと、次回からキャッシュを使用します。')}
+                    </p>
+                  )}
+                  {modelSource === 'onedrive' && !modelDownloadUrl && (
+                    <p className="text-[11px] text-[var(--text-secondary)]">
+                      {getLocalText('当前部署尚未配置 OneDrive 链接。', 'OneDrive is not configured for this deployment.', 'この環境では OneDrive が未設定です。')}
+                    </p>
+                  )}
+                  {modelSource === 'auto' && localTtsStatus.activeSource && (
+                    <p className="text-[11px] text-[var(--text-secondary)]">
+                      {getLocalText('已选线路', 'Selected source', '選択したダウンロード元')}
+                      {' · '}
+                      {{
+                        pan123: getLocalText('123 云盘', '123 Cloud', '123 クラウド'),
+                        onedrive: 'OneDrive',
+                        github: 'GitHub Releases',
+                        google: 'Google Drive',
+                        server: getLocalText('当前服务器', 'Current server', '現在のサーバー'),
+                      }[localTtsStatus.activeSource]}
+                    </p>
+                  )}
+                  {localTtsStatus.cacheUnavailable && (
+                    <p className="text-[11px] text-[var(--text-secondary)]">
+                      {getLocalText('浏览器无法保存模型缓存，下次可能需要重新加载。', 'The browser could not cache the model. It may need to download again next time.', 'モデルをキャッシュできませんでした。次回は再ダウンロードが必要な場合があります。')}
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                     <div className="text-[11px] font-medium text-[var(--text-secondary)]">

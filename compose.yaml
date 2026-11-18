@@ -15,6 +15,9 @@ services:
       SAKI_EMBEDDINGS: keyword
       SAKI_CRAWLER: static
       QQBOT_AUTO_CONNECT: "0"
+      SAKI_TTS_ONEDRIVE_URL: ${SAKI_TTS_ONEDRIVE_URL:-}
+      SAKI_TTS_123PAN_SHARE_URL: ${SAKI_TTS_123PAN_SHARE_URL:-}
+      SAKI_TTS_123PAN_DIRECT_URL: ${SAKI_TTS_123PAN_DIRECT_URL:-}
       NODE_OPTIONS: "--max-old-space-size=${SAKI_HEAP_MB:-384}"
     volumes:
       - saki-data:/app/data

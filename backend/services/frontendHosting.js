@@ -1,12 +1,62 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { size, getTtsModelSources, getAutomaticTtsModelSources, getTtsModelDownloadUrl, fetchTtsModelResponse } = require('./ttsModelSources');
+
+async function relayTtsModel(req, res) {
+    const source = req.params.source;
+    const url = ['pan123', 'onedrive', 'github'].includes(source) && getTtsModelDownloadUrl(source);
+    if (!url) return res.status(404).json({ error: 'Model download source unavailable.' });
+
+    const connection = new AbortController();
+    res.once('close', () => connection.abort());
+    const signal = AbortSignal.any([connection.signal, AbortSignal.timeout(15 * 60 * 1000)]);
+    try {
+        const upstream = await fetchTtsModelResponse(source, url, signal);
+        const length = upstream.headers.get('content-length');
+        if (!upstream.ok || !upstream.body || upstream.headers.get('content-type')?.includes('text/html') ||
+            (length && Number(length) !== size)) {
+            await upstream.body?.cancel();
+            return res.status(502).json({ error: 'Model download source did not return the expected file.' });
+        }
+
+        res.set({ 'Content-Type': 'application/octet-stream', 'Content-Length': String(size), 'Cache-Control': 'no-store' });
+        let remaining = size;
+        const limit = new Transform({
+            transform(chunk, _encoding, callback) {
+                remaining -= chunk.length;
+                if (remaining < 0) return callback(new Error('Model download exceeded the expected size.'));
+                callback(null, chunk);
+            },
+            flush(callback) {
+                callback(remaining ? new Error('Model download was incomplete.') : undefined);
+            },
+        });
+        await pipeline(upstream.body, limit, res, { signal });
+    } catch {
+        if (res.destroyed) return;
+        if (res.headersSent) res.destroy();
+        else res.status(502).json({ error: 'Model download source unavailable.' });
+    }
+}
 
 function mountFrontend(app, runtime) {
     app.get('/api/health', (_req, res) => {
         const memory = process.memoryUsage();
         res.json({ status: 'ok', pid: process.pid, profile: runtime.profile, uptime: process.uptime(), memory: { rss: memory.rss, heapUsed: memory.heapUsed }, frontend: fs.existsSync(path.join(runtime.frontendDist, 'index.html')) });
     });
+    app.get('/api/tts/model-sources', (req, res) => {
+        const country = req.get('CF-IPCountry')?.toUpperCase();
+        res.set('Cache-Control', 'no-store').json({
+            ...getTtsModelSources(),
+            automatic: getAutomaticTtsModelSources(),
+            country: /^[A-Z]{2}$/.test(country) && country !== 'XX' ? country : '',
+        });
+    });
+    app.head('/api/tts/model-download/:source', (_req, res) => res.sendStatus(405));
+    app.get('/api/tts/model-download/:source', relayTtsModel);
     if (!runtime.serveFrontend) return;
     // Mount after API routes: missing APIs/assets must never return the SPA shell.
     app.use(['/api', '/uploads', '/files'], (_req, res) => res.status(404).json({ error: 'Not found' }));

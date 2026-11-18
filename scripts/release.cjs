@@ -28,8 +28,8 @@ try {
     fs.rmSync(buildDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 for (const file of ['backend/server.js', 'backend/services', 'backend/package.json', 'backend/package-lock.json',
-    'scripts/launch.cjs', 'scripts/health.cjs', 'package.json', 'package-lock.json', 'start.bat', 'start-hidden.vbs',
-    'deploy.sh', 'configure.bat', 'configure.ps1', 'README.md', 'LICENSE', '.env.example', 'data/global_config.example.json', 'docs/deployment.md', 'docs/video-call.md']) {
+    'scripts/launch.cjs', 'scripts/download-tts-model.cjs', 'scripts/health.cjs', 'package.json', 'package-lock.json', 'start.bat', 'start-hidden.vbs',
+    'deploy.sh', 'configure.bat', 'configure.ps1', 'README.md', 'LICENSE', '.env.example', 'data/global_config.example.json', 'docs/deployment.md', 'docs/video-call.md', 'docs/tts-model-release-notes.md']) {
     const source = path.join(root, file);
     if (!fs.existsSync(source)) continue;
     const destination = path.join(target, file);

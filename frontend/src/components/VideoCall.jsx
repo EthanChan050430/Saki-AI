@@ -811,22 +811,41 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
         stream?.getTracks().forEach(track => track.stop())
         return
       }
+      let speakerPeak = 0, peakAt = -Infinity
+      let micSamples = 0, strongFrames = 0, nearEndAt = -Infinity
+      const speakerLevel = () => {
+        const now = performance.now()
+        const level = voice.level(now).voice
+        // Keep the threshold up through short gaps in the outgoing audio.
+        speakerPeak = Math.max(level, speakerPeak * Math.max(0, 1 - (now - peakAt) / 240))
+        peakAt = now
+        return speakerPeak
+      }
       startCallMic({
         mode: micMode, stream, backendUrl, base, lang, signal,
-        speakerLevel: () => state.phase === 'speaking' ? Math.max(.15, voice.level(performance.now()).voice) : 0,
-        isEcho: value => voice.isEcho(value),
-        onSpeech: (draft = '', final = false) => {
+        speakerLevel,
+        echoReference: voice.echoReference,
+        hasNearEndSpeech: () => micSamples < 2 || performance.now() - nearEndAt < 320,
+        onSpeech: (draft = '', final = false, overlapsPlayback = false) => {
           if (!isListening()) return
           state.heard = performance.now()
           const draftLength = draft.replace(/[^\p{L}\p{N}]/gu, '').length
-          if (state.turn && (final || (state.phase !== 'speaking' && draftLength >= 2))) interruptRef.current()
+          if (state.turn && (final || (state.phase !== 'speaking' && !overlapsPlayback && draftLength >= 2))) interruptRef.current()
         },
         onDraft: value => { if (isListening()) setInterim(value) },
         onText: value => { if (isListening()) void sendRef.current(value, true) },
         onError: disable,
       })
       if (stream && isListening()) {
-        stopMeter = monitorCallMicLevel(stream, level => { if (isListening()) updateMicLevel(level) })
+        stopMeter = monitorCallMicLevel(stream, (level, rms) => {
+          if (!isListening()) return
+          updateMicLevel(level)
+          if (micMode === 'server' || rms === undefined) return
+          micSamples++
+          const gate = .014 + Math.max(.15, speakerLevel()) * .14
+          strongFrames = rms > gate ? strongFrames + 1 : 0
+          if (strongFrames >= 2) nearEndAt = performance.now()
+        })
       }
     }
     void openMic()

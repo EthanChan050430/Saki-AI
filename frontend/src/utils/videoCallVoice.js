@@ -1,5 +1,4 @@
 import { synthesizeLocalSentence } from './localTtsEngine'
-import { looksLikeEcho } from './videoCallEcho'
 
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n))
 
@@ -17,8 +16,8 @@ export function createVideoCallVoice({ config, backendUrl }) {
   }
   const markSilence = () => { if (echo) echo.until = performance.now() + 1400 }
 
-  function isEcho(text) {
-    return Boolean(echo && performance.now() <= echo.until && looksLikeEcho(text, echo.text))
+  function echoReference() {
+    return echo && performance.now() <= echo.until ? echo.text : ''
   }
 
   async function prime() {
@@ -181,7 +180,7 @@ export function createVideoCallVoice({ config, backendUrl }) {
     return { voice: 0, articulation: 0 }
   }
   return {
-    synthesize, playPrepared, prime, level, isEcho,
+    synthesize, playPrepared, prime, level, echoReference,
     // Resolve the TTS engine while the call is connecting, so the first sentence
     // does not pay for worker/model startup.
     async warm() {

@@ -49,7 +49,7 @@ test('browser recognition streams drafts and sends each final once without calli
   let requests = 0
   const h = harness(t, async () => { requests++ })
   const drafts = []
-  startCallMic({ ...h.options, isEcho: value => value === 'Saki 的声音', onDraft: value => drafts.push(value) })
+  startCallMic({ ...h.options, echoReference: () => 'Saki 的声音', onDraft: value => drafts.push(value) })
   const recognition = instances[0]
   assert.equal(recognition.lang, 'zh-CN')
   assert.equal(recognition.continuous, true)
@@ -80,12 +80,63 @@ test('browser recognition streams drafts and sends each final once without calli
   assert.equal(requests, 0)
 })
 
+test('browser recognition rejects a short echo even when the final arrives after playback', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  let reference = '好的，我们继续聊刚才的问题。'
+  startCallMic({ ...h.options, mode: 'browser', echoReference: () => reference, onDraft: () => {} })
+  const recognition = instances[0]
+  recognition.onspeechstart()
+  reference = ''
+  const echo = result('好的', true)
+  recognition.onresult({ results: [echo] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.speech, [])
+  assert.deepEqual(h.texts, [])
+
+  recognition.onspeechstart()
+  recognition.onresult({ results: [echo, result('好的', true)] })
+  t.mock.timers.tick(250)
+  assert.equal(h.speech.length, 1)
+  assert.deepEqual(h.texts, ['好的'])
+  h.controller.abort()
+})
+
+test('browser barge-in requires microphone evidence when recognition overlaps playback', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const instances = browserRecognizer(t)
+  const h = harness(t, async () => {})
+  let nearEndSpeech = false
+  startCallMic({
+    ...h.options, mode: 'browser', echoReference: () => 'The weather should clear up tomorrow.',
+    hasNearEndSpeech: () => nearEndSpeech, onDraft: () => {},
+  })
+  const recognition = instances[0]
+  const garbledEcho = result('We should cheer at the show', true)
+  recognition.onspeechstart()
+  recognition.onresult({ results: [garbledEcho] })
+  t.mock.timers.tick(250)
+  assert.deepEqual(h.speech, [])
+  assert.deepEqual(h.texts, [])
+
+  recognition.onspeechstart()
+  nearEndSpeech = true
+  recognition.onspeechend()
+  nearEndSpeech = false
+  recognition.onresult({ results: [garbledEcho, result('Wait, can I ask something?', true)] })
+  t.mock.timers.tick(250)
+  assert.equal(h.speech.length, 1)
+  assert.deepEqual(h.texts, ['Wait, can I ask something?'])
+  h.controller.abort()
+})
+
 test('browser recognition retries network errors before reporting failure without calling the server', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const instances = browserRecognizer(t)
   let requests = 0
   const h = harness(t, async () => { requests++ })
-  startCallMic({ ...h.options, mode: 'browser', isEcho: () => false, onDraft: () => {} })
+  startCallMic({ ...h.options, mode: 'browser', onDraft: () => {} })
   const recognition = instances[0]
   for (const delay of [400, 800]) {
     const starts = recognition.starts.length
@@ -107,7 +158,7 @@ test('a successful result restores the browser retry budget and muting cancels t
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const instances = browserRecognizer(t)
   const h = harness(t, async () => {})
-  startCallMic({ ...h.options, mode: 'browser', isEcho: () => false, onDraft: () => {} })
+  startCallMic({ ...h.options, mode: 'browser', onDraft: () => {} })
   const recognition = instances[0]
   recognition.onerror({ error: 'network' })
   recognition.onend()
@@ -136,7 +187,7 @@ test('server mode uses only the server and never opens a recorder if disabled', 
     requests.push(url)
     return { ok: true, json: async () => ({ state: 'unavailable' }) }
   })
-  startCallMic({ ...h.options, mode: 'server', isEcho: () => false, onDraft: () => {} })
+  startCallMic({ ...h.options, mode: 'server', onDraft: () => {} })
   await tick()
   assert.deepEqual(requests, ['/api/video-call/transcribe/ready'])
   assert.deepEqual(h.errors, ['server-unavailable'])
@@ -272,10 +323,45 @@ test('speaker bleed while Saki is talking does not trigger immediate barge-in', 
   await tick()
   assert.deepEqual(h.speech, [])
   assert.equal(uploaded.length, 0, 'moderate speaker bleed is rejected at the VAD gate')
+  for (const frame of loud(2, 0.08)) port.onmessage(frame)
+  for (const frame of loud(6, 0)) port.onmessage(frame)
+  await tick()
+  assert.equal(uploaded.length, 0, 'a brief loud burst during playback does not start recording')
   for (const frame of loud(4, 0.08)) port.onmessage(frame)
   for (let i = 0; i < 6; i++) port.onmessage({ data: new Float32Array(1024) })
   await tick()
   assert.deepEqual(h.speech, [], 'louder audio while Saki speaks still waits for echo-filtered transcription')
   assert.equal(uploaded.length, 1, 'captured audio goes to transcription for real barge-in')
+  h.controller.abort()
+})
+
+test('server recognition filters delayed echo using the playback that overlapped the recording', async t => {
+  let respond
+  const h = harness(t, async url => {
+    if (url.endsWith('/ready')) return readyResponse
+    return new Promise(resolve => { respond = text => resolve({ ok: true, json: async () => ({ text }) }) })
+  })
+  let reference = '那就这样，我们明天再联系。'
+  h.options.echoReference = () => reference
+  await startLocalCallMic(h.options)
+  const port = h.nodes[0].port
+  const capture = async () => {
+    for (const frame of loud(4)) port.onmessage(frame)
+    for (const frame of loud(6, 0)) port.onmessage(frame)
+    await tick()
+  }
+
+  await capture()
+  reference = ''
+  respond('明天')
+  await tick()
+  assert.deepEqual(h.speech, [])
+  assert.deepEqual(h.texts, [])
+
+  reference = '那就这样，我们明天再联系。'
+  await capture()
+  respond('等等，我还有个问题')
+  await tick()
+  assert.deepEqual(h.texts, ['等等，我还有个问题'])
   h.controller.abort()
 })

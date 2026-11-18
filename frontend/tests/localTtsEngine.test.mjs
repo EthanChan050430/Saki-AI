@@ -79,3 +79,33 @@ test('stopping audio settles playback and start failures reach the caller', asyn
   failStart = true;
   await assert.rejects(engine.playFloat32Audio(new Float32Array(2), 22050), /audio unavailable/);
 });
+
+test('switching the model download source cancels a stalled load and passes the new source to its worker', async (t) => {
+  const workers = [];
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = class {
+    constructor() { workers.push(this); }
+    terminate() { this.terminated = true; }
+    postMessage(message) { this.message = message; }
+  };
+  t.after(() => {
+    if (originalWorker === undefined) delete globalThis.Worker;
+    else globalThis.Worker = originalWorker;
+  });
+
+  const engine = await import('../src/utils/localTtsEngine.js?source-switch');
+  const first = engine.initLocalTts();
+  const rejected = assert.rejects(first, /已切换下载线路/);
+  engine.setTtsDownloadSource('google');
+  await rejected;
+  assert.equal(workers[0].terminated, true);
+  assert.equal(engine.getLocalTtsState().status, 'idle');
+
+  const second = engine.initLocalTts();
+  assert.equal(workers[1].message.source, 'google');
+  workers[0].onmessage({ data: { type: 'ready' } });
+  assert.equal(engine.getLocalTtsState().status, 'loading');
+  workers[1].onmessage({ data: { type: 'ready' } });
+  await second;
+  assert.equal(engine.getLocalTtsState().status, 'ready');
+});

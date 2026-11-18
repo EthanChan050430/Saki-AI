@@ -34,3 +34,27 @@ test('frontend HTML is revalidated and missing assets do not fall back to HTML',
     assert.equal(missingAsset.status, 404);
     assert.doesNotMatch(missingAsset.headers.get('content-type') || '', /text\/html/);
 });
+
+test('the automatic model route skips 123 Cloud share pages and relays only known models', async t => {
+    const { getAutomaticTtsModelSources } = require('../services/ttsModelSources');
+    assert.equal(getAutomaticTtsModelSources({ SAKI_TTS_123PAN_SHARE_URL: 'https://share.123pan.cn/example' }).pan123, undefined);
+    assert.deepEqual(getAutomaticTtsModelSources({
+        SAKI_TTS_123PAN_DIRECT_URL: 'https://example.com/model',
+        SAKI_TTS_ONEDRIVE_URL: 'https://1drv.ms/example',
+    }).pan123, ['https://example.com/model', './model-download/pan123']);
+
+    const app = express();
+    mountFrontend(app, { serveFrontend: false });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(() => server.close());
+    const origin = 'http://127.0.0.1:' + server.address().port;
+
+    const response = await fetch(origin + '/api/tts/model-sources', { headers: { 'CF-IPCountry': 'CN' } });
+    const config = await response.json();
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(config.country, 'CN');
+    assert.deepEqual(config.automatic.github, ['./model-download/github']);
+    assert.equal((await fetch(origin + '/api/tts/model-download/unknown')).status, 404);
+    assert.equal((await fetch(origin + '/api/tts/model-download/github', { method: 'HEAD' })).status, 405);
+});

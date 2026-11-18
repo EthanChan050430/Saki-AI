@@ -89,4 +89,4 @@ function main(args = process.argv.slice(2)) {
     child.on('exit', (code, signal) => { process.exitCode = code ?? (signal === 'SIGINT' ? 0 : 1); });
 }
 if (require.main === module) { try { main(); } catch (error) { console.error('[Saki] ' + error.message); process.exitCode = 1; } }
-module.exports = { prepare, installDependencies, runNpm, main };
+module.exports = { prepare, installDependencies, loadEnv, runNpm, main };
