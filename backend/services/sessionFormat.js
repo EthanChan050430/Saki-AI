@@ -91,6 +91,36 @@ function migrateV0ToV1(record) {
 /** Ordered upgrade chain. Each entry maps version N to N+1. */
 const MIGRATIONS = Object.freeze([migrateV0ToV1]);
 
+function repairVideoCallOrder(record) {
+    const { messages } = record;
+    if (!Array.isArray(messages)) return record;
+
+    const users = new Map();
+    messages.forEach((message, index) => {
+        if (message?.videoCall === true && message.role === 'user') users.set(message.id, index);
+    });
+    if (!users.size) return record;
+
+    const moved = new Set();
+    const replies = new Map();
+    messages.forEach((message, index) => {
+        if (message?.videoCall !== true || message.role !== 'assistant' || typeof message.id !== 'string') return;
+        // Call replies have historically used the user's turn number plus one.
+        const match = /^(call-.+)-([1-9]\d*)-a$/.exec(message.id);
+        if (!match) return;
+        const userIndex = users.get(`${match[1]}-${Number(match[2]) - 1}-u`);
+        if (userIndex === undefined || userIndex <= index) return;
+        moved.add(index);
+        if (!replies.has(userIndex)) replies.set(userIndex, []);
+        replies.get(userIndex).push(message);
+    });
+    if (!moved.size) return record;
+    return {
+        ...record,
+        messages: messages.flatMap((message, index) => moved.has(index) ? [] : [message, ...(replies.get(index) || [])]),
+    };
+}
+
 /**
  * Upgrades a session document to SESSION_FORMAT_VERSION.
  *
@@ -111,7 +141,7 @@ function migrateSessionRecord(record) {
         if (upgraded <= version) break; // a migration that did not advance is a bug, not a loop
         version = upgraded;
     }
-    return next;
+    return repairVideoCallOrder(next);
 }
 
 function reportMigrationOnce(filePath, fromVersion, toVersion) {
@@ -185,7 +215,7 @@ async function writeSessionFile(filePath, record) {
         throw Object.assign(new Error('Session record must be a plain object.'), { code: 'SESSION_INVALID_RECORD' });
     }
     const payload = {
-        ...record,
+        ...repairVideoCallOrder(record),
         format: SESSION_FORMAT_NAME,
         version: SESSION_FORMAT_VERSION,
     };

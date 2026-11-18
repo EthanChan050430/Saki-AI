@@ -124,6 +124,26 @@ describe('writeSessionFile', () => {
 });
 
 describe('readSessionFile', () => {
+    it('repairs reversed call turns on read and saves the corrected order', async () => {
+        const target = file('call-history.json');
+        const greeting = { role: 'assistant', id: 'greeting', content: 'Hello' };
+        const user = { role: 'user', id: 'call-time-first-0-u', content: 'A question', videoCall: true };
+        const reply = { role: 'assistant', id: 'call-time-first-1-a', parts: [{ type: 'text', content: 'An answer' }], videoCall: true };
+        const otherUser = { ...user, id: 'call-time-second-0-u' };
+        const otherReply = { ...reply, id: 'call-time-second-1-a' };
+        const orphan = { ...reply, id: 'call-time-first-4-a' };
+        const session = {
+            version: SESSION_FORMAT_VERSION,
+            messages: [greeting, reply, user, orphan, otherReply, otherUser],
+        };
+        const expected = [greeting, user, reply, orphan, otherUser, otherReply];
+        await fsp.writeFile(target, JSON.stringify(session), 'utf8');
+        assert.deepEqual((await readSessionFile(target)).record.messages, expected);
+        await writeSessionFile(target, session);
+        assert.deepEqual(JSON.parse(await fsp.readFile(target, 'utf8')).messages, expected);
+        assert.deepEqual((await readSessionFile(target)).record.messages, expected);
+    });
+
     it('upgrades an unversioned file on read', async () => {
         const target = file('legacy.json');
         await fsp.writeFile(target, JSON.stringify({ messages: [{ role: 'user', content: 'old' }, { bogus: true }] }), 'utf8');

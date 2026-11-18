@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { runInNewContext } from 'node:vm'
 import { callContextHistory, boundedComponentHistory, restoredComponentHistory, componentChanges, applyCallActivity, appendCallText, settleCallActivities } from '../src/utils/videoCallContext.js'
-import { addCallRecords, toChatRecord } from '../src/utils/videoCallTranscript.js'
+import { addCallRecords, mergeCallRecords, toChatRecord } from '../src/utils/videoCallTranscript.js'
 import { readSSEStream } from '../src/utils/sseStream.js'
 
 test('history keeps ids, tool summaries and a hard size ceiling', () => {
@@ -84,6 +85,34 @@ test('newer revisions replace a streaming turn while stale replays are ignored',
   records = addCallRecords(records, [first])
   assert.equal(records[0].content, '你好', 'an older hang-up snapshot must not overwrite newer content')
   assert.equal(addCallRecords(records, [first]), records, 'unchanged input keeps identity so the chat is not re-rendered')
+})
+
+test('a video call publishes the user line before the first assistant snapshot', async () => {
+  const source = await readFile(new URL('../src/components/VideoCall.jsx', import.meta.url), 'utf8')
+  const send = source.slice(source.indexOf('  async function send('), source.indexOf('  sendRef.current = send'))
+  const noop = () => {}
+  const published = []
+  const context = {
+    runtime: { current: { alive: true, panels: {} } },
+    call: { current: 'call-ordered' }, order: { current: 0 },
+    transcript: { current: [] }, history: { current: [] },
+    voice: { prime: noop }, motion: { command: noop },
+    cancelTurn: noop, setCallPhase: noop, setInterim: noop, setError: noop,
+    setText: noop, setFiles: noop, setCaption: noop, setCallTurns: noop, setLiveReply: noop,
+    files: [], config: {}, selected: {}, lang: 'en', backendUrl: '',
+    onTurn: batch => published.push(batch),
+    createSpeechPipeline: () => ({ done: Promise.resolve() }),
+    createSpeechSegmenter: () => ({ push: noop, flush: noop }),
+    fetch: async () => new Response('data: {"text":"A reply"}\n\n'),
+    dialogueText: String, finishTurn: noop, quality: { level: 'full' },
+    readSSEStream, appendCallText, boundedComponentHistory,
+    AbortController, setTimeout, clearTimeout, performance,
+  }
+  await runInNewContext(`${send}\nsend('A question', true)`, context)
+  assert.equal(published[0][0].role, 'user')
+  const merged = mergeCallRecords({ records: published.reduce((records, batch) => addCallRecords(records, batch), []) })
+  assert.deepEqual(merged.map(message => message.role), ['user', 'assistant'])
+  assert.equal(merged[1].parts[0].content, 'A reply')
 })
 
 test('readSSEStream cancels the reader on early stop or [DONE] but not when naturally done', async () => {

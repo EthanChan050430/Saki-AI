@@ -626,15 +626,17 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
     if (!fromMic) setText('')
     const sentFiles = files
     setFiles([])
-    const user = { role: 'user', id: `${call.current}-${order.current}-u`, content: message || l('请看看我分享的附件。', 'Please look at the files I shared.', '共有したファイルを見てください。'), attachedFiles: sentFiles, videoCall: true, revision: 1 }
+    const turnIndex = order.current++
+    const user = { role: 'user', id: `${call.current}-${turnIndex}-u`, content: message || l('请看看我分享的附件。', 'Please look at the files I shared.', '共有したファイルを見てください。'), attachedFiles: sentFiles, videoCall: true, revision: 1 }
     const controller = new AbortController()
-    const turn = { controller, user, order: order.current++, spoken: [], reply: '', generatedFiles: new Map(),
-      parts: [], pendingEvents: [], revision: 0, status: 'streaming', finished: false, assistantId: `${call.current}-${order.current}-a` }
+    const turn = { controller, user, spoken: [], reply: '', generatedFiles: new Map(),
+      parts: [], pendingEvents: [], revision: 0, status: 'streaming', finished: false, assistantId: `${call.current}-${turnIndex + 1}-a` }
     state.turn = turn
     // Mirrored chat activity: every action and observation is written the same way
     // an ordinary Agent turn writes them, so the chat renders its normal tool UI.
-    let snapshotAt = 0, snapshotTimer = null
+    let snapshotAt = -Infinity, snapshotTimer = null
     turn.snapshot = (status = turn.status, { force = false } = {}) => {
+      if (turn.finished) return
       turn.status = status
       const now = performance.now()
       if (!force && now - snapshotAt < 350) {
@@ -648,8 +650,6 @@ export default function VideoCall({ config, micMode, modelLabel, models, backend
         generatedFiles: [...turn.generatedFiles.values()],
         ...(turn.pendingEvents.length ? { videoCallContext: { componentHistory: boundedComponentHistory(turn.pendingEvents) } } : {}) }])
     }
-    turn.snapshot('streaming', { force: true })
-    setCallPhase('thinking')
     setCaption({ speaker: 'user', text: user.content })
     transcript.current.push(user)
     setCallTurns([...transcript.current])
