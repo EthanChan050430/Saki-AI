@@ -183,7 +183,7 @@ class CheckpointService {
                     entries.push({ ...common, type: 'file' });
                 } else throw failure(`检查点不支持此文件类型：${relative}`);
                 if (entries.length > this.maxFiles || bytes > this.maxBytes) {
-                    throw failure('工作区超出检查点容量限制，请选择更小的工作区或调整 CHECKPOINT_MAX_FILES / CHECKPOINT_MAX_BYTES。', 413);
+                    throw Object.assign(failure('工作区超出检查点容量限制，请选择更小的工作区或调整 CHECKPOINT_MAX_FILES / CHECKPOINT_MAX_BYTES。', 413), { code: 'CHECKPOINT_CAPACITY_EXCEEDED' });
                 }
             }
         };

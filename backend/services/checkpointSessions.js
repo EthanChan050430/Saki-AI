@@ -43,7 +43,8 @@ function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, save
                         if (error.code !== 'ENOENT') throw error;
                         return null;
                     });
-                    if (subsequent) records.push(subsequent);
+                    if (!subsequent) throw Object.assign(new Error('后续消息缺少工作区检查点，无法安全还原到此处。'), { statusCode: 409 });
+                    records.push(subsequent);
                 }
                 const previousSummary = (await getHistory()).find(item => String(item.id) === String(chatId));
                 return service.restoreRecords({ records, chatId, commit: async checkpoint => {

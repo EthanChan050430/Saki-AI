@@ -14997,13 +14997,19 @@ app.post('/api/chat', async (req, res) => {
     try {
 
     let checkpoint = null;
+    let checkpointWarning = null;
     if (!chatMode) {
         const root = await workspaceService.resolveRoot(config?.workspacePath || '');
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
-        checkpoint = await checkpointService.withWorkspace(root, async () => {
-            if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return null;
-            return prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
-        }, { kind: 'prepare', chatId });
+        try {
+            checkpoint = await checkpointService.withWorkspace(root, async () => {
+                if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return null;
+                return prepareTurnCheckpoint(checkpointService, { chatId, root, history: Array.isArray(history) ? history : [] });
+            }, { kind: 'prepare', chatId });
+        } catch (error) {
+            if (error.code !== 'CHECKPOINT_CAPACITY_EXCEEDED') throw error;
+            checkpointWarning = error.code;
+        }
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
     }
     if (res.destroyed || res.writableEnded) return;
@@ -15011,6 +15017,7 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     if (checkpoint) res.write(`data: ${JSON.stringify({ type: 'checkpoint', checkpoint })}\n\n`);
+    if (checkpointWarning) res.write(`data: ${JSON.stringify({ type: 'checkpoint_warning', code: checkpointWarning })}\n\n`);
 
     if (chatId && String(message || '').trim().startsWith('/compact')) {
         await handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config });

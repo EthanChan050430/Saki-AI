@@ -19,6 +19,29 @@ function createMockRes() {
 }
 
 describe('CheckpointService workspace locks and restore', () => {
+    it('identifies capacity failures and refuses to restore across a missing later checkpoint', async () => {
+        const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'saki-cp-capacity-'));
+        try {
+            const workDir = path.join(tmpRoot, 'workspace');
+            const sessionsDir = path.join(tmpRoot, 'sessions');
+            await fs.ensureDir(workDir);
+            await fs.ensureDir(sessionsDir);
+            await fs.writeFile(path.join(workDir, 'a.txt'), 'before');
+            const limited = new CheckpointService({ storeDir: path.join(tmpRoot, 'limited'), maxBytes: 1 });
+            await assert.rejects(() => limited.capture(workDir), error => error.code === 'CHECKPOINT_CAPACITY_EXCEEDED');
+            const service = new CheckpointService({ storeDir: path.join(tmpRoot, 'store') });
+            const chatId = 'capacity_chat';
+            const userMessage = { role: 'user', id: 'one', content: 'first' };
+            const cp = await service.ensure({ chatId, messageId: 'one', root: workDir, beforeMessages: [], userMessage });
+            await fs.writeJson(path.join(sessionsDir, `${chatId}.json`), { messages: [userMessage, { role: 'user', id: 'two', content: 'later' }] });
+            await fs.writeFile(path.join(workDir, 'a.txt'), 'after');
+            const handler = createCheckpointRestoreHandler({ service, sessionsDir, getHistory: async () => [], saveHistory: async () => {}, createSessionSummary: () => ({}), emitRealtimeEvent: () => {} });
+            const res = createMockRes();
+            await handler({ body: { chatId, checkpointId: cp.id } }, res);
+            assert.equal(res.statusCode, 409);
+            assert.equal(await fs.readFile(path.join(workDir, 'a.txt'), 'utf8'), 'after');
+        } finally { await fs.remove(tmpRoot); }
+    });
     it('prunes inactive/stopped leases so restore never gets stuck on stale runs', async () => {
         const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'saki-cp-lock-'));
         const storeDir = path.join(tmpRoot, 'store');

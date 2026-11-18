@@ -1464,14 +1464,6 @@ const resources = {
 const SAKI_LANG_KEY = "saki_user_lang";
 const SUPPORTED_LANGS = Object.keys(resources);
 
-function mapCountryToLang(country) {
-  if (!country) return "en-US";
-  const upper = String(country).toUpperCase();
-  if (["CN", "TW", "HK", "MO"].includes(upper)) return "zh-CN";
-  if (upper === "JP") return "ja";
-  return "en-US";
-}
-
 function pickStoredLang() {
   try {
     const v = localStorage.getItem(SAKI_LANG_KEY);
@@ -1509,24 +1501,6 @@ const syncHtmlLang = (lang) => {
 };
 syncHtmlLang(i18n.resolvedLanguage || i18n.language);
 i18n.on("languageChanged", syncHtmlLang);
-
-if (!storedLang) {
-  const applyIpLang = async () => {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 2000);
-      const resp = await fetch("https://ipapi.co/json/", { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const lang = mapCountryToLang(data && data.country_code);
-      if (SUPPORTED_LANGS.includes(lang) && i18n.language !== lang) {
-        i18n.changeLanguage(lang);
-      }
-    } catch (e) {}
-  };
-  setTimeout(applyIpLang, 0);
-}
 
 export function changeSakiLang(lang) {
   if (!SUPPORTED_LANGS.includes(lang)) return;
