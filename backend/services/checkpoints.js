@@ -10,6 +10,19 @@ const inside = (root, target) => {
 const failure = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode });
 const rootKey = root => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const CHECKPOINT_EXCLUDED_NAMES = new Set([
+    '.git',
+    '$recycle.bin',
+    'system volume information',
+    'recovery',
+    'config.msi',
+    '$windows.~bt',
+    '$windows.~ws',
+    'pagefile.sys',
+    'hiberfil.sys',
+    'swapfile.sys',
+    'dumpstack.log.tmp',
+]);
 
 class CheckpointService {
     constructor({ storeDir, excludePaths = [], isChatRunning = null }) {
@@ -37,7 +50,15 @@ class CheckpointService {
     }
 
     excluded(absolute, relative) {
-        return relative.split('/').some(segment => (process.platform === 'win32' ? segment.toLowerCase() : segment) === '.git') || this.excludePaths.some(root => inside(root, absolute));
+        const segments = String(relative || '').split('/').filter(Boolean);
+        if (segments.some(segment => (
+            process.platform === 'win32'
+                ? CHECKPOINT_EXCLUDED_NAMES.has(segment.toLowerCase())
+                : (segment === '.git' || CHECKPOINT_EXCLUDED_NAMES.has(segment.toLowerCase()))
+        ))) {
+            return true;
+        }
+        return this.excludePaths.some(root => inside(root, absolute));
     }
 
     async withSession(chatId, callback) {
@@ -178,20 +199,42 @@ class CheckpointService {
     }
 
     async scan(root, shouldContinue = null) {
+        const isPermissionOrMissing = error => ['EACCES', 'EPERM', 'EBUSY', 'ENOENT'].includes(error?.code);
         const entries = [];
         const walk = async (directory, prefix = '') => {
             this.assertShouldContinue(shouldContinue);
-            const children = await fs.readdir(directory, { withFileTypes: true });
+            let children;
+            try {
+                children = await fs.readdir(directory, { withFileTypes: true });
+            } catch (error) {
+                if (error?.statusCode === 499) throw error;
+                if (['EACCES', 'EPERM', 'EBUSY'].includes(error?.code) || (directory !== root && error?.code === 'ENOENT')) {
+                    return;
+                }
+                throw error;
+            }
             children.sort((a, b) => a.name.localeCompare(b.name));
             for (const child of children) {
                 this.assertShouldContinue(shouldContinue);
                 const relative = prefix ? `${prefix}/${child.name}` : child.name;
                 const absolute = path.join(directory, child.name);
                 if (this.excluded(absolute, relative)) continue;
-                const stat = await fs.lstat(absolute);
+                let stat;
+                try {
+                    stat = await fs.lstat(absolute);
+                } catch (error) {
+                    if (isPermissionOrMissing(error)) continue;
+                    throw error;
+                }
                 const common = { path: relative, mode: stat.mode, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
                 if (stat.isSymbolicLink()) {
-                    const target = await fs.readlink(absolute);
+                    let target;
+                    try {
+                        target = await fs.readlink(absolute);
+                    } catch (error) {
+                        if (isPermissionOrMissing(error)) continue;
+                        throw error;
+                    }
                     const isDirectory = (await fs.stat(absolute).catch(() => null))?.isDirectory() || false;
                     entries.push({ ...common, type: 'link', target, linkType: isDirectory ? 'junction' : 'file' });
                 } else if (stat.isDirectory()) {

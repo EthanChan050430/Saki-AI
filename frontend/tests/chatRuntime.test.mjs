@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  createEpochGuard, loadChatSnapshot, getDispatchConfig,
+  createEpochGuard, loadChatSnapshot, getDispatchConfig, resolveSessionWorkspacePath,
   readCachedConfig, cacheConfig, persistConfig, applyStreamingActions,
   sanitizeLoadedPendingRequest, reconcileCompletedBackgroundSnapshot,
 } from '../src/utils/chatRuntime.js';
@@ -193,4 +193,48 @@ test('reconcileCompletedBackgroundSnapshot clears stale pendingRequest and final
   });
   assert.ok(approvalSnapshot.pendingRequest?.approvalRequest);
   assert.deepEqual(approvalSnapshot.messages[0].streamingActions, []);
+});
+
+test('resolveSessionWorkspacePath isolates and restores per-conversation workspaces cleanly', () => {
+  // Pending request options override saved session workspacePath
+  assert.equal(resolveSessionWorkspacePath({
+    workspacePath: 'D:/repo-a',
+    pendingRequest: { options: { workspacePath: 'D:/repo-pending' } },
+    messages: [{ role: 'user', requestOptions: { workspacePath: 'D:/repo-old' } }],
+  }), 'D:/repo-pending');
+
+  // Session-level workspacePath wins over historical user message workspacePath (e.g. user changed workspace without sending yet)
+  assert.equal(resolveSessionWorkspacePath({
+    workspacePath: 'D:/repo-selected',
+    messages: [{ role: 'user', requestOptions: { workspacePath: '' } }],
+  }), 'D:/repo-selected');
+
+  // Switching back to a default-workspace session resets to ''
+  assert.equal(resolveSessionWorkspacePath({
+    messages: [
+      { role: 'user', id: 'u1', requestOptions: { workspacePath: '' }, checkpoint: { workspacePath: 'D:/Saki-AI/data/files' } },
+    ],
+  }), '');
+
+  // Legacy session falls back to latest user requestOptions or checkpoint workspacePath
+  assert.equal(resolveSessionWorkspacePath({
+    messages: [
+      { role: 'user', id: 'u1', requestOptions: { workspacePath: 'G:/proj1' } },
+      { role: 'user', id: 'u2', requestOptions: { workspacePath: 'G:/proj2' } },
+    ],
+  }), 'G:/proj2');
+  assert.equal(resolveSessionWorkspacePath({
+    messages: [{ role: 'user', id: 'u1', checkpoint: { workspacePath: 'D:/legacy' } }],
+  }), 'D:/legacy');
+  assert.equal(resolveSessionWorkspacePath({}, []), '');
+});
+
+test('App wires per-chat workspace restoration and SSE drop recovery into bg poll', async () => {
+  const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+  const stream = app.slice(app.indexOf('const streamPendingAssistantResponse'), app.indexOf('const sendMessageWithContext'));
+  assert.match(app, /resolveSessionWorkspacePath\(/);
+  assert.match(app, /applyChatWorkspacePath\(/);
+  assert.match(stream, /handedOffToBgPoll/);
+  assert.match(stream, /\/api\/chat\/running/);
+  assert.match(stream, /startBgPoll\(activeChatId\)/);
 });

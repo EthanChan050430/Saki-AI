@@ -5,19 +5,53 @@ function validateChatId(chatId) {
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(String(chatId || ''))) throw Object.assign(new Error('无效的对话编号。'), { statusCode: 400 });
 }
 
-async function prepareTurnCheckpoint(service, { chatId, root, history = [], shouldContinue = null }) {
+function isFilesystemRoot(root) {
+    if (!root || typeof root !== 'string') return false;
+    const resolved = path.resolve(root);
+    return resolved === path.parse(resolved).root;
+}
+
+async function prepareTurnCheckpoint(service, { chatId, root, history = [], shouldContinue = null, timeoutMs = 0 }) {
     if (!chatId) return null;
     validateChatId(chatId);
+    if (isFilesystemRoot(root)) return null;
     const index = history.findLastIndex(message => message.role === 'user');
     const userMessage = history[index];
     if (!userMessage?.id) return null;
-    const checkpoint = await service.ensure({
-        chatId, root, messageId: userMessage.id,
-        beforeMessages: history.slice(0, index), userMessage: { ...userMessage, checkpoint: undefined },
-        shouldContinue,
-    });
-    history[index] = { ...userMessage, checkpoint };
-    return checkpoint;
+    let timedOut = false;
+    let timer = null;
+    const isUserStop = () => typeof shouldContinue === 'function' && !shouldContinue();
+    const effectiveContinue = () => !timedOut && !isUserStop();
+    try {
+        const ensurePromise = service.ensure({
+            chatId, root, messageId: userMessage.id,
+            beforeMessages: history.slice(0, index), userMessage: { ...userMessage, checkpoint: undefined },
+            shouldContinue: effectiveContinue,
+        });
+        let checkpoint;
+        if (Number(timeoutMs) > 0) {
+            const timeoutPromise = new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    timedOut = true;
+                    reject(Object.assign(new Error('创建检查点超时，已跳过本轮工作区快照。'), { code: 'CHECKPOINT_TIMEOUT' }));
+                }, Number(timeoutMs));
+            });
+            ensurePromise.catch(() => {});
+            checkpoint = await Promise.race([ensurePromise, timeoutPromise]);
+        } else {
+            checkpoint = await ensurePromise;
+        }
+        history[index] = { ...userMessage, checkpoint };
+        return checkpoint;
+    } catch (error) {
+        if (isUserStop() || (error?.statusCode === 499 && !timedOut)) {
+            throw error;
+        }
+        console.warn('[Checkpoint] Skipped turn checkpoint:', error?.message || error);
+        return null;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 }
 
 function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, saveHistory, createSessionSummary, emitRealtimeEvent, isChatRunning = null }) {
@@ -49,9 +83,13 @@ function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, save
                 }
                 const previousSummary = (await getHistory()).find(item => String(item.id) === String(chatId));
                 return service.restoreRecords({ records, chatId, commit: async checkpoint => {
+                    const restoredWorkspace = typeof checkpoint.userMessage?.requestOptions?.workspacePath === 'string'
+                        ? checkpoint.userMessage.requestOptions.workspacePath
+                        : undefined;
                     const restoredSession = {
                         ...original, messages: checkpoint.beforeMessages, pendingRequest: null,
                         contextCompression: undefined, checkpointRestoredAt: Date.now(),
+                        ...(typeof restoredWorkspace === 'string' ? { workspacePath: restoredWorkspace } : {}),
                     };
                     try {
                         await service.atomicJson(sessionFile, restoredSession);
@@ -78,4 +116,4 @@ function createCheckpointRestoreHandler({ service, sessionsDir, getHistory, save
     };
 }
 
-module.exports = { prepareTurnCheckpoint, createCheckpointRestoreHandler, validateChatId };
+module.exports = { prepareTurnCheckpoint, createCheckpointRestoreHandler, validateChatId, isFilesystemRoot };

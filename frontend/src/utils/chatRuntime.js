@@ -44,6 +44,36 @@ export function getDispatchConfig(configRef, options = {}) {
   return { ...config, workspacePath: options.workspacePath ?? config.workspacePath ?? '' };
 }
 
+/**
+ * Resolves the workspace path belonging to a specific conversation.
+ * Priority: active pending request -> session-level workspacePath -> latest user message
+ * requestOptions.workspacePath -> latest checkpoint workspacePath -> default ('').
+ */
+export function resolveSessionWorkspacePath(sessionData = {}, messages = []) {
+  if (typeof sessionData?.pendingRequest?.options?.workspacePath === 'string') {
+    return sessionData.pendingRequest.options.workspacePath;
+  }
+  if (typeof sessionData?.workspacePath === 'string') {
+    return sessionData.workspacePath;
+  }
+  const messageList = Array.isArray(messages) && messages.length > 0
+    ? messages
+    : (Array.isArray(sessionData?.messages) ? sessionData.messages : []);
+  for (let i = messageList.length - 1; i >= 0; i -= 1) {
+    const msg = messageList[i];
+    if (msg?.role === 'user' && typeof msg?.requestOptions?.workspacePath === 'string') {
+      return msg.requestOptions.workspacePath;
+    }
+  }
+  for (let i = messageList.length - 1; i >= 0; i -= 1) {
+    const msg = messageList[i];
+    if (typeof msg?.checkpoint?.workspacePath === 'string') {
+      return msg.checkpoint.workspacePath;
+    }
+  }
+  return '';
+}
+
 export function applyStreamingActions(message, event = {}, terminal = false) {
   const streamingActions = terminal || event.action
     ? []

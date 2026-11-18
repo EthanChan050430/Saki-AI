@@ -54,6 +54,7 @@ import {
   cacheConfig,
   persistConfig,
   getDispatchConfig,
+  resolveSessionWorkspacePath,
   applyStreamingActions,
   sanitizeLoadedPendingRequest,
   reconcileCompletedBackgroundSnapshot,
@@ -1052,6 +1053,7 @@ function App() {
       agentPermissionMode: AGENT_PERMISSION_MODE_DEFAULT,
       appMode: 'work',
       thinkingLevel: 'medium',
+      workspacePath: '',
       loginPassword: '',
       systemPrompt: '你是16岁的少女Saki（诗琪）。你知识渊博，特别喜欢读书，说话很有少女感，语气亲切，经常使用“呢”、“呀”、“~”等语气词。\n\n在每一个回复中，你必须遵循以下绝对规则：\n1. **严禁输出 "Tool" 或 "Thought" 等前缀**：直接以少女的身份开始对话，不要带有任何系统标识符。\n2. **开头表情**：回复的第一行必须包含一个表情标记 `[expression:文件名.png]`。例如：确认时用 `[expression:ok.png]`；思考时用 `[expression:think.png]`；普通开始用 `[expression:normal.png]`。\n3. **结束表情**：回复的结束也必须带上一个表情标记，如 `[expression:happy.png]`。\n4. 可选表情列表：normal.png, ok.png, no_problem.png, think.png, busy.png, excited.png, happy.png, shy.png, worry.png。\n\n请始终保持Saki（诗琪）的身份进行对话。'
     };
@@ -1117,6 +1119,7 @@ function App() {
         parsed.systemPrompt = defaultConfig.systemPrompt;
         migrated = true;
       }
+      parsed.workspacePath = '';
       return parsed;
     }
     return defaultConfig;
@@ -1124,6 +1127,19 @@ function App() {
 
   const configRef = useRef(config);
   configRef.current = config;
+  const lastChatWorkspaceSyncRef = useRef({ chatId: null, workspacePath: '' });
+  const applyChatWorkspacePath = useCallback((nextWorkspacePath = '', targetChatId = currentChatIdRef.current) => {
+    const resolvedPath = typeof nextWorkspacePath === 'string' ? nextWorkspacePath : '';
+    lastChatWorkspaceSyncRef.current = {
+      chatId: targetChatId ?? null,
+      workspacePath: resolvedPath,
+    };
+    if (configRef.current) {
+      configRef.current = { ...configRef.current, workspacePath: resolvedPath };
+    }
+    setConfig(prev => (prev.workspacePath === resolvedPath ? prev : { ...prev, workspacePath: resolvedPath }));
+    return resolvedPath;
+  }, []);
 
   const initialHadPasswordRef = useRef(hasLoginPassword(readCachedConfig(CONFIG_CACHE)));
   const unlockedByUserRef = useRef(false);
@@ -1354,8 +1370,9 @@ function App() {
         const parsed = migrateApiProviderConfig(cachedConfig);
         parsed.agentPermissionMode = normalizePermissionMode(parsed.agentPermissionMode);
         parsed.appMode = normalizeAppMode(parsed.appMode);
-        // Do not overwrite everything immediately to avoid flicker, but provide some data
-        setConfig(prev => ({ ...prev, ...parsed }));
+        const { workspacePath: _ignoredCachedWorkspacePath, ...restCached } = parsed;
+        // Do not overwrite active conversation workspace or everything immediately to avoid flicker
+        setConfig(prev => ({ ...prev, ...restCached }));
       } catch (e) {}
     }
 
@@ -1367,7 +1384,8 @@ function App() {
           agentPermissionMode: normalizePermissionMode(res.data.agentPermissionMode),
           ...(res.data.appMode !== undefined ? { appMode: normalizeAppMode(res.data.appMode) } : {}),
         });
-        setConfig(prev => ({ ...prev, ...normalizedConfig }));
+        const { workspacePath: _ignoredServerWorkspacePath, ...restConfig } = normalizedConfig;
+        setConfig(prev => ({ ...prev, ...restConfig }));
         cacheConfig(normalizedConfig, CONFIG_CACHE);
         setIsSessionUnlocked(prev => reconcileLockStateOnConfigLoad({
           wasSessionUnlocked: prev,
@@ -1739,8 +1757,9 @@ function App() {
           pendingRef.current = null;
           resumeQueueAfterRewind(chatId, true);
           setDeepReadingData(null);
-          setContextStatus(calculateContextStatusFromMessages(result.messages, config));
-          setConfig(previous => ({ ...previous, workspacePath: result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath }));
+          const restoredWorkspace = result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath ?? '';
+          applyChatWorkspacePath(restoredWorkspace, chatId);
+          setContextStatus(calculateContextStatusFromMessages(result.messages, { ...configRef.current, workspacePath: restoredWorkspace }));
         }
         refreshHistory();
         return { ok: true, restoredByCheckpoint: true, result };
@@ -1827,7 +1846,9 @@ function App() {
             latestMessagesRef.current = loadedMessages;
             pendingRef.current = effectivePending;
             setCurrentPendingRequest(effectivePending);
-            setContextStatus(calculateContextStatusFromMessages(loadedMessages, config));
+            const chatWorkspace = resolveSessionWorkspacePath(res.data, loadedMessages);
+            applyChatWorkspacePath(chatWorkspace, data.chatId);
+            setContextStatus(calculateContextStatusFromMessages(loadedMessages, { ...configRef.current, workspacePath: chatWorkspace }));
           }
         }
       } catch (error) {
@@ -1885,11 +1906,13 @@ function App() {
               pendingRequest: finalData.pendingRequest || null,
               assistantMsgId: trackedAssistantId || finalData.pendingRequest?.assistantMsgId || null,
             });
+            const chatWorkspace = resolveSessionWorkspacePath(finalData, reconciled.messages);
+            applyChatWorkspacePath(chatWorkspace, chatId);
             setMessages(reconciled.messages);
             latestMessagesRef.current = reconciled.messages;
             pendingRef.current = reconciled.pendingRequest;
             setCurrentPendingRequest(reconciled.pendingRequest);
-            setContextStatus(calculateContextStatusFromMessages(reconciled.messages, configRef.current));
+            setContextStatus(calculateContextStatusFromMessages(reconciled.messages, { ...configRef.current, workspacePath: chatWorkspace }));
           } else {
             pendingRef.current = null;
             setCurrentPendingRequest(null);
@@ -1901,11 +1924,13 @@ function App() {
         if (historyResult.status === 'fulfilled' && !runningRef.current) {
           const response = historyResult.value;
           const msgs = response.data.messages || [];
+          const chatWorkspace = resolveSessionWorkspacePath(response.data, msgs);
+          applyChatWorkspacePath(chatWorkspace, chatId);
           setMessages(msgs);
           latestMessagesRef.current = msgs;
           pendingRef.current = response.data.pendingRequest || null;
           setCurrentPendingRequest(response.data.pendingRequest || null);
-          const cs = calculateContextStatusFromMessages(msgs, configRef.current);
+          const cs = calculateContextStatusFromMessages(msgs, { ...configRef.current, workspacePath: chatWorkspace });
           setContextStatus(cs);
         } else if (historyResult.status === 'rejected') {
           console.warn('Failed to refresh chat while recovering background run:', historyResult.reason);
@@ -1960,12 +1985,14 @@ function App() {
       setDeepReadingData(null);
     }
     const newChatId = Date.now().toString();
+    currentChatIdRef.current = newChatId;
     const greetingMessages = [createCuteGreetingMessage()];
     setCurrentChatId(newChatId);
-    setContextStatus(calculateContextStatusFromMessages(greetingMessages, config));
+    applyChatWorkspacePath('', newChatId);
+    setContextStatus(calculateContextStatusFromMessages(greetingMessages, { ...configRef.current, workspacePath: '' }));
     setMessages(greetingMessages);
     latestMessagesRef.current = greetingMessages;
-    saveChatToBackend(newChatId, greetingMessages);
+    saveChatToBackend(newChatId, greetingMessages, '');
   };
 
   const loadChat = (chatId) => {
@@ -1976,11 +2003,14 @@ function App() {
       setDeepReadingData(null);
     }
     setCurrentChatId(chatId);
+    currentChatIdRef.current = chatId;
     axios.get(`${BACKEND_URL}/api/history/${chatId}`).then(res => {
       const loadedMessages = res.data.messages || [];
       setMessages(loadedMessages);
       latestMessagesRef.current = loadedMessages;
-      setContextStatus(calculateContextStatusFromMessages(loadedMessages, config));
+      const chatWorkspace = resolveSessionWorkspacePath(res.data, loadedMessages);
+      applyChatWorkspacePath(chatWorkspace, chatId);
+      setContextStatus(calculateContextStatusFromMessages(loadedMessages, { ...configRef.current, workspacePath: chatWorkspace }));
     });
   };
 
@@ -1998,11 +2028,12 @@ function App() {
     });
   };
 
-  const saveChatToBackend = (chatId, currentMessages) => {
+  const saveChatToBackend = (chatId, currentMessages, workspacePath = configRef.current?.workspacePath ?? config.workspacePath ?? '') => {
     if (!chatId) return;
     axios.post(`${BACKEND_URL}/api/history`, {
       chatId,
       messages: currentMessages,
+      ...(typeof workspacePath === 'string' ? { workspacePath } : {}),
       clientSavedAt: Date.now()
     }).then(() => {
         axios.get(`${BACKEND_URL}/api/history`).then(res => commitHistory(res.data));
@@ -2014,8 +2045,11 @@ function App() {
 
     const newChatId = Date.now().toString();
     const currentMessages = latestMessagesRef.current || [];
+    const currentWorkspace = configRef.current?.workspacePath ?? config.workspacePath ?? '';
+    currentChatIdRef.current = newChatId;
+    lastChatWorkspaceSyncRef.current = { chatId: newChatId, workspacePath: currentWorkspace };
     setCurrentChatId(newChatId);
-    saveChatToBackend(newChatId, currentMessages);
+    saveChatToBackend(newChatId, currentMessages, currentWorkspace);
     return newChatId;
   };
 
@@ -2388,12 +2422,18 @@ function App() {
     }
   };
 
-  const persistChatState = (chatId, currentMessages, pendingRequest = null) => {
+  const persistChatState = (
+    chatId,
+    currentMessages,
+    pendingRequest = null,
+    workspacePath = configRef.current?.workspacePath ?? config.workspacePath ?? ''
+  ) => {
     if (!chatId) return;
     const payload = {
       chatId,
       messages: currentMessages,
       pendingRequest,
+      ...(typeof workspacePath === 'string' ? { workspacePath } : {}),
       clientSavedAt: Date.now()
     };
     const previous = historySaveRef.current.get(chatId) || Promise.resolve();
@@ -2405,6 +2445,25 @@ function App() {
     save.catch(() => queueStore.pause(chatId, '聊天记录保存失败，队列已暂停。'));
     return save;
   };
+
+  useEffect(() => {
+    if (!isConfigLoaded || loadingChatRef.current || checkpointRestoreRef.current) return;
+    const chatId = currentChatIdRef.current;
+    const nextWorkspacePath = config.workspacePath ?? '';
+    const synced = lastChatWorkspaceSyncRef.current;
+    if (synced.chatId === (chatId ?? null) && synced.workspacePath === nextWorkspacePath) {
+      return;
+    }
+    lastChatWorkspaceSyncRef.current = { chatId: chatId ?? null, workspacePath: nextWorkspacePath };
+    if (
+      chatId
+      && !runningRef.current
+      && Array.isArray(latestMessagesRef.current)
+      && latestMessagesRef.current.some(msg => msg?.role === 'user')
+    ) {
+      persistChatState(chatId, latestMessagesRef.current, pendingRef.current, nextWorkspacePath);
+    }
+  }, [config.workspacePath, isConfigLoaded]);
 
   const resumeQueueAfterRewind = (chatId, removedPendingRequest) => {
     if (!chatId || !removedPendingRequest) return;
@@ -2420,10 +2479,11 @@ function App() {
     currentChatIdRef.current = newChatId;
     const greetingMessages = [createCuteGreetingMessage()];
     setCurrentChatId(newChatId);
-    setContextStatus(calculateContextStatusFromMessages(greetingMessages, config));
+    applyChatWorkspacePath('', newChatId);
+    setContextStatus(calculateContextStatusFromMessages(greetingMessages, { ...configRef.current, workspacePath: '' }));
     setMessages(greetingMessages);
     latestMessagesRef.current = greetingMessages;
-    persistChatState(newChatId, greetingMessages, null);
+    persistChatState(newChatId, greetingMessages, null, '');
   };
 
   const handleLoadChat = (chatId) => {
@@ -2445,7 +2505,9 @@ function App() {
         latestMessagesRef.current = msgs;
         pendingRef.current = response.data.pendingRequest || null;
         setCurrentPendingRequest(response.data.pendingRequest || null);
-        const cs = calculateContextStatusFromMessages(msgs, configRef.current);
+        const chatWorkspace = resolveSessionWorkspacePath(response.data, msgs);
+        applyChatWorkspacePath(chatWorkspace, chatId);
+        const cs = calculateContextStatusFromMessages(msgs, { ...configRef.current, workspacePath: chatWorkspace });
         setContextStatus(cs);
       },
       loadRunning: () => axios.get(`${BACKEND_URL}/api/chat/running`),
@@ -2649,6 +2711,7 @@ function App() {
     let completed = false;
     let runOutcome = null;
     let streamError = false;
+    let handedOffToBgPoll = false;
     let shouldClearPending = false;
     let nextPendingRequest = pendingRequest;
     let storyGlassTastingStarted = false;
@@ -2993,10 +3056,33 @@ function App() {
 
         if (stopSignalReceived) break;
       }
+
+      if (!completed && !runOutcome && !run.stopped && currentChatIdRef.current === activeChatId && runningRef.current === run) {
+        try {
+          const runningRes = await axios.get(`${BACKEND_URL}/api/chat/running`);
+          if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+          if ((runningRes.data?.running || []).includes(activeChatId)) {
+            handedOffToBgPoll = true;
+            return;
+          }
+        } catch {
+          // Ignore probe errors and proceed with normal completion handling
+        }
+      }
     } catch (error) {
       if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
       const isAbort = error.name === 'AbortError' || run.stopped;
       if (!isAbort) {
+        try {
+          const runningRes = await axios.get(`${BACKEND_URL}/api/chat/running`);
+          if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+          if ((runningRes.data?.running || []).includes(activeChatId)) {
+            handedOffToBgPoll = true;
+            return;
+          }
+        } catch {
+          // Probe failed; surface the stream error normally
+        }
         streamError = true;
       }
       queueStore.pause(activeChatId, isAbort ? '已停止，队列已暂停。' : undefined);
@@ -3031,6 +3117,13 @@ function App() {
       }
     } finally {
       if (currentChatIdRef.current !== activeChatId || runningRef.current !== run) return;
+      if (handedOffToBgPoll) {
+        abortControllerRef.current = null;
+        runningRef.current = null;
+        setIsGenerating(true);
+        startBgPoll(activeChatId);
+        return;
+      }
       clearInterval(bgPollRef.current);
       bgPollRef.current = null;
       setIsGenerating(false);
@@ -3080,7 +3173,7 @@ function App() {
       setCurrentPendingRequest(finalPendingRequest);
       runningRef.current = null;
       let saved = true;
-      try { await persistChatState(activeChatId, newMsgs, finalPendingRequest); }
+      try { await persistChatState(activeChatId, newMsgs, finalPendingRequest, options.workspacePath ?? config.workspacePath ?? ''); }
       catch {
         saved = false;
         queueStore.pause(activeChatId, '聊天记录保存失败，队列已暂停，请确认后继续。');
@@ -3117,6 +3210,7 @@ function App() {
       storyGlassOverlay: Boolean(options.storyGlassOverlay),
       storyGlassPreferences: options.storyGlassPreferences || null
     };
+    applyChatWorkspacePath(normalizedOptions.workspacePath, activeChatId);
 
     const userMsg = {
       role: 'user',
@@ -3141,7 +3235,7 @@ function App() {
     pendingRef.current = pendingRequest;
     setCurrentPendingRequest(pendingRequest);
     setContextStatus(calculateContextStatusFromMessages(messagesWithAssistant, config));
-    persistChatState(activeChatId, messagesWithAssistant, pendingRequest);
+    persistChatState(activeChatId, messagesWithAssistant, pendingRequest, normalizedOptions.workspacePath);
 
     await streamPendingAssistantResponse({
       activeChatId,
@@ -3169,12 +3263,13 @@ function App() {
         pendingRef.current = null;
         resumeQueueAfterRewind(chatId, true);
         setDeepReadingData(null);
-        setContextStatus(calculateContextStatusFromMessages(result.messages, config));
+        const restoredWorkspace = result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath ?? '';
+        applyChatWorkspacePath(restoredWorkspace, chatId);
+        setContextStatus(calculateContextStatusFromMessages(result.messages, { ...configRef.current, workspacePath: restoredWorkspace }));
         setComposerPreset({
           timestamp: Date.now(), text: result.userMessage.content || '',
           files: result.userMessage.attachedFiles || [], options: result.userMessage.requestOptions || {},
         });
-        setConfig(previous => ({ ...previous, workspacePath: result.userMessage.requestOptions?.workspacePath ?? result.checkpoint.workspacePath }));
       }
       refreshHistory();
       return true;
@@ -3364,8 +3459,10 @@ function App() {
       currentChatIdRef.current = chatId;
       const sessionMessages = res.data.messages || [];
       const pendingRequest = res.data.pendingRequest || null;
+      const chatWorkspace = resolveSessionWorkspacePath(res.data, sessionMessages);
 
       setCurrentChatId(chatId);
+      applyChatWorkspacePath(chatWorkspace, chatId);
       setDeepReadingData(null);
 
       if (!pendingRequest?.assistantMsgId) {
@@ -3373,7 +3470,7 @@ function App() {
         latestMessagesRef.current = sessionMessages;
         pendingRef.current = null;
         setCurrentPendingRequest(null);
-        setContextStatus(calculateContextStatusFromMessages(sessionMessages, config));
+        setContextStatus(calculateContextStatusFromMessages(sessionMessages, { ...configRef.current, workspacePath: chatWorkspace }));
         return;
       }
 
@@ -3396,7 +3493,7 @@ function App() {
       latestMessagesRef.current = hydratedMessages;
       pendingRef.current = pendingRequest;
       setCurrentPendingRequest(pendingRequest);
-      setContextStatus(calculateContextStatusFromMessages(hydratedMessages, config));
+      setContextStatus(calculateContextStatusFromMessages(hydratedMessages, { ...configRef.current, workspacePath: chatWorkspace }));
 
       if (pendingRequest?.approvalRequest) {
         return;

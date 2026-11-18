@@ -1971,6 +1971,16 @@ export default function Chat({
   }, [externalFile, onExternalFileClear]);
 
   useEffect(() => {
+    restoredOptionsRef.current = null;
+  }, [currentChatId]);
+
+  useEffect(() => {
+    if (!restoredOptionsRef.current) return;
+    const { workspacePath: _staleWorkspacePath, ...rest } = restoredOptionsRef.current;
+    restoredOptionsRef.current = rest;
+  }, [config.workspacePath]);
+
+  useEffect(() => {
     if (!composerPreset?.timestamp) return;
     setInput(composerPreset.text || '');
     setFiles(Array.isArray(composerPreset.files) ? composerPreset.files : []);
@@ -2334,7 +2344,7 @@ export default function Chat({
 
   const buildSendPayload = () => {
     const baseOptions = {
-      workspacePath: restoredOptionsRef.current?.workspacePath ?? config.workspacePath ?? '',
+      workspacePath: config.workspacePath ?? restoredOptionsRef.current?.workspacePath ?? '',
       useSearch: true,
       useWeb,
       useMemory,

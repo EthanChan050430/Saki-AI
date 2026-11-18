@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs-extra');
 
 const { CheckpointService } = require('../services/checkpoints');
-const { prepareTurnCheckpoint, createCheckpointRestoreHandler } = require('../services/checkpointSessions');
+const { prepareTurnCheckpoint, createCheckpointRestoreHandler, isFilesystemRoot } = require('../services/checkpointSessions');
 
 function createMockRes() {
     return {
@@ -229,6 +229,66 @@ describe('CheckpointService workspace locks and restore', () => {
             );
             assert.equal(service.workspaceLocks.size, 0);
         } finally {
+            await fs.remove(tmpRoot);
+        }
+    });
+
+    it('skips drive roots, excludes Windows system dirs, tolerates EPERM/EACCES, and falls back gracefully on timeout', async () => {
+        const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'saki-cp-resilient-'));
+        const origReaddir = fs.readdir;
+        try {
+            const storeDir = path.join(tmpRoot, 'store');
+            const workDir = path.join(tmpRoot, 'workspace');
+            await fs.ensureDir(path.join(workDir, '$RECYCLE.BIN'));
+            await fs.ensureDir(path.join(workDir, 'System Volume Information'));
+            await fs.ensureDir(path.join(workDir, 'locked-dir'));
+            await fs.writeFile(path.join(workDir, '$RECYCLE.BIN', 'trashed.txt'), 'skip');
+            await fs.writeFile(path.join(workDir, 'System Volume Information', 'sys.dat'), 'skip');
+            await fs.writeFile(path.join(workDir, 'normal.txt'), 'keep');
+
+            const service = new CheckpointService({ storeDir });
+
+            // 1. Filesystem root detection skips drive/filesystem roots without scanning
+            const rootDir = path.parse(workDir).root;
+            assert.equal(isFilesystemRoot(rootDir), true);
+            assert.equal(isFilesystemRoot(workDir), false);
+            const rootHistory = [{ role: 'user', id: 'u-root', content: 'scan drive' }];
+            const rootCp = await prepareTurnCheckpoint(service, {
+                chatId: 'chat_drive_root',
+                root: rootDir,
+                history: rootHistory,
+            });
+            assert.equal(rootCp, null);
+            assert.equal(rootHistory[0].checkpoint, undefined);
+
+            // 2. scan skips Windows system folders and EPERM/EACCES subdirectories cleanly
+            fs.readdir = async (dir, ...rest) => {
+                if (path.basename(String(dir)) === 'locked-dir') {
+                    throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+                }
+                return origReaddir.call(fs, dir, ...rest);
+            };
+            const scanned = await service.scan(workDir);
+            const relPaths = scanned.map(e => e.path);
+            assert.ok(relPaths.includes('normal.txt'));
+            assert.ok(!relPaths.some(p => p.includes('$RECYCLE.BIN') || p.includes('System Volume Information')));
+            fs.readdir = origReaddir;
+
+            // 3. prepareTurnCheckpoint returns null cleanly on timeout instead of aborting or 499-stopping the turn
+            const slowService = {
+                ensure: () => new Promise(resolve => setTimeout(() => resolve({ id: 'cp_late' }), 200)),
+            };
+            const timeoutHistory = [{ role: 'user', id: 'u-timeout', content: 'hi' }];
+            const timedOutCp = await prepareTurnCheckpoint(slowService, {
+                chatId: 'chat_cp_timeout',
+                root: workDir,
+                history: timeoutHistory,
+                shouldContinue: () => true,
+                timeoutMs: 25,
+            });
+            assert.equal(timedOutCp, null);
+        } finally {
+            fs.readdir = origReaddir;
             await fs.remove(tmpRoot);
         }
     });

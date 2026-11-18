@@ -2906,7 +2906,7 @@ function withRunSessionWrite(chatId, res, operation) {
     });
 }
 
-async function persistSessionRecordLocked({ chatId, messages = [], title, pendingRequest = null, source = null, external = undefined, clientSavedAt = 0, broadcastReason = 'session-updated', runIdentity = null }) {
+async function persistSessionRecordLocked({ chatId, messages = [], title, pendingRequest = null, source = null, external = undefined, workspacePath = undefined, clientSavedAt = 0, broadcastReason = 'session-updated', runIdentity = null }) {
     if (!isCurrentRun(BACKGROUND_RUNS, chatId, runIdentity)) return null;
     const sessionFilePath = path.join(SESSIONS_DIR, `${chatId}.json`);
     const existingSession = await safeReadJsonFile(sessionFilePath, {});
@@ -2958,12 +2958,24 @@ async function persistSessionRecordLocked({ chatId, messages = [], title, pendin
             }
         }
     }
+    const lastUserWorkspacePath = [...normalizedMessages]
+        .reverse()
+        .find(msg => msg?.role === 'user' && typeof msg?.requestOptions?.workspacePath === 'string')
+        ?.requestOptions?.workspacePath;
+    const resolvedWorkspacePath = typeof workspacePath === 'string'
+        ? workspacePath
+        : (typeof normalizedPendingRequest?.options?.workspacePath === 'string'
+            ? normalizedPendingRequest.options.workspacePath
+            : (typeof lastUserWorkspacePath === 'string'
+                ? lastUserWorkspacePath
+                : (typeof existingSession.workspacePath === 'string' ? existingSession.workspacePath : undefined)));
     const nextSource = source || existingSession.source || 'web';
     const nextExternal = external !== undefined ? external : (existingSession.external || null);
     const nextTitle = title || existingSession.title || undefined;
     const nextSession = {
         ...existingSession,
         ...(nextTitle ? { title: nextTitle } : {}),
+        ...(typeof resolvedWorkspacePath === 'string' ? { workspacePath: resolvedWorkspacePath } : {}),
         messages: normalizedMessages,
         pendingRequest: normalizedPendingRequest,
         source: nextSource,
@@ -4045,6 +4057,7 @@ function attachBackgroundSubscriber(vRes, realRes) {
         realRes.setHeader('Connection', 'keep-alive');
         realRes.flushHeaders();
     }
+    if (realRes.destroyed || realRes.writableEnded) return;
     for (const chunk of vRes._buffer) {
         try { realRes.write(chunk); } catch (_) { return; }
     }
@@ -5093,11 +5106,11 @@ app.get('/api/history', async (req, res) => {
 });
 
 app.post('/api/history', async (req, res) => {
-    const { chatId, messages, title, pendingRequest = null, source, external, clientSavedAt = 0 } = req.body;
+    const { chatId, messages, title, pendingRequest = null, source, external, workspacePath, clientSavedAt = 0 } = req.body;
 
     try {
         await checkpointService.withSession(chatId, () => persistSessionRecord({
-            chatId, messages, title, pendingRequest, source, external, clientSavedAt,
+            chatId, messages, title, pendingRequest, source, external, workspacePath, clientSavedAt,
             broadcastReason: 'history-save',
         }));
         res.json({ success: true });
@@ -6060,7 +6073,7 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
 
         const postOllama = (body) => axios.post(endpoint, body, {
             responseType: 'stream',
-            timeout: config?.requestTimeoutMs || 120000,
+            timeout: config?.requestTimeoutMs || 300000,
             signal: config?.abortSignal,
         });
         let response;
@@ -6382,7 +6395,7 @@ async function callLLM(provider, model, ollamaUrl, prompt, config, streamCallbac
     const response = await postModelStream(baseUrl, payload, {
         headers: headers,
         responseType: 'stream',
-        timeout: config?.requestTimeoutMs || 120000,
+        timeout: config?.requestTimeoutMs || 300000,
         signal: config?.abortSignal,
     }, { maxAttempts: config?.requestMaxAttempts || 2 });
 
@@ -10296,12 +10309,10 @@ ${partialAssistantText || '(empty partial output)'}`;
             currentParts.push({ type: 'reasoning', content: reasoningText });
             await persist();
         } else {
-            // Parse Thought/`<think>` for persistence
-            let thoughtText = "";
-            const thinkMatch = assistantResponse.match(/<think>([\s\S]*?)<\/think>/i);
-            if (thinkMatch) {
-                thoughtText = thinkMatch[1].trim();
-            } else {
+            // Parse Thought/`<think>` (including unclosed <think> blocks) for persistence
+            const extractedThoughts = extractThoughtsAndText(assistantResponse);
+            let thoughtText = String(extractedThoughts.reasoning || '').trim();
+            if (!thoughtText) {
                 const thoughtMatch = assistantResponse.match(/(?:Thought|思考)[:：]\s*([\s\S]*?)(?=(?:Tool|工具)[:：]|$)/i);
                 if (thoughtMatch) {
                     thoughtText = thoughtMatch[1].trim();
@@ -11709,10 +11720,22 @@ ${invalidOutputPreview || '(empty output)'}`;
             }
             if (finalContent) {
                 currentParts.push({ type: 'text', content: finalContent });
-            }
-            responseTextStream.update(finalContent);
-            if (!res.writableEnded) {
-                await sendDone();
+                responseTextStream.update(finalContent);
+                if (!res.writableEnded) {
+                    await sendDone();
+                }
+            } else if (!currentParts.some(part => part?.type === 'text' && String(part.content || '').trim())) {
+                const fallbackReply = '（模型思考后未返回有效回复内容，请重试或调整模型/上下文设置。）';
+                currentParts.push({ type: 'text', content: fallbackReply });
+                responseTextStream.update(fallbackReply);
+                if (!res.writableEnded) {
+                    await sendDone('error', { error: 'empty_response' }, fallbackReply);
+                }
+            } else {
+                responseTextStream.update(finalContent);
+                if (!res.writableEnded) {
+                    await sendDone();
+                }
             }
             return;
         }
@@ -15078,41 +15101,76 @@ app.post('/api/chat', async (req, res) => {
     const chatMode = String(appMode || '').toLowerCase() === 'chat' && !resumeState && !approvalDecision;
     const reservation = chatId ? createBackgroundRun(chatId, 'initializing', assistantMsgId) : null;
     res.runIdentity = reservation;
+    res.chatId = chatId;
+    res.assistantMsgId = assistantMsgId;
     reservation?.on('close', () => {
         if (reservation.destroyed && !res.writableEnded) res.end();
     });
-    const isTurnActive = () => !res.destroyed && !res.writableEnded && (!chatId || !reservation || isCurrentRun(BACKGROUND_RUNS, chatId, reservation));
+    const isTurnActive = () => (chatMode || !chatId ? (!res.destroyed && !res.writableEnded) : true)
+        && (!chatId || !reservation || isCurrentRun(BACKGROUND_RUNS, chatId, reservation));
     res.once('close', () => {
-        if (!res.writableEnded && reservation && isCurrentRun(BACKGROUND_RUNS, chatId, reservation)
+        if (chatMode && !res.writableEnded && reservation && isCurrentRun(BACKGROUND_RUNS, chatId, reservation)
             && (reservation.mode === 'initializing' || reservation.mode === 'chat')) {
             reservation.stop();
         }
     });
+    if (!res.headersSent) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders?.();
+    }
+    let initHeartbeatTimer = setInterval(() => {
+        if (res.destroyed || res.writableEnded || (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation))) {
+            clearInterval(initHeartbeatTimer);
+            initHeartbeatTimer = null;
+            return;
+        }
+        try {
+            res.write(': keepalive\n\n');
+        } catch {
+            clearInterval(initHeartbeatTimer);
+            initHeartbeatTimer = null;
+        }
+    }, 10000);
+    const stopInitHeartbeat = () => {
+        if (initHeartbeatTimer) {
+            clearInterval(initHeartbeatTimer);
+            initHeartbeatTimer = null;
+        }
+    };
     try {
 
     let checkpoint = null;
     if (!chatMode) {
         const root = await workspaceService.resolveRoot(config?.workspacePath || '');
-        if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+        if (!isTurnActive()) return;
         const turnLabel = String(message || '').trim().replace(/\s+/g, ' ').slice(0, 40) || chatId || 'Chat';
-        checkpoint = await checkpointService.withWorkspace(root, async () => {
-            if (!isTurnActive()) return null;
-            return prepareTurnCheckpoint(checkpointService, {
-                chatId,
-                root,
-                history: Array.isArray(history) ? history : [],
-                shouldContinue: isTurnActive,
-            });
-        }, { kind: 'prepare', chatId, label: turnLabel, isActive: isTurnActive });
+        try {
+            checkpoint = await checkpointService.withWorkspace(root, async () => {
+                if (!isTurnActive()) return null;
+                return prepareTurnCheckpoint(checkpointService, {
+                    chatId,
+                    root,
+                    history: Array.isArray(history) ? history : [],
+                    shouldContinue: isTurnActive,
+                    timeoutMs: 8000,
+                });
+            }, { kind: 'prepare', chatId, label: turnLabel, isActive: isTurnActive });
+        } catch (cpError) {
+            if (cpError?.statusCode === 499 || cpError?.statusCode === 409 || !isTurnActive()) {
+                throw cpError;
+            }
+            console.warn('[Checkpoint] Turn checkpoint preparation failed, continuing without checkpoint:', cpError?.message || cpError);
+            checkpoint = null;
+        }
         if (!isTurnActive()) return;
     }
-    if (res.destroyed || res.writableEnded) return;
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    if (checkpoint) res.write(`data: ${JSON.stringify({ type: 'checkpoint', checkpoint })}\n\n`);
+    if (!isTurnActive()) return;
+    if (checkpoint && !res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ type: 'checkpoint', checkpoint })}\n\n`);
 
     if (chatId && String(message || '').trim().startsWith('/compact')) {
+        stopInitHeartbeat();
         await handleCompactCommand(res, { chatId, message, history, provider, model, ollamaUrl, assistantMsgId, config });
         return;
     }
@@ -15153,6 +15211,7 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (_bgMode) {
+        stopInitHeartbeat();
         const vRes = chatId ? createBackgroundRun(chatId, _bgMode, assistantMsgId, reservation) : res;
         if (chatId) attachBackgroundSubscriber(vRes, res);
         try {
@@ -15182,6 +15241,7 @@ app.post('/api/chat', async (req, res) => {
         }
     } else if (chatMode) {
         if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+        stopInitHeartbeat();
         if (reservation) reservation.mode = 'chat';
         await runChatLoop(res, {
             message,
@@ -15216,9 +15276,11 @@ app.post('/api/chat', async (req, res) => {
 
         if (mode === 'CHAT') {
             if (reservation && !isCurrentRun(BACKGROUND_RUNS, chatId, reservation)) return;
+            stopInitHeartbeat();
             if (reservation) reservation.mode = 'chat';
             await runChatLoop(res, { message, history, provider, model, ollamaUrl, chatId, assistantMsgId, uploadedFiles, config });
         } else {
+            stopInitHeartbeat();
             const vRes = chatId ? createBackgroundRun(chatId, 'agent', assistantMsgId, reservation) : res;
             if (chatId) attachBackgroundSubscriber(vRes, res);
             try {
@@ -15258,12 +15320,16 @@ app.post('/api/chat', async (req, res) => {
         if (res.destroyed || res.writableEnded) return;
         if (!res.headersSent) res.status(error.statusCode || 500).json({ error: error.message, text: error.message });
         else {
-            res.write(`data: ${JSON.stringify({ text: `执行失败：${error.message}` })}\n\n`);
+            const isStopped = error?.statusCode === 499;
+            const errText = isStopped ? '' : `执行失败：${error.message}`;
+            emitRunOutcome(res, isStopped ? 'stopped' : 'error', { error: error.message });
+            if (errText) res.write(`data: ${JSON.stringify({ type: 'error', error: error.message, text: errText })}\n\n`);
             res.write('data: [DONE]\n\n');
             res.end();
         }
     } finally {
         if (reservation && BACKGROUND_RUNS.get(chatId) === reservation) reservation.end();
+        stopInitHeartbeat();
         if (chatId && reservation?.destroyed && !reservation._stopFinalized && !reservation._sessionFinalized && !res._sessionFinalized) {
             await finalizeChatRunSession({
                 chatId,

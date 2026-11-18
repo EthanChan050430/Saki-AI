@@ -343,3 +343,58 @@ test('late out-of-order client save cannot resurrect pendingRequest or overwrite
     assert.equal(saved.messages[1].parts[0].content, 'partial');
     assert.equal(historyList[0].isPending, false);
 });
+
+test('persistSessionRecord persists and updates per-session workspacePath', async () => {
+    let saved = {
+        messages: [
+            { role: 'user', id: 'u1', content: 'hi', requestOptions: { workspacePath: '' } },
+            { role: 'assistant', id: 'a1', parts: [{ type: 'text', content: 'ok' }], status: 'done' },
+        ],
+        pendingRequest: null,
+        source: 'web',
+    };
+    const c = lifecycleContext({
+        path,
+        SESSIONS_DIR: '/sessions',
+        preserveSteeringMessages,
+        applyFinalOutcomeToMessages,
+        resolveFinalPendingRequest,
+        isStalePendingSession,
+        safeReadJsonFile: async () => JSON.parse(JSON.stringify(saved)),
+        writeSessionFile: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); },
+        fs: { writeJson: async (_file, value) => { saved = JSON.parse(JSON.stringify(value)); } },
+        hasPendingRequest: (p) => Boolean(p && typeof p === 'object' && p.assistantMsgId),
+        mergePreservedStoryGlassConversationMessages: incoming => incoming,
+        shouldPruneEmptyHistorySession: () => false,
+        getHistory: async () => [{ id: 'chat-ws', isPending: false, pendingType: null }],
+        saveHistory: async () => {},
+        createSessionSummary: ({ chatId, pendingRequest }) => ({
+            id: chatId,
+            isPending: Boolean(pendingRequest),
+            pendingType: pendingRequest?.type || null,
+        }),
+        emitRealtimeEvent: () => {},
+    });
+    vm.runInContext(
+        section('function persistSessionRecord(options)', 'function withRunSessionWrite(')
+        + section('async function persistSessionRecordLocked(', 'async function loadQQBotSessionMap('),
+        c
+    );
+
+    await c.persistSessionRecord({
+        chatId: 'chat-ws',
+        messages: saved.messages,
+        pendingRequest: null,
+        workspacePath: 'D:/projects/alpha',
+    });
+    assert.equal(saved.workspacePath, 'D:/projects/alpha');
+
+    // Switching back to default workspace explicitly stores empty string ''
+    await c.persistSessionRecord({
+        chatId: 'chat-ws',
+        messages: saved.messages,
+        pendingRequest: null,
+        workspacePath: '',
+    });
+    assert.equal(saved.workspacePath, '');
+});
